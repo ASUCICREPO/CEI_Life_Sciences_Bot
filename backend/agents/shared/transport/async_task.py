@@ -49,12 +49,10 @@ class TaskTransport(ABC):
 
 class AsyncTaskClient(TaskTransport):
 
-    def __init__(self, *, session: boto3.Session | None = None) -> None:
-        effective_session = session or boto3.Session(
-            region_name=config.aws_region
-        )
-        self._ecs = effective_session.client("ecs")
-        self._dynamodb = effective_session.resource("dynamodb")
+    def __init__(self, session: boto3.Session | None = None) -> None:
+        self._session = session or boto3.Session(region_name=config.aws_region)
+        self._ecs = self._session.client("ecs")
+        self._dynamodb = self._session.resource("dynamodb")
         self._job_table = self._dynamodb.Table(config.job_id_table)
 
     def submit(
