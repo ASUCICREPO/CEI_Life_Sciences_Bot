@@ -7,15 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from shared.schemas.citation import Citation
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 class BaseAgentOutput(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     citations: list[Citation]
-    generated_at: datetime = Field(default_factory=_utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     model_id: str | None = None
 
 

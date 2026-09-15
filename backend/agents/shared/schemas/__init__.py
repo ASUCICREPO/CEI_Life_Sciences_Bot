@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from shared.schemas.a2ui import (
     A2UIComponent,
     A2UIContainer,
@@ -8,8 +10,10 @@ from shared.schemas.a2ui import (
     ColumnComponent,
     ConfidenceBadgeComponent,
     EvidencePanelComponent,
+    GraphComponent,
     ImageComponent,
     ListComponent,
+    MarkdownComponent,
     ModalComponent,
     ReviewGateComponent,
     RowComponent,
@@ -40,8 +44,10 @@ __all__ = [
     "CompetitorAnalysis",
     "ConfidenceBadgeComponent",
     "EvidencePanelComponent",
+    "GraphComponent",
     "ImageComponent",
     "ListComponent",
+    "MarkdownComponent",
     "MarketLandscape",
     "ModalComponent",
     "RegulatoryBrief",
