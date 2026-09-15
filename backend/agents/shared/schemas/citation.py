@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict
 
 
 class SourceType(StrEnum):
@@ -30,16 +30,3 @@ class Citation(BaseModel):
     year: int
     relevant_passage: str
     retrieved_at: datetime
-
-    @field_validator("source_type", mode="before")
-    @classmethod
-    def _validate_source_type(cls, value: str) -> SourceType:
-        if isinstance(value, SourceType):
-            return value
-        try:
-            return SourceType(value)
-        except ValueError:
-            allowed = ", ".join(member.value for member in SourceType)
-            raise ValueError(
-                f"Unknown source type '{value}'. Allowed: {allowed}"
-            )

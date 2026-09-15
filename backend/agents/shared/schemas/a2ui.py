@@ -15,9 +15,6 @@ class A2UIComponent(BaseModel):
         return {"type": self.component_type, "props": fields}
 
 
-# --- Standard A2UI components (D6: 18 built-in) ---
-
-
 class TextComponent(A2UIComponent):
     component_type: Literal["Text"] = "Text"
     content: str
@@ -87,21 +84,16 @@ class ModalComponent(A2UIComponent):
     actions: list[dict[str, Any]] | None = None
 
 
-class HTMLComponent(A2UIComponent):
-    component_type: Literal["HTML"] = "HTML"
+class MarkdownComponent(A2UIComponent):
+    component_type: Literal["Markdown"] = "Markdown"
     content: str
+
 
 class GraphComponent(A2UIComponent):
     component_type: Literal["Graph"] = "Graph"
     data: dict[str, Any]
     layout: dict[str, Any] | None = None
     graph_type: Literal["line", "bar-horizontal", "bar-vertical", "scatter", "pie"] = "line"
-
-class MarkdownComponent(A2UIComponent):
-    component_type: Literal["Markdown"] = "Markdown"
-    content: str
-
-# --- Domain-specific custom catalog entries ---
 
 
 class CitationChipComponent(A2UIComponent):
@@ -127,9 +119,6 @@ class ReviewGateComponent(A2UIComponent):
     component_type: Literal["ReviewGate"] = "ReviewGate"
     plan: dict[str, Any]
     require_approval: bool = True
-
-
-# --- Container ---
 
 
 class A2UIContainer(BaseModel):
