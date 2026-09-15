@@ -59,6 +59,7 @@ yarn-error.log*
 
 # Claude Code memory (per CIC git rules — never committed)
 CLAUDE.md
+.claude/settings.json
 
 # add sensitive mcp config
 .mcp.json
