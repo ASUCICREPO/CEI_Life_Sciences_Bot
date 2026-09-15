@@ -1,6 +1,6 @@
 # Architecture Deep Dive
 
-This document provides a detailed explanation of the [INSERT_PROJECT_NAME] architecture.
+CEI Life Sciences Bot — an AI-powered life sciences assistant.
 
 ---
 
@@ -8,76 +8,97 @@ This document provides a detailed explanation of the [INSERT_PROJECT_NAME] archi
 
 ![Architecture Diagram](./media/architecture.png)
 
-> **[PLACEHOLDER]** Architecture diagram needed. Please create a diagram showing the complete system architecture and save it as `docs/media/architecture.png`
-
 ---
 
 ## Architecture Flow
 
-The following describes the step-by-step flow of how the system processes requests:
+### 1. Client Access
 
-### 1. User Interaction
-[INSERT_STEP_1_DESCRIPTION - Describe how users interact with the system, e.g., "User accesses the chatbot through the web interface"]
+User opens the web app. CloudFront serves the static Next.js build from S3. WAF protects the CDN. Amazon Cognito handles authentication.
 
-### 2. Request Processing
-[INSERT_STEP_2_DESCRIPTION - Describe how requests are received and processed]
+### 2. Real-Time Chat (Streaming Path — SSE)
 
-### 3. [INSERT_STEP_3_NAME]
-[INSERT_STEP_3_DESCRIPTION]
+Authenticated user sends a message. The request goes through the HTTP API Gateway (streaming routes) to the **Session Runner** Lambda. The Session Runner passes the request to the **Session Router**, which delegates to the **AgentCore Runtime** (Amazon Bedrock AgentCore).
 
-### 4. [INSERT_STEP_4_NAME]
-[INSERT_STEP_4_DESCRIPTION]
+AgentCore runs the agent with access to its tool set (see [Agent Tools](#agent-tools)). The response streams back to the client as Server-Sent Events (SSE). This path handles requests that complete within the **15-minute API Gateway streaming timeout**.
 
-### 5. Response Generation
-[INSERT_STEP_5_DESCRIPTION - Describe how responses are generated and returned to the user]
+### 3. Background Jobs (Async Path)
+
+For deep research or long-running tasks that exceed the 15-minute limit, the system starts a **Fargate task** running a copy of the agent. The Job ID Store (DynamoDB) tracks job status. A **Polling Lambda** lets the client check progress via REST routes on the same HTTP API Gateway.
+
+The Fargate agent has the same tool access as the real-time path plus the ability to run longer workflows.
+
+### 4. File Upload
+
+User uploads a file. The **Attachment Upload Worker** Lambda creates a pre-signed S3 URL (max content size: 55MB). The file goes to the **Attachments Bucket**. An SQS message triggers the **Attachment Processor Function**, which extracts metadata, checks permissions, and writes to the **Attachment Metadata Store** (DynamoDB).
+
+### 5. Session & User Management (REST Routes)
+
+All served through the same HTTP API Gateway on REST routes:
+
+- **Session Metadata Handler** — reads/writes session metadata (DynamoDB)
+- **Session History Handler** — reads/writes chat history (DynamoDB). Will require lazy loading to prevent browser crashes on large conversation histories.
+- **Fetch User Settings** — reads user preferences, configured AI providers, and metadata from the User Metadata Table (DynamoDB)
+
+### 6. Knowledge Base
+
+**Managed Knowledge Base Sync** keeps the **AgentCore Managed RAG** index up to date. AgentCore uses this for retrieval-augmented generation over life sciences documents.
+
+---
+
+## Agent Tools
+
+The AgentCore agent can call the following tools via MCP-based tool calling:
+
+| Tool | Description |
+|---|---|
+| **Public DB Search Tools** | Search public life sciences databases |
+| **Web Search** | General web search |
+| **API Key Store** | Retrieve user-configured API keys for external services |
+| **AgentCore Gateway** | Route requests between agent components |
+| **Code Runner Sandbox** | Execute code in a sandboxed environment (tentative — under evaluation for safety and capability limits) |
+| **Embedded UI Generator** | Generate UI components for rich responses |
+| **Long & Short-term Memory** | Persist and recall context across sessions |
+| **Observability Dashboard** | Monitor agent performance |
+| **Life Sciences Operations** | Custom domain-specific tools (to be built) for life sciences workflows |
 
 ---
 
 ## Cloud Services / Technology Stack
 
 ### Frontend
-- **Next.js**: [INSERT_NEXTJS_USAGE_DESCRIPTION - e.g., "React framework for the web application interface"]
-  - App Router for page routing
-  - [INSERT_ADDITIONAL_FRONTEND_DETAILS]
+- **Next.js 16** — React 19 with App Router, Tailwind CSS 4
+- **S3 + CloudFront** — static hosting with CDN
 
-### Backend Infrastructure
-- **AWS CDK**: Infrastructure as Code for deploying AWS resources
-  - Defines all cloud infrastructure in TypeScript
-  - Enables reproducible deployments
+### Authentication & Security
+- **Amazon Cognito** — user authentication
+- **AWS WAF** — CDN protection
+- **CloudWatch** — dashboards, alarms, security notifications
 
-- **Amazon API Gateway**: [INSERT_API_GATEWAY_DESCRIPTION - e.g., "Acts as the front door for all API requests"]
-  - [INSERT_API_GATEWAY_DETAILS]
+### Compute
+- **AWS Lambda** — all synchronous handlers (Session Runner, Polling, metadata handlers, attachment workers, user settings)
+- **AWS Fargate** — long-running background agent tasks
 
-- **AWS Lambda**: Serverless compute for backend logic
-  - **[INSERT_LAMBDA_FUNCTION_1_NAME]**: [INSERT_LAMBDA_FUNCTION_1_DESCRIPTION]
-  - **[INSERT_LAMBDA_FUNCTION_2_NAME]**: [INSERT_LAMBDA_FUNCTION_2_DESCRIPTION]
-  - **[INSERT_LAMBDA_FUNCTION_3_NAME]**: [INSERT_LAMBDA_FUNCTION_3_DESCRIPTION]
-
-### AI/ML Services
-- **Amazon Bedrock**: [INSERT_BEDROCK_DESCRIPTION - e.g., "Foundation model service for AI capabilities"]
-  - Model: [INSERT_MODEL_NAME]
-  - [INSERT_BEDROCK_USAGE_DETAILS]
-
-- **[INSERT_ADDITIONAL_AI_SERVICE]**: [INSERT_AI_SERVICE_DESCRIPTION]
+### AI/ML
+- **Amazon Bedrock AgentCore** — agent runtime with MCP-based tool calling
+- **AgentCore Managed RAG** — retrieval-augmented generation over knowledge base
 
 ### Data Storage
-- **Amazon S3**: [INSERT_S3_USAGE_DESCRIPTION - e.g., "Object storage for documents and media"]
-  - Bucket: [INSERT_BUCKET_PURPOSE]
+- **Amazon DynamoDB** — Session Metadata Store, Chat History Store, Job ID Store, User Metadata Table, Attachment Metadata Store
+- **Amazon S3** — Attachments Bucket (pre-signed upload, 55MB limit), Static Frontend Bucket
+- **AWS Secrets Manager** — API Key Store (user-configured credentials for external services)
 
-- **Amazon DynamoDB**: [INSERT_DYNAMODB_DESCRIPTION - if applicable]
-  - Table: [INSERT_TABLE_PURPOSE]
+### Messaging
+- **Amazon SQS** — attachment processing queue
 
-### Additional Services
-- **[INSERT_SERVICE_NAME]**: [INSERT_SERVICE_DESCRIPTION]
-- **[INSERT_SERVICE_NAME]**: [INSERT_SERVICE_DESCRIPTION]
+### Networking
+- **HTTP API Gateway** — single gateway serving both SSE streaming routes and REST routes
 
 ---
 
 ## Infrastructure as Code
 
-This project uses **AWS CDK (Cloud Development Kit)** to define and deploy infrastructure.
-
-### CDK Stack Structure
+AWS CDK (TypeScript). Single stack.
 
 ```
 backend/
@@ -85,114 +106,35 @@ backend/
 │   └── backend.ts          # CDK app entry point
 ├── lib/
 │   └── backend-stack.ts    # Main stack definition
-└── lambda/
-    └── [INSERT_LAMBDA_HANDLERS]
+├── lambda/                 # Lambda function handlers (to be created)
+└── test/
+    └── backend.test.ts     # CDK stack tests
 ```
 
-### Key CDK Constructs
-
-[INSERT_CDK_CONSTRUCTS_DESCRIPTION - Describe the main constructs used in the CDK stack]
-
-1. **[INSERT_CONSTRUCT_1]**: [INSERT_CONSTRUCT_1_DESCRIPTION]
-2. **[INSERT_CONSTRUCT_2]**: [INSERT_CONSTRUCT_2_DESCRIPTION]
-3. **[INSERT_CONSTRUCT_3]**: [INSERT_CONSTRUCT_3_DESCRIPTION]
-
-### Deployment Automation
-
-[INSERT_DEPLOYMENT_AUTOMATION_DESCRIPTION - Describe any CI/CD or automated deployment processes]
+cdk-nag AwsSolutionsChecks is scoped to the stack (not the app entry point). Suppressions require ADR-format reason strings.
 
 ---
 
-## Security Considerations
+## Design Decisions
 
-[INSERT_SECURITY_CONSIDERATIONS - Describe security measures implemented in the architecture]
+### Code Execution: AgentCore Code Interpreter
 
-- **Authentication**: [INSERT_AUTH_DESCRIPTION]
-- **Authorization**: [INSERT_AUTHZ_DESCRIPTION]
-- **Data Encryption**: [INSERT_ENCRYPTION_DESCRIPTION]
-- **Network Security**: [INSERT_NETWORK_SECURITY_DESCRIPTION]
+AgentCore provides a built-in **Code Interpreter** — containerized sandbox supporting Python, JS, and TS. Each execution runs in an isolated container. Network access is configurable (isolated or controlled public). Timeout: 15 min default, up to 8 hours. File uploads: 100 MB inline, 5 GB via S3.
 
----
+For custom life sciences tools, use **AgentCore Gateway** (governed, with auth and policy enforcement) or register as **MCP server endpoints**. Start with network-isolated sandbox mode and open specific endpoints as needed.
 
-## Scalability
+### Custom Tool Integration Strategy
 
-[INSERT_SCALABILITY_DESCRIPTION - Describe how the architecture handles scaling]
-
-- **Auto-scaling**: [INSERT_AUTOSCALING_DETAILS]
-- **Load Balancing**: [INSERT_LOAD_BALANCING_DETAILS]
-- **Caching**: [INSERT_CACHING_DETAILS]
+| Tool type | Approach |
+|---|---|
+| Life Sciences Operations | AgentCore Gateway or MCP servers — governed access to domain APIs |
+| Code sandbox (data analysis, transformations) | AgentCore Code Interpreter |
+| Web search, public DB search | Built-in AgentCore tools |
+| Fallback for anything too restrictive | Inline functions (pause agent, run Lambda/Fargate, return result) |
 
 ---
 
-## Architectural Decisions
+## Open Questions
 
-This section documents key architectural decisions made during the project's development. Each decision includes the context, alternatives considered, and rationale for the chosen approach.
-
-> **Note**: Use the [ADR Template](./ADR_TEMPLATE.md) when adding new decisions.
-
-### Decision 1: [INSERT_DECISION_TITLE]
-
-**Date**: [INSERT_DATE]  
-**Status**: Accepted | Superseded | Deprecated  
-**Deciders**: [INSERT_NAMES]
-
-**Context**:  
-[INSERT_CONTEXT - What problem were we trying to solve? What constraints existed?]
-
-**Decision**:  
-[INSERT_DECISION - What did we decide to do?]
-
-**Alternatives Considered**:
-1. **[INSERT_ALTERNATIVE_1]**: [INSERT_WHY_NOT_CHOSEN]
-2. **[INSERT_ALTERNATIVE_2]**: [INSERT_WHY_NOT_CHOSEN]
-3. **[INSERT_ALTERNATIVE_3]**: [INSERT_WHY_NOT_CHOSEN]
-
-**Rationale**:  
-[INSERT_RATIONALE - Why did we choose this approach? What were the key factors?]
-
-**Consequences**:
-- **Positive**: [INSERT_BENEFITS]
-- **Negative**: [INSERT_TRADEOFFS]
-- **Neutral**: [INSERT_NEUTRAL_IMPACTS]
-
-**Related Decisions**: [INSERT_LINKS_TO_RELATED_DECISIONS]
-
----
-
-### Decision 2: [INSERT_DECISION_TITLE]
-
-[Repeat structure above for additional decisions]
-
----
-
-### Example: Vector Search Implementation
-
-**Date**: 2024-01-15  
-**Status**: Accepted  
-**Deciders**: Jane Doe, John Smith
-
-**Context**:  
-The application requires semantic search capabilities over user-uploaded documents. We needed to choose a vector database solution that integrates well with AWS services, scales automatically, and minimizes operational overhead.
-
-**Decision**:  
-Use Amazon OpenSearch Serverless with vector search capabilities instead of S3 with vector embeddings stored separately.
-
-**Alternatives Considered**:
-1. **S3 + DynamoDB for vectors**: Store embeddings in DynamoDB, documents in S3. Rejected due to query complexity and lack of native vector search optimization.
-2. **Amazon Kendra**: Provides semantic search but higher cost for our use case and less control over embedding models.
-3. **Self-managed OpenSearch on EC2**: Full control but requires operational overhead (patching, scaling, monitoring).
-
-**Rationale**:  
-- OpenSearch Serverless provides native vector search with k-NN algorithms
-- Automatic scaling eliminates capacity planning
-- Integrated with Bedrock for embeddings
-- Pay-per-use pricing aligns with PoC/prototype nature
-- No infrastructure management required
-
-**Consequences**:
-- **Positive**: Zero operational overhead, automatic scaling, optimized vector search performance
-- **Negative**: Vendor lock-in to AWS, cold start latency for infrequent queries, limited customization vs self-managed
-- **Neutral**: Learning curve for OpenSearch query syntax
-
-**Related Decisions**: Decision 3 (Bedrock Model Selection)
-
+1. **Chat History retention** — What is the memory retention policy? The diagram notes that messages may age out. Need to define TTL or archival strategy.
+2. **Lazy loading for Chat History** — Required to prevent browser crashes on large histories. Need to define pagination strategy.
