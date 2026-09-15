@@ -32,38 +32,27 @@ class SSEEvent(BaseModel):
             lines.append(f"id: {self.id}")
         if self.retry is not None:
             lines.append(f"retry: {self.retry}")
-        lines.append(f"event: {self.event.value}")
+        lines.append(f"event: {self.event}")
         lines.append(f"data: {json.dumps(self.data)}")
         lines.append("")
         return "\n".join(lines) + "\n"
 
 
 class SSEStream(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
     events: list[SSEEvent] = Field(default_factory=list)
 
     def emit_text(self, text: str) -> None:
-        self.events.append(
-            SSEEvent(event=EventType.TEXT_DELTA, data={"text": text})
-        )
+        self.events.append(SSEEvent(event=EventType.TEXT_DELTA, data={"text": text}))
 
     def emit_a2ui(self, component: A2UIComponent) -> None:
-        self.events.append(
-            SSEEvent(event=EventType.A2UI, data=component.to_dict())
-        )
+        self.events.append(SSEEvent(event=EventType.A2UI, data=component.to_dict()))
 
     def emit_hitl_request(self, request: A2UIComponent) -> None:
-        self.events.append(
-            SSEEvent(event=EventType.HITL_REQUEST, data=request.to_dict())
-        )
+        self.events.append(SSEEvent(event=EventType.HITL_REQUEST, data=request.to_dict()))
 
     def emit_tool_use(self, tool_name: str, tool_input: dict[str, Any]) -> None:
         self.events.append(
-            SSEEvent(
-                event=EventType.TOOL_USE,
-                data={"name": tool_name, "input": tool_input},
-            )
+            SSEEvent(event=EventType.TOOL_USE, data={"name": tool_name, "input": tool_input})
         )
 
     def emit_error(self, message: str, *, code: str | None = None) -> None:
