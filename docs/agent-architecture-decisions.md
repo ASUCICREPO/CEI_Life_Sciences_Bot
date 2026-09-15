@@ -43,11 +43,44 @@ Decisions made during the planning phase for the CEI Life Sciences Bot AgentCore
 
 ---
 
-## D3: AI Provider — Bedrock Only, User-Selectable Model
+## D3: AI Provider — Bedrock Only, User-Selectable Model with Blocklist
 
-**Decision:** All inference runs through Amazon Bedrock. Users select their preferred model per chat from dropdown menus populated with all Bedrock-available models (Claude, Nova, Llama, Mistral, etc.). Admins/developers control which models are available to users.
+**Decision:** All inference runs through Amazon Bedrock. Users select their preferred model per chat from dropdown menus. Admins/developers control which models are available to users.
 
 **Why:** AgentCore supports Bedrock model IDs natively. No custom inference routing needed. Simplest architecture.
+
+**Model blocklist (never available in the application):**
+- Claude Fable 5.1, Fable 5 (`anthropic.claude-fable-5*`)
+- Claude Mythos 5.1, Mythos 5, Mythos Preview (`anthropic.claude-mythos-*`)
+
+**Explicitly allowed (non-obvious):**
+- GPT-5.6 Sol (`openai.gpt-5.6-sol`)
+
+---
+
+## D16: Prompt Caching
+
+**Decision:** Enable explicit prompt caching for all eligible models to reduce cost on repeated system prompts and tool definitions.
+
+**How:** Place cache checkpoints on static content (system prompt, tool definitions) in every inference call. Dynamic content (user messages, conversation history) goes after the checkpoints.
+
+**Eligible models in our allowlist:**
+| Model | Min tokens per checkpoint | Max checkpoints | TTL |
+|---|---|---|---|
+| Claude Opus 5, 4.8, 4.7, 4.6, 4.5 | 512–4096 | 4 | 5 min (or 1 hr) |
+| Claude Sonnet 5, 4.6, 4.5, 3.7, 3.5v2 | 1024 | 4 | 5 min (or 1 hr) |
+| Claude Haiku 4.5 | 4096 | 4 | 5 min (or 1 hr) |
+| GPT-5.6 Sol | 1024 | 4 | 30 min |
+| Amazon Nova | Implicit only (automatic, no config) |
+
+**Cost impact:** Cache reads cost ~90% less than standard input tokens. Cache writes cost ~1.25× uncached rate. Cached tokens do not count against input-tokens-per-minute quota.
+
+**AgentCore integration:** Prompt caching is configured at the Converse/InvokeModel API level (`cachePoint` objects in request body). Whether AgentCore exposes this natively needs testing with the CLI. If not, we may need to configure it in the agent's model invocation settings.
+
+**Caching strategy:**
+1. System prompt (per agent, per mode) — cached (large, static)
+2. Tool definitions (10 data source schemas + inline functions) — cached (static per session)
+3. Conversation history — not cached (dynamic)
 
 ---
 
@@ -144,6 +177,8 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 2. Fargate task runs a copy of the agent with the same tools
 3. Client polls `/api/tasks/:id/status` or subscribes to `/api/tasks/:id/stream` for incremental updates
 4. Partial results returned even if some branches fail
+
+**Development/Testing:** Agent development and testing uses the AgentCore CLI directly — no infrastructure provisioning (no API Gateway, Lambda, Fargate, or CDK deploy) required during the agent-building phase. Infrastructure is provisioned later when integrating with the frontend.
 
 ---
 
