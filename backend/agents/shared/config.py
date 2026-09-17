@@ -15,6 +15,9 @@ class AgentConfig(BaseSettings):
     attachments_bucket: str = "attachments"
     api_key_secret_prefix: str = "cei/user-keys"
     default_model_id: str = "anthropic.claude-sonnet-5-v1"
+    code_interpreter_id: str = "aws.codeinterpreter.v1"
+    packages_s3_bucket: str = ""
+    packages_s3_key: str = "life-sciences-packages.tar.gz"
 
 
 config = AgentConfig()

@@ -1,0 +1,19 @@
+[project]
+name = "cei-code-interpreter-packages"
+version = "0.1.0"
+description = "Life sciences Python packages for the AgentCore Code Interpreter sandbox"
+requires-python = ">=3.10"
+dependencies = [
+    "biopython",
+    "pubchempy",
+    "chembl-webresource-client",
+    "pyalex",
+    "civicpy",
+    "bioservices",
+    "rcsb-api",
+    "biotite",
+    "reactome2py",
+    "gget",
+    "sec-edgar-downloader",
+    "patent-client",
+]
