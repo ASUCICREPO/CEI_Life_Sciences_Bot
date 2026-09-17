@@ -15,6 +15,7 @@ class EventType(StrEnum):
     A2UI = "a2ui"
     HITL_REQUEST = "hitl_request"
     TOOL_USE = "tool_use"
+    CODE_EXECUTION = "code_execution"
     DONE = "done"
     ERROR = "error"
 
@@ -64,6 +65,14 @@ class SSEStream(BaseModel):
         if code is not None:
             data["code"] = code
         self.events.append(SSEEvent(event=EventType.ERROR, data=data))
+
+    def emit_code_execution(self, code: str, result: dict[str, Any]) -> None:
+        self.events.append(
+            SSEEvent(
+                event=EventType.CODE_EXECUTION,
+                data={"code": code, "result": result},
+            )
+        )
 
     def emit_done(self) -> None:
         self.events.append(SSEEvent(event=EventType.DONE, data={}))
