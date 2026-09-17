@@ -6,8 +6,6 @@ from typing import Annotated, TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
-from shared.schemas.citation import Citation
-
 
 class AgentMode(StrEnum):
     SCIENCE = "science"
@@ -19,4 +17,3 @@ class BaseAgentState(TypedDict):
     mode: AgentMode
     user_id: str
     session_id: str
-    citations: list[Citation]
