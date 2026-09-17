@@ -10,6 +10,7 @@ from shared.schemas.a2ui import A2UIComponent
 
 
 class EventType(StrEnum):
+    THINKING_DELTA = "thinking_delta"
     TEXT_DELTA = "text_delta"
     A2UI = "a2ui"
     HITL_REQUEST = "hitl_request"
@@ -40,6 +41,9 @@ class SSEEvent(BaseModel):
 
 class SSEStream(BaseModel):
     events: list[SSEEvent] = Field(default_factory=list)
+
+    def emit_thinking(self, text: str) -> None:
+        self.events.append(SSEEvent(event=EventType.THINKING_DELTA, data={"text": text}))
 
     def emit_text(self, text: str) -> None:
         self.events.append(SSEEvent(event=EventType.TEXT_DELTA, data={"text": text}))

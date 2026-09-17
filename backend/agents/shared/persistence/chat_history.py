@@ -20,7 +20,7 @@ class MessageRole(StrEnum):
 class ContentBlock(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    block_type: Literal["text", "a2ui"]
+    block_type: Literal["text", "a2ui", "thinking"]
     body: str | dict[str, Any]
 
 
