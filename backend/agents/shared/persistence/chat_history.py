@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 import boto3
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,17 +17,23 @@ class MessageRole(StrEnum):
     TOOL = "tool"
 
 
+class ContentBlock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    block_type: Literal["text", "a2ui"]
+    body: str | dict[str, Any]
+
+
 class ChatHistoryRecord(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     session_id: str
     message_id: str
     role: MessageRole
-    content: str
+    content_blocks: list[ContentBlock] = Field(default_factory=list)
     tool_name: str | None = None
     tool_input: dict[str, Any] | None = None
     tool_output: dict[str, Any] | None = None
-    a2ui_payload: dict[str, Any] | None = None
     citations: list[dict[str, Any]] = Field(default_factory=list)
     timestamp: datetime
     sequence_number: int
