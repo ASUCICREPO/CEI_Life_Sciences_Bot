@@ -30,8 +30,11 @@ from shared.schemas.typed_outputs import (
     TargetAssessment,
     VariantReport,
 )
+from shared.project_schema import ProjectSource, ChatProject
 
 __all__ = [
+    "ProjectSource",
+    "ChatProject",
     "A2UIComponent",
     "A2UIContainer",
     "BaseAgentOutput",
