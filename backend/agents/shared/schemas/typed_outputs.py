@@ -54,3 +54,29 @@ class MarketLandscape(BaseAgentOutput):
     growth_rate_pct: float | None = None
     key_players: list[CompetitorAnalysis]
     trends: list[str]
+
+
+class DocumentSection(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    heading: str
+    content: str
+    order: int
+    citations_used: list[str] = []
+
+
+class DocumentDraft(BaseAgentOutput):
+    document_type: str
+    title: str
+    sections: list[DocumentSection]
+    guidelines_followed: list[str]
+    word_count: int
+    revision_count: int = 0
+    export_ready: bool = False
+
+
+class ExportArtifact(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    format: str
+    filename: str
+    local_path: str
+    byte_size: int
