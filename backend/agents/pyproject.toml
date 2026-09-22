@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cei-research-agent"
+version = "0.1.0"
+description = "CEI Life Sciences Research Agent"
+requires-python = ">=3.12"
+dependencies = [
+    "bedrock-agentcore",
+    "boto3",
+    "jinja2",
+    "langchain",
+    "langchain-aws",
+    "langgraph",
+    "langgraph-checkpoint-aws",
+    "pydantic",
+    "pydantic-settings",
+    "requests",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["research", "shared"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "pytest-asyncio",
+    "moto[all]",
+]

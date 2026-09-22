@@ -30,7 +30,7 @@ from shared.schemas.typed_outputs import (
     TargetAssessment,
     VariantReport,
 )
-from shared.project_schema import ProjectSource, ChatProject
+from shared.schemas.project_schema import ProjectSource, ChatProject
 
 __all__ = [
     "ProjectSource",

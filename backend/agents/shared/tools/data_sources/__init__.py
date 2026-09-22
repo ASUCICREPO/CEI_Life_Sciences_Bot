@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from shared.config import config
 from shared.tools.base import DataSourceTool
 from shared.tools.data_sources.biorxiv import BioRxivTool
 from shared.tools.data_sources.chembl import ChEMBLTool
@@ -13,16 +14,16 @@ from shared.tools.data_sources.pubchem import PubChemTool
 from shared.tools.data_sources.pubmed import PubMedTool
 
 ALL_DATA_SOURCE_TOOLS: list[DataSourceTool] = [
-    PubMedTool(),
-    ClinicalTrialsTool(),
-    BioRxivTool(),
-    MedRxivTool(),
-    ChEMBLTool(),
-    OpenTargetsTool(),
-    CMSCoverageTool(),
-    ICD10Tool(),
-    NPIRegistryTool(),
-    PubChemTool(),
+    PubMedTool(direct_mode=config.direct_mode),
+    ClinicalTrialsTool(direct_mode=config.direct_mode),
+    BioRxivTool(direct_mode=config.direct_mode),
+    MedRxivTool(direct_mode=config.direct_mode),
+    ChEMBLTool(direct_mode=config.direct_mode),
+    OpenTargetsTool(direct_mode=config.direct_mode),
+    CMSCoverageTool(direct_mode=config.direct_mode),
+    ICD10Tool(direct_mode=config.direct_mode),
+    NPIRegistryTool(direct_mode=config.direct_mode),
+    PubChemTool(direct_mode=config.direct_mode),
 ]
 
 
