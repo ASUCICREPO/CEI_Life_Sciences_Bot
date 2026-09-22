@@ -5,14 +5,14 @@ import re
 from pathlib import Path
 from typing import Any
 
-from langchain_aws import ChatBedrockConverse
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 
-from research.state import ResearchState, TraceEntry, TriagePlan
-from shared.config import config
+from research.state import ResearchState, TriagePlan
 from shared.prompts.loader import PromptLoader
 from shared.schemas.citation import SourceType
+from shared.state import TraceEntry
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
+from shared.utils import extract_tokens, get_model, last_human_message
 
 logger = logging.getLogger(__name__)
 
@@ -55,40 +55,18 @@ Respond ONLY with valid JSON matching this schema:
 Valid source keys: """ + ", ".join(s.value for s in SourceType)
 
 
-def _get_model(model_id: str | None = None) -> ChatBedrockConverse:
-    return ChatBedrockConverse(
-        model_id=model_id or config.default_model_id,
-        region_name=config.aws_region,
-        credentials_profile_name=config.aws_profile,
-    )
-
-
-def _extract_tokens(response: Any) -> tuple[int, int]:
-    usage = getattr(response, "usage_metadata", None)
-    if usage:
-        return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
-    return 0, 0
-
-
-def _last_human_message(state: ResearchState) -> str:
-    for msg in reversed(state["messages"]):
-        if isinstance(msg, HumanMessage):
-            return str(msg.content)
-    return ""
-
-
 def triage(state: ResearchState) -> dict[str, Any]:
-    query = _last_human_message(state)
+    query = last_human_message(state)
     source_list = "\n".join(f"- {k.value}: {v}" for k, v in _SOURCE_DESCRIPTIONS.items())
     user_prompt = f"Available sources:\n{source_list}\n\nUser query: {query}"
 
-    model = _get_model().with_structured_output(TriagePlan, include_raw=True)
+    model = get_model().with_structured_output(TriagePlan, include_raw=True)
     raw_result = model.invoke([
         {"role": "system", "content": _TRIAGE_SYSTEM},
         {"role": "user", "content": user_prompt},
     ])
     plan: TriagePlan = raw_result["parsed"]
-    in_tok, out_tok = _extract_tokens(raw_result["raw"])
+    in_tok, out_tok = extract_tokens(raw_result["raw"])
 
     sources_str = ", ".join(s.value for s in plan.selected_sources) or "(none)"
     queries_str = "; ".join(f"{k}={v!r}" for k, v in plan.source_queries.items())
@@ -159,13 +137,13 @@ def synthesize(state: ResearchState) -> dict[str, Any]:
         "Synthesize a comprehensive answer with inline citations using [SourceID] notation."
     ) if context else f"Query: {state['query']}"
 
-    model = _get_model()
+    model = get_model()
     response = model.invoke([
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ])
     synthesis_text = str(response.content)
-    in_tok, out_tok = _extract_tokens(response)
+    in_tok, out_tok = extract_tokens(response)
 
     trace = TraceEntry(
         stage="SYNTHESIS",
