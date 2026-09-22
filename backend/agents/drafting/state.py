@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -12,6 +13,7 @@ class DocumentType(StrEnum):
     VC_PITCH = "vc_pitch"
     JOURNAL = "journal"
     WHITEPAPER = "whitepaper"
+    LATEX = "latex"
 
 
 class Guideline(BaseModel):
@@ -26,3 +28,8 @@ class DraftingState(BaseAgentState):
     guidelines: list[Guideline]
     draft: str
     revision_feedback: str | None
+    export_formats: list[str]
+    chart_specs: list[dict]
+    chart_data: dict[str, Any]
+    chart_instructions: str | None
+    exports: list[dict]
