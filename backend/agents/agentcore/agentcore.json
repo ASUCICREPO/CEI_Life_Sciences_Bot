@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "CEIResearchAgent",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:project-name": "CEIResearchAgent"
+  },
+  "runtimes": [
+    {
+      "name": "CEIResearchAgent",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": ".",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP"
+    }
+  ],
+  "memories": [],
+  "knowledgeBases": [],
+  "credentials": [],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "configBundles": [],
+  "abTests": [],
+  "harnesses": [],
+  "datasets": [],
+  "capacityProviders": [],
+  "payments": []
+}
