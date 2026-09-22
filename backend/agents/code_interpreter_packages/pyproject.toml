@@ -16,4 +16,11 @@ dependencies = [
     "gget",
     "sec-edgar-downloader",
     "patent-client",
+    "matplotlib",
+    "pandas",
+    "Pillow",
+    "reportlab",
+    "python-docx",
+    "fpdf2",
+    "markdown",
 ]
