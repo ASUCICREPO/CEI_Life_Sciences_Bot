@@ -66,10 +66,8 @@ class PubMedTool(DataSourceTool):
                 abstract_el = article.find(".//AbstractText")
                 abstract = abstract_el.text or "" if abstract_el is not None else ""
                 year_el = article.find(".//PubDate/Year")
-                try:
-                    year = int(year_el.text) if year_el is not None else 0
-                except ValueError:
-                    year = 0
+                year_text = year_el.text if year_el is not None else ""
+                year = int(year_text) if year_text and year_text.isdigit() else 0
                 authors = [
                     f"{a.findtext('LastName', '')} {a.findtext('ForeName', '')}".strip()
                     for a in article.findall(".//Author")
