@@ -17,6 +17,8 @@ class AgentConfig(BaseSettings):
     attachments_bucket: str = "attachments"
     api_key_secret_prefix: str = "cei/user-keys"
     default_model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    bedrock_read_timeout: int = 900  # ADR: 900s | long drafts exceed botocore 60s default; matches 15-min stream limit
+    bedrock_max_attempts: int = 3
     code_interpreter_id: str = "aws.codeinterpreter.v1"
     packages_s3_bucket: str = ""
     packages_s3_key: str = "life-sciences-packages.tar.gz"

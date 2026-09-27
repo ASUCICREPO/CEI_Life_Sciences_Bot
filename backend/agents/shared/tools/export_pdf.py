@@ -6,6 +6,7 @@ import textwrap
 def pdf_code(title: str, sections_json: str, charts_json: str) -> str:
     """Return a Python script that generates a richly formatted PDF via reportlab."""
     header = (
+        "import json\n"
         f"title = {title!r}\n"
         f"sections = json.loads({sections_json!r})\n"
         f"charts_b64 = json.loads({charts_json!r})\n"
@@ -150,9 +151,9 @@ def pdf_code(title: str, sections_json: str, charts_json: str) -> str:
 
             flush_lists()
 
-            heading_lower = sec.get("heading", "").lower()
-            for chart_title, b64 in charts_b64.items():
-                if chart_title.lower() in heading_lower or heading_lower in chart_title.lower():
+            for chart_title in sec.get("charts", []):
+                b64 = charts_b64.get(chart_title)
+                if b64:
                     img_buf = io.BytesIO(base64.b64decode(b64))
                     story.append(KeepTogether([
                         RLImage(img_buf, width=5.5 * inch, height=3.3 * inch),

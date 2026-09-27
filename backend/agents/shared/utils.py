@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from botocore.config import Config
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage
 
@@ -9,11 +10,18 @@ from shared.config import config
 from shared.state import BaseAgentState
 
 
+_BOTO_CONFIG = Config(
+    read_timeout=config.bedrock_read_timeout,
+    retries={"max_attempts": config.bedrock_max_attempts, "mode": "adaptive"},
+)
+
+
 def get_model(model_id: str | None = None) -> ChatBedrockConverse:
     return ChatBedrockConverse(
         model_id=model_id or config.default_model_id,
         region_name=config.aws_region,
         credentials_profile_name=config.aws_profile,
+        config=_BOTO_CONFIG,
     )
 
 

@@ -5,6 +5,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from shared.tools.chart import chart_filename, place_charts
+
 
 class LatexTemplate(StrEnum):
     ARTICLE = "article"
@@ -347,6 +349,7 @@ def latex_export(
     charts: dict[str, bytes],
     doc_type: str,
     output_dir: Path,
+    chart_sections: dict[str, str] | None = None,
 ) -> tuple[str, dict[str, bytes]]:
     """
     Generate a .tex source file and a dict of image files to write alongside it.
@@ -362,10 +365,10 @@ def latex_export(
     image_files: dict[str, bytes] = {}
     chart_filename_map: dict[str, str] = {}
     for chart_title, png_bytes in charts.items():
-        safe = re.sub(r"[^\w]", "_", chart_title)[:40]
-        fname = f"chart_{safe}.png"
+        fname = chart_filename(chart_title)
         image_files[fname] = png_bytes
         chart_filename_map[chart_title] = fname
+    placed, unmatched = place_charts(sections, list(charts), chart_sections)
 
     # Build document body
     body_lines: list[str] = []
@@ -399,16 +402,24 @@ def latex_export(
 
         body_lines.extend(_md_to_latex_lines(content, template))
 
-        # Insert matching charts
-        heading_lower = heading.lower()
-        for chart_title, fname in chart_filename_map.items():
-            if chart_title.lower() in heading_lower or heading_lower in chart_title.lower():
-                body_lines.append(
-                    rf"\ceiimage{{{fname}}}{{0.85}}{{{_md_inline(chart_title)}}}"
-                )
+        for chart_title in placed.get(sec.get("order", 0), []):
+            body_lines.append(
+                rf"\ceiimage{{{chart_filename_map[chart_title]}}}{{0.85}}{{{_md_inline(chart_title)}}}"
+            )
 
         if template == LatexTemplate.BEAMER and heading:
             body_lines.append(r"\end{frame}")
+
+    # Charts with no matching section heading go into a trailing Figures section
+    if unmatched:
+        if template != LatexTemplate.BEAMER:
+            body_lines.append(r"\subsection{Figures}")
+        for chart_title in unmatched:
+            fig = rf"\ceiimage{{{chart_filename_map[chart_title]}}}{{0.85}}{{{_md_inline(chart_title)}}}"
+            if template == LatexTemplate.BEAMER:
+                body_lines += [r"\begin{frame}", rf"\frametitle{{{_md_inline(chart_title)}}}", fig, r"\end{frame}"]
+            else:
+                body_lines.append(fig)
 
     body_lines.append(r"\end{document}")
 

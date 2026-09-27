@@ -92,6 +92,8 @@ async def invoke(payload, context):  # noqa: ANN001
         "session_id": session_id,
         "document_type": doc_type,
         "guidelines": [],
+        "research_questions": [],
+        "research_findings": [],
         "draft": "",
         "revision_feedback": None,
         "trace": [],
@@ -117,8 +119,13 @@ async def invoke(payload, context):  # noqa: ANN001
     trace_text = _format_trace(result.get("trace", []))
     full_output = output + trace_text
 
-    log.info(f"Drafting agent complete: session={session_id}, length={len(output)}")
-    return {"result": full_output}
+    exports = [
+        {k: e[k] for k in ("format", "filename", "local_path", "byte_size")}
+        for e in result.get("exports", [])
+    ]
+
+    log.info(f"Drafting agent complete: session={session_id}, length={len(output)}, exports={len(exports)}")
+    return {"result": full_output, "exports": exports}
 
 
 if __name__ == "__main__":

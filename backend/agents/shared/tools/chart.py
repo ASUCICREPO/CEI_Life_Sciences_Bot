@@ -1,12 +1,57 @@
 from __future__ import annotations
 
 import base64
+import re
 import textwrap
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 from shared.tools.code_interpreter import CodeInterpreterTool, Language
+
+
+# Formats that embed rendered chart images
+CHART_FORMATS = frozenset({"pdf", "docx", "latex", "md"})
+
+
+def chart_filename(chart_title: str) -> str:
+    """Stable PNG filename for a chart, shared by file-based exports (md, latex)."""
+    safe = re.sub(r"[^\w]", "_", chart_title)[:40]
+    return f"chart_{safe}.png"
+
+
+def _norm_heading(text: str) -> str:
+    return re.sub(r"[*_`#]", "", text).strip().lower()
+
+
+def place_charts(
+    sections: list[dict[str, Any]],
+    chart_titles: list[str],
+    chart_sections: dict[str, str] | None = None,
+) -> tuple[dict[int, list[str]], list[str]]:
+    """Assign each chart to its planned section heading, else to the first heading that matches its title.
+
+    Returns ({section_order: [chart_title, ...]}, [unmatched chart titles]).
+    """
+    placed: dict[int, list[str]] = {}
+    unmatched: list[str] = []
+    ordered = sorted(sections, key=lambda s: s.get("order", 0))
+    chart_sections = chart_sections or {}
+    for chart_title in chart_titles:
+        wanted = _norm_heading(chart_sections.get(chart_title, ""))
+        target = next((s for s in ordered if wanted and _norm_heading(s.get("heading", "")) == wanted), None)
+        if target is not None:
+            placed.setdefault(target.get("order", 0), []).append(chart_title)
+            continue
+        title_lower = chart_title.lower()
+        for sec in ordered:
+            heading_lower = sec.get("heading", "").lower()
+            if heading_lower and (title_lower in heading_lower or heading_lower in title_lower):
+                placed.setdefault(sec.get("order", 0), []).append(chart_title)
+                break
+        else:
+            unmatched.append(chart_title)
+    return placed, unmatched
 
 
 class ChartSpec(BaseModel):

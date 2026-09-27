@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from shared.tools.chart import place_charts
 from shared.tools.code_interpreter import CodeInterpreterTool, Language
 from shared.tools.export_pdf import pdf_code
 from shared.tools.export_docx import docx_code
@@ -27,7 +28,7 @@ class ExportArtifact(BaseModel):
 
 
 class ExportTool:
-    def __init__(self, code_interpreter: CodeInterpreterTool, doc_type: str = "latex") -> None:
+    def __init__(self, code_interpreter: CodeInterpreterTool | None, doc_type: str = "latex") -> None:
         self._ci = code_interpreter
         self._doc_type = doc_type
 
@@ -38,6 +39,7 @@ class ExportTool:
         charts: dict[str, bytes],
         formats: list[str],
         output_dir: Path,
+        chart_sections: dict[str, str] | None = None,
     ) -> list[ExportArtifact]:
         output_dir.mkdir(parents=True, exist_ok=True)
         safe_title = re.sub(r"[^\w\s-]", "", title).strip().replace(" ", "_")[:60] or "document"
@@ -51,7 +53,7 @@ class ExportTool:
             try:
                 out_path = output_dir / f"{safe_title}.{fmt}"
                 if fmt == "md":
-                    data = self._generate_md(title, sections)
+                    data = self.render_markdown(title, sections, charts, chart_sections)
                     out_path.write_text(data, encoding="utf-8")
                 elif fmt == "txt":
                     data = self._generate_txt(title, sections)
@@ -64,6 +66,7 @@ class ExportTool:
                         title=title,
                         sections=sections,
                         charts=charts,
+                        chart_sections=chart_sections,
                         doc_type=self._doc_type,
                         output_dir=output_dir,
                     )
@@ -73,14 +76,14 @@ class ExportTool:
                     for img_name, img_bytes in image_files.items():
                         (output_dir / img_name).write_bytes(img_bytes)
                 elif fmt == "pdf":
-                    data = self._generate_via_ci(title, sections, charts, "pdf")
+                    data = self._generate_via_ci(title, sections, charts, "pdf", chart_sections)
                     if data:
                         out_path.write_bytes(data)
                     else:
                         logger.error({"event": "export_pdf_failed"})
                         continue
                 elif fmt == "docx":
-                    data = self._generate_via_ci(title, sections, charts, "docx")
+                    data = self._generate_via_ci(title, sections, charts, "docx", chart_sections)
                     if data:
                         out_path.write_bytes(data)
                     else:
@@ -102,7 +105,16 @@ class ExportTool:
 
     # ── Local generators (no sandbox needed) ─────────────────────────────────
 
-    def _generate_md(self, title: str, sections: list[dict[str, Any]]) -> str:
+    @staticmethod
+    def render_markdown(
+        title: str,
+        sections: list[dict[str, Any]],
+        charts: dict[str, bytes] | None = None,
+        chart_sections: dict[str, str] | None = None,
+    ) -> str:
+        """Final markdown document with charts embedded inline as PNG data URIs (self-contained)."""
+        charts = charts or {}
+        placed, unmatched = place_charts(sections, list(charts), chart_sections)
         lines = [f"# {title}", ""]
         for sec in sorted(sections, key=lambda s: s.get("order", 0)):
             if sec.get("heading"):
@@ -110,7 +122,19 @@ class ExportTool:
                 lines.append("")
             lines.append(sec.get("content", ""))
             lines.append("")
+            for chart_title in placed.get(sec.get("order", 0), []):
+                lines += ExportTool._md_figure(chart_title, charts[chart_title])
+        if unmatched:
+            lines += ["## Figures", ""]
+            for chart_title in unmatched:
+                lines += ExportTool._md_figure(chart_title, charts[chart_title])
         return "\n".join(lines)
+
+    @staticmethod
+    def _md_figure(chart_title: str, png_bytes: bytes) -> list[str]:
+        alt = chart_title.replace("[", "").replace("]", "")
+        data_uri = "data:image/png;base64," + base64.b64encode(png_bytes).decode()
+        return [f"![{alt}]({data_uri})", "", f"*Figure: {chart_title}*", ""]
 
     def _generate_txt(self, title: str, sections: list[dict[str, Any]]) -> str:
         lines = [title.upper(), "=" * len(title), ""]
@@ -151,8 +175,20 @@ class ExportTool:
         sections: list[dict[str, Any]],
         charts: dict[str, bytes],
         fmt: str,
+        chart_sections: dict[str, str] | None = None,
     ) -> bytes | None:
         import json
+
+        if self._ci is None:
+            logger.error({"event": "ci_export_unavailable", "format": fmt})
+            return None
+
+        # Attach each chart to its section; unplaced charts go in a trailing Figures section
+        placed, unmatched = place_charts(sections, list(charts), chart_sections)
+        sections = [{**sec, "charts": placed.get(sec.get("order", 0), [])} for sec in sections]
+        if unmatched:
+            last_order = max((sec.get("order", 0) for sec in sections), default=0)
+            sections.append({"heading": "Figures", "content": "", "order": last_order + 1, "charts": unmatched})
 
         sections_json = json.dumps(sections)
         charts_b64 = {k: base64.b64encode(v).decode() for k, v in charts.items()}

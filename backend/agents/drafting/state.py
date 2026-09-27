@@ -26,6 +26,8 @@ class Guideline(BaseModel):
 class DraftingState(BaseAgentState):
     document_type: DocumentType
     guidelines: list[Guideline]
+    research_questions: list[str]
+    research_findings: list[dict]  # [{"question": str, "answer": str}] from the Research Agent subagent
     draft: str
     revision_feedback: str | None
     export_formats: list[str]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ from shared.prompts.loader import PromptLoader
 from shared.schemas.citation import SourceType
 from shared.config import config
 from shared.state import TraceEntry
-from shared.tools.chart import ChartSpec, ChartTool
+from shared.tools.chart import CHART_FORMATS, ChartSpec, ChartTool
 from shared.tools.code_interpreter import CodeInterpreterTool
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
 from shared.tools.export import ExportTool
@@ -31,6 +32,23 @@ _GUIDELINE_SOURCES: dict[DocumentType, list[SourceType]] = {
     DocumentType.WHITEPAPER: [SourceType.PUBMED, SourceType.OPEN_TARGETS, SourceType.PUBCHEM],
     DocumentType.LATEX: [SourceType.PUBMED, SourceType.BIORXIV, SourceType.MEDRXIV],
 }
+
+
+_VISUALS_RULE = (
+    "Charts are rendered and inserted into the document automatically by the system. "
+    "Do NOT write plotting code (matplotlib, seaborn, plotly, R, or any other) and do NOT describe how to make a chart. "
+    "Where a chart would help, put the numbers in a markdown table under the relevant '## ' heading."
+)
+
+_PLOT_CODE_BLOCK = re.compile(
+    r"```[^\n]*\n(?:(?!```).)*?(?:matplotlib|pyplot|plt\.|seaborn|plotly|ggplot)(?:(?!```).)*?```\n?",
+    re.DOTALL,
+)
+
+
+def _strip_plot_code(text: str) -> str:
+    """Remove fenced code blocks that contain plotting code; charts are rendered by the export step."""
+    return _PLOT_CODE_BLOCK.sub("", text)
 
 
 class GuidelinePlan(BaseModel):
@@ -158,6 +176,122 @@ def research_guidelines(state: DraftingState) -> dict[str, Any]:
     return {"guidelines": guidelines, "trace": trace_entries}
 
 
+_MAX_RESEARCH_QUESTIONS = 3
+
+_RESEARCH_PLAN_SYSTEM = """\
+You decide whether a life sciences document needs external evidence before it is drafted. A Research Agent is available that searches these sources and returns a cited answer:
+{sources}
+
+Set needs_research=true when the document must make factual claims about science, clinical evidence, trials, targets, compounds, coverage policy, or the state of a field. Set needs_research=false only when the user supplied all the facts needed, or the request is purely about structure or formatting.
+
+If research is needed, write 1 to {max_q} focused research questions. Each question must cover a different key claim the document must support. Write each question so it can be answered from the sources above. Do not ask about submission guidelines or formatting."""
+
+
+class _ResearchPlan(BaseModel):
+    needs_research: bool
+    questions: list[str] = []
+    reasoning: str
+
+
+def plan_research(state: DraftingState) -> dict[str, Any]:
+    """Decide if the document needs evidence from the Research Agent, and what to ask it."""
+    from research.nodes import _SOURCE_DESCRIPTIONS
+
+    query = last_human_message(state)
+    doc_type = state["document_type"]
+    sources = "\n".join(f"- {v}" for v in _SOURCE_DESCRIPTIONS.values())
+
+    model = get_model().with_structured_output(_ResearchPlan, include_raw=True)
+    raw = model.invoke([
+        {"role": "system", "content": _RESEARCH_PLAN_SYSTEM.format(sources=sources, max_q=_MAX_RESEARCH_QUESTIONS)},
+        {"role": "user", "content": f"Document type: {doc_type.value}\nUser request: {query}"},
+    ])
+    plan: _ResearchPlan = raw["parsed"]
+    in_tok, out_tok = extract_tokens(raw["raw"])
+
+    questions = [q.strip() for q in plan.questions if q.strip()][:_MAX_RESEARCH_QUESTIONS] if plan.needs_research else []
+    trace = TraceEntry(
+        stage="PLAN_RESEARCH",
+        detail=f"needs_research={bool(questions)} | questions={len(questions)} | reasoning={plan.reasoning}",
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+    )
+    logger.info({"event": "plan_research_complete", "questions": questions})
+    return {"research_questions": questions, "trace": [trace]}
+
+
+def should_research(state: DraftingState) -> str:
+    """Spawn the Research Agent only when plan_research asked questions."""
+    return "research" if state.get("research_questions") else "draft"
+
+
+def research_subagent(state: DraftingState) -> dict[str, Any]:
+    """Run the Research Agent graph in-process for each question, in parallel."""
+    from langchain_core.messages import HumanMessage
+
+    from research.graph import compile_graph as compile_research_graph
+
+    questions = state.get("research_questions", [])
+    session_id = state.get("session_id", "default")
+    inputs = [
+        {
+            "messages": [HumanMessage(content=q)],
+            "mode": state.get("mode", "science"),
+            "user_id": state.get("user_id", "cli-user"),
+            "session_id": f"{session_id}:research:{i}",
+            "query": q,
+            "triage_plan": None,
+            "retrieved_results": [],
+            "synthesis": "",
+            "trace": [],
+        }
+        for i, q in enumerate(questions)
+    ]
+
+    # No checkpointer: each subagent run is stateless and scoped to this drafting run
+    graph = compile_research_graph()
+    results = graph.batch(inputs, config={"max_concurrency": _MAX_RESEARCH_QUESTIONS}, return_exceptions=True)
+
+    findings: list[dict] = []
+    trace_entries: list[TraceEntry] = []
+    for i, (question, result) in enumerate(zip(questions, results), start=1):
+        if isinstance(result, Exception):
+            logger.error({"event": "research_subagent_error", "question": question, "error": repr(result)})
+            trace_entries.append(TraceEntry(stage="RESEARCH_SUBAGENT", detail=f"#{i} {question!r} — ERROR: {result!r}"))
+            continue
+        messages = result.get("messages", [])
+        answer = str(messages[-1].content) if messages else ""
+        findings.append({"question": question, "answer": answer})
+        # Keep the subagent's own steps and token usage visible in the drafting trace
+        for sub in result.get("trace", []):
+            trace_entries.append(TraceEntry(
+                stage=f"RESEARCH#{i}>{sub.stage}",
+                detail=sub.detail,
+                input_tokens=sub.input_tokens,
+                output_tokens=sub.output_tokens,
+            ))
+        trace_entries.append(TraceEntry(
+            stage="RESEARCH_SUBAGENT",
+            detail=f"#{i} {question!r} — answer_length={len(answer)}",
+        ))
+
+    logger.info({"event": "research_subagent_complete", "questions": len(questions), "findings": len(findings)})
+    return {"research_findings": findings, "trace": trace_entries}
+
+
+def _findings_block(findings: list[dict]) -> str:
+    if not findings:
+        return ""
+    parts = [
+        "Research findings from the Research Agent. Use these as the evidence for factual claims. "
+        "Cite with the [SourceID] markers exactly as they appear here, and include their references. "
+        "Never invent citations; mark any claim not supported here as an assumption."
+    ]
+    for f in findings:
+        parts.append(f"### Question: {f['question']}\n{f['answer']}")
+    return "\n\n".join(parts)
+
+
 def draft(state: DraftingState) -> dict[str, Any]:
     """Generate the initial document draft using gathered guidelines and sources."""
     query = last_human_message(state)
@@ -178,25 +312,30 @@ def draft(state: DraftingState) -> dict[str, Any]:
             f"Request: {query}\n\n"
             f"Guidelines to follow:\n{guidelines_text}\n\n"
             f"Generate a complete {doc_type.value} document draft. "
-            f"Follow all listed guidelines. Use [SourceID] notation for citations."
+            f"Follow all listed guidelines. Use [SourceID] notation for citations.\n\n"
+            f"{_VISUALS_RULE}"
         )
     else:
         user_prompt = (
             f"Request: {query}\n\n"
-            f"Generate a complete {doc_type.value} document draft."
+            f"Generate a complete {doc_type.value} document draft.\n\n"
+            f"{_VISUALS_RULE}"
         )
+    findings = state.get("research_findings", [])
+    if findings:
+        user_prompt += "\n\n" + _findings_block(findings)
 
     model = get_model()
     response = model.invoke([
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ])
-    draft_text = str(response.content)
+    draft_text = _strip_plot_code(str(response.content))
     in_tok, out_tok = extract_tokens(response)
 
     trace = TraceEntry(
         stage="DRAFT",
-        detail=f"doc_type={doc_type.value} | mode={mode} | length={len(draft_text)} | guidelines={len(guidelines)}",
+        detail=f"doc_type={doc_type.value} | mode={mode} | length={len(draft_text)} | guidelines={len(guidelines)} | research_findings={len(findings)}",
         input_tokens=in_tok,
         output_tokens=out_tok,
     )
@@ -230,15 +369,19 @@ def revise(state: DraftingState) -> dict[str, Any]:
         f"Revision feedback:\n{feedback}\n\n"
         f"Guidelines to maintain:\n{guidelines_text}\n\n"
         f"Revise the draft to address the feedback while maintaining compliance "
-        f"with all guidelines. Use [SourceID] notation for citations."
+        f"with all guidelines. Use [SourceID] notation for citations.\n\n"
+        f"{_VISUALS_RULE}"
     )
+    findings = state.get("research_findings", [])
+    if findings:
+        user_prompt += "\n\n" + _findings_block(findings)
 
     model = get_model()
     response = model.invoke([
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ])
-    revised_text = str(response.content)
+    revised_text = _strip_plot_code(str(response.content))
     in_tok, out_tok = extract_tokens(response)
 
     trace = TraceEntry(
@@ -271,9 +414,8 @@ def plan_visuals(state: DraftingState) -> dict[str, Any]:
     existing_chart_data: dict[str, Any] = state.get("chart_data", {}) or {}
 
     # Skip visuals for text-only formats
-    rich_formats = {f for f in export_formats if f in {"pdf", "docx"}}
-    if not rich_formats:
-        trace = TraceEntry(stage="PLAN_VISUALS", detail="Skipped — no rich export formats requested")
+    if not CHART_FORMATS.intersection(export_formats):
+        trace = TraceEntry(stage="PLAN_VISUALS", detail="Skipped — no chart-capable export formats requested")
         return {"chart_specs": [], "trace": [trace]}
 
     # LLM call: detect chart opportunities in the draft
@@ -284,6 +426,9 @@ def plan_visuals(state: DraftingState) -> dict[str, Any]:
         data_needed: str
         x_label: str = ""
         y_label: str = ""
+        section_heading: str = ""
+        x: list[str] = []
+        series: dict[str, list[float]] = {}
 
     class _ChartOpportunities(BaseModel):
         charts: list[_ChartOpportunity]
@@ -296,6 +441,11 @@ Analyze the following document draft and identify places where a data visualizat
 - data_needed: what data is needed to generate this chart (be specific about units, time ranges, sources)
 - x_label: label for x-axis (if applicable)
 - y_label: label for y-axis (if applicable)
+- section_heading: the exact text of the "## " heading of the section the chart belongs under
+- x: the category or x-axis values (for example years), as strings
+- series: {series name: list of numbers}, each list the same length as x
+
+Fill x and series ONLY with numbers that are written in the draft. Never invent, estimate, or compute numbers. If the draft does not state the numbers, leave x and series empty.
 
 Only identify genuinely valuable charts — not decorative ones. Return an empty list if no charts would meaningfully improve the document."""
 
@@ -334,12 +484,30 @@ Only identify genuinely valuable charts — not decorative ones. Return an empty
                 "chart_type": opp.chart_type,
                 "x_label": opp.x_label,
                 "y_label": opp.y_label,
+                "section": opp.section_heading,
                 "data": updated_chart_data[opp.title],
             })
             continue
 
-        # Try to extract numeric data from draft text
+        # Use the data the LLM read from the draft, if every number is in the draft
+        grounded = _grounded_chart_data(opp.x, opp.series, draft_text)
+        if grounded:
+            updated_chart_data[opp.title] = grounded
+            chart_specs.append({
+                "title": opp.title,
+                "chart_type": opp.chart_type,
+                "x_label": opp.x_label,
+                "y_label": opp.y_label,
+                "section": opp.section_heading,
+                "data": grounded,
+            })
+            trace_entries.append(TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — read from draft"))
+            continue
+
+        # Try to extract numeric data from a markdown table in the draft
         extracted = _extract_numeric_data_from_draft(draft_text, opp.title)
+        if not extracted and opp.section_heading:
+            extracted = _extract_numeric_data_from_draft(draft_text, opp.section_heading)
         if extracted:
             updated_chart_data[opp.title] = extracted
             chart_specs.append({
@@ -347,6 +515,7 @@ Only identify genuinely valuable charts — not decorative ones. Return an empty
                 "chart_type": opp.chart_type,
                 "x_label": opp.x_label,
                 "y_label": opp.y_label,
+                "section": opp.section_heading,
                 "data": extracted,
             })
             trace_entries.append(TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — extracted from draft"))
@@ -361,6 +530,7 @@ Only identify genuinely valuable charts — not decorative ones. Return an empty
                 "chart_type": opp.chart_type,
                 "x_label": opp.x_label,
                 "y_label": opp.y_label,
+                "section": opp.section_heading,
                 "data": fetched,
             })
             trace_entries.append(TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — fetched from data sources"))
@@ -384,6 +554,22 @@ Only identify genuinely valuable charts — not decorative ones. Return an empty
         "chart_instructions": chart_instructions,
         "trace": trace_entries,
     }
+
+
+def _grounded_chart_data(
+    x: list[str],
+    series: dict[str, list[float]],
+    draft: str,
+) -> dict[str, Any] | None:
+    """Accept LLM-read chart data only if the shape is valid and every number appears in the draft."""
+    if not x or not series or any(len(v) != len(x) for v in series.values()):
+        return None
+    draft_plain = draft.replace(",", "")
+    for values in series.values():
+        for v in values:
+            if f"{v:g}" not in draft_plain:
+                return None
+    return {"x": list(x), **{name: list(v) for name, v in series.items()}}
 
 
 def _extract_numeric_data_from_draft(draft: str, chart_title: str) -> dict[str, Any] | None:
@@ -470,16 +656,18 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
 
     trace_entries: list[TraceEntry] = []
 
-    # Render charts if any rich formats requested
+    # One sandbox session serves chart rendering and PDF/DOCX generation
+    wants_charts = bool(chart_specs_raw) and bool(CHART_FORMATS.intersection(export_formats))
+    needs_ci = wants_charts or any(f in {"pdf", "docx"} for f in export_formats)
+    ci_tool = CodeInterpreterTool(
+        region=config.aws_region,
+        code_interpreter_id=config.code_interpreter_id,
+        packages_s3_bucket=config.packages_s3_bucket,
+        packages_s3_key=config.packages_s3_key,
+    ) if needs_ci else None
+
     rendered_charts: dict[str, bytes] = {}
-    rich_formats = {f for f in export_formats if f in {"pdf", "docx"}}
-    if rich_formats and chart_specs_raw:
-        ci_tool = CodeInterpreterTool(
-            region=config.aws_region,
-            code_interpreter_id=config.code_interpreter_id,
-            packages_s3_bucket=config.packages_s3_bucket,
-            packages_s3_key=config.packages_s3_key,
-        )
+    if wants_charts:
         chart_tool = ChartTool(ci_tool)
         for spec_dict in chart_specs_raw:
             try:
@@ -497,31 +685,14 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
     results_dir = Path(__file__).parents[2] / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate exports
-    needs_ci = any(f in {"pdf", "docx"} for f in export_formats)
-    if needs_ci and not rendered_charts:
-        # Still need CI for PDF/DOCX even without charts
-        ci_tool = CodeInterpreterTool(
-            region=config.aws_region,
-            code_interpreter_id=config.code_interpreter_id,
-            packages_s3_bucket=config.packages_s3_bucket,
-            packages_s3_key=config.packages_s3_key,
-        )
-    elif not rich_formats:
-        ci_tool = None
-
     doc_type_str = doc_type.value if hasattr(doc_type, "value") else str(doc_type)
-    export_tool = ExportTool(
-        code_interpreter=ci_tool if needs_ci else CodeInterpreterTool(
-            region=config.aws_region,
-            code_interpreter_id=config.code_interpreter_id,
-        ),
-        doc_type=doc_type_str,
-    )
+    chart_sections = {sd["title"]: sd.get("section", "") for sd in chart_specs_raw}
+    export_tool = ExportTool(code_interpreter=ci_tool, doc_type=doc_type_str)
     artifacts = export_tool.generate(
         title=title,
         sections=sections,
         charts=rendered_charts,
+        chart_sections=chart_sections,
         formats=export_formats,
         output_dir=results_dir,
     )
@@ -535,7 +706,11 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
     export_summary = ", ".join(f"{a.format}:{a.filename}" for a in artifacts)
     logger.info({"event": "export_documents_complete", "exports": export_summary})
 
+    # The returned document is the final version with charts already inserted
+    final_document = ExportTool.render_markdown(title, sections, rendered_charts, chart_sections)
+
     return {
+        "messages": [AIMessage(content=final_document)],
         "exports": [a.model_dump() for a in artifacts],
         "trace": trace_entries,
     }
