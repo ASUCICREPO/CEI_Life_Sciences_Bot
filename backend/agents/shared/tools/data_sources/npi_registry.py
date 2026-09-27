@@ -20,7 +20,7 @@ _API = "https://npiregistry.cms.hhs.gov/api/"
 class NPIRegistryTool(DataSourceTool):
     function_name = "cei-data-source-npi-registry"
     source_type = SourceType.NPI_REGISTRY
-    description = "Search the NPI Registry for healthcare provider identifiers."
+    description = "Search NPI Registry provider records for identifiers, names, credentials, taxonomy, and provider type."
 
     class InputSchema(BaseModel):
         name: str = ""

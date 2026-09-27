@@ -21,7 +21,7 @@ _EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 class BioRxivTool(DataSourceTool):
     function_name = "cei-data-source-biorxiv"
     source_type = SourceType.BIORXIV
-    description = "Search bioRxiv for life-science preprints."
+    description = "Search bioRxiv life-science preprints for titles, abstracts, authors, years, and DOIs."
 
     class InputSchema(BaseModel):
         query: str

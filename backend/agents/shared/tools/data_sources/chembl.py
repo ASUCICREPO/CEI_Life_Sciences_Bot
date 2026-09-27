@@ -20,7 +20,7 @@ _API = "https://www.ebi.ac.uk/chembl/api/data"
 class ChEMBLTool(DataSourceTool):
     function_name = "cei-data-source-chembl"
     source_type = SourceType.CHEMBL
-    description = "Search ChEMBL for bioactive molecules and their biological targets."
+    description = "Search ChEMBL molecule records for names, molecule types, synonyms, and maximum clinical phase."
 
     class InputSchema(BaseModel):
         query: str

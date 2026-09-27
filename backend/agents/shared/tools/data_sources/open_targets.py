@@ -37,7 +37,7 @@ query Search($q: String!, $size: Int!) {
 class OpenTargetsTool(DataSourceTool):
     function_name = "cei-data-source-open-targets"
     source_type = SourceType.OPEN_TARGETS
-    description = "Search Open Targets for drug target-disease association evidence."
+    description = "Search Open Targets records for target, disease, and drug names with descriptions and identifiers."
 
     class InputSchema(BaseModel):
         target: str

@@ -23,7 +23,7 @@ _EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 class PubMedTool(DataSourceTool):
     function_name = "cei-data-source-pubmed"
     source_type = SourceType.PUBMED
-    description = "Search PubMed for biomedical literature. Returns citations with abstracts."
+    description = "Search PubMed biomedical article records for citations, abstracts, authors, publication years, and PMIDs."
 
     class InputSchema(BaseModel):
         query: str

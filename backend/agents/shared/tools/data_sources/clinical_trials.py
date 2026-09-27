@@ -21,7 +21,7 @@ _API = "https://clinicaltrials.gov/api/v2/studies"
 class ClinicalTrialsTool(DataSourceTool):
     function_name = "cei-data-source-clinical-trials"
     source_type = SourceType.CLINICAL_TRIALS
-    description = "Search ClinicalTrials.gov for clinical study records."
+    description = "Search ClinicalTrials.gov study records for NCT IDs, titles, recruitment status, summaries, and start years."
 
     class InputSchema(BaseModel):
         query: str

@@ -20,7 +20,7 @@ _PUG = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 class PubChemTool(DataSourceTool):
     function_name = "cei-data-source-pubchem"
     source_type = SourceType.PUBCHEM
-    description = "Search PubChem for chemical compound data including structures and bioactivity."
+    description = "Search PubChem compound records for identifiers, chemical names, formulas, weights, and structure identifiers."
 
     class InputSchema(BaseModel):
         query: str

@@ -21,7 +21,7 @@ _CMS_API = "https://data.cms.gov/data-api/v1/dataset/9767cb68-8ea9-4f0b-8179-943
 class CMSCoverageTool(DataSourceTool):
     function_name = "cei-data-source-cms-coverage"
     source_type = SourceType.CMS_COVERAGE
-    description = "Search CMS Coverage Database for Medicare coverage policy decisions."
+    description = "Search CMS National Coverage Determination records for policy titles, decision memos, and effective dates."
 
     class InputSchema(BaseModel):
         query: str

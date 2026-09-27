@@ -20,7 +20,7 @@ _API = "https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search"
 class ICD10Tool(DataSourceTool):
     function_name = "cei-data-source-icd10"
     source_type = SourceType.ICD10
-    description = "Search ICD-10 for disease and condition classification codes."
+    description = "Search ICD-10-CM diagnosis classification records for codes and condition names."
 
     class InputSchema(BaseModel):
         query: str

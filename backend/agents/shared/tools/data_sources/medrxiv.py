@@ -21,7 +21,7 @@ _EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 class MedRxivTool(DataSourceTool):
     function_name = "cei-data-source-medrxiv"
     source_type = SourceType.MEDRXIV
-    description = "Search medRxiv for health-science preprints."
+    description = "Search medRxiv health-science preprints for titles, abstracts, authors, years, and DOIs."
 
     class InputSchema(BaseModel):
         query: str
