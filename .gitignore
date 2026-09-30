@@ -68,3 +68,6 @@ CLAUDE.md
 .venv/
 __pycache__/
 *.py[ocd]
+
+# deploy.sh-generated deployment config (F1, B47) — environment-specific, regenerated per run
+backend/cei.deploy.json

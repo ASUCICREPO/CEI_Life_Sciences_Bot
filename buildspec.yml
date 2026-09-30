@@ -1,0 +1,26 @@
+version: 0.2
+
+# CEI Life Sciences Bot deployment pipeline (F1, B47). Started by deploy.sh
+# via `aws codebuild start-build` on the cei-life-sciences-deploy project.
+#
+# ADR: every command below cd's into "$CODEBUILD_SRC_DIR/backend" | Rationale: buildspec 0.2
+# runs every command in one persistent shell (a "cd" does carry over), but the build starts
+# in $CODEBUILD_SRC_DIR, not backend/; the explicit absolute cd on each line is defensive and
+# keeps every command correct on its own regardless of ordering.
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm ci
+  pre_build:
+    commands:
+      - echo "$CEI_DEPLOY_CONFIG" | base64 -d > "$CODEBUILD_SRC_DIR/backend/cei.deploy.json"
+      # ADR: re-run pre-flight in CodeBuild, not just in deploy.sh | Rationale: CDK reads this file directly, and this catches Region drift between the local run and the build
+      - cd "$CODEBUILD_SRC_DIR/backend" && npx ts-node scripts/preflight.ts --config cei.deploy.json --write
+  build:
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm test
+      - cd "$CODEBUILD_SRC_DIR/backend" && npx cdk deploy --all --require-approval never -c ceiConfigFile=cei.deploy.json
