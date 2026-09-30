@@ -27,10 +27,27 @@ describe('parseDeployConfig', () => {
     expect(config.adminEmail).toBe('admin@example.com');
   });
 
-  it('applies default limits and webSearchEnabled=false when missing', () => {
+  it('applies default limits, webSearchEnabled=false, and allowLocalhostCallback=false when missing', () => {
     const config = parseDeployConfig(validRaw());
     expect(config.limits).toEqual(DEFAULT_LIMITS);
     expect(config.webSearchEnabled).toBe(false);
+    expect(config.allowLocalhostCallback).toBe(false);
+  });
+
+  it('accepts an explicit allowLocalhostCallback', () => {
+    const config = parseDeployConfig(validRaw({ allowLocalhostCallback: true }));
+    expect(config.allowLocalhostCallback).toBe(true);
+  });
+
+  it('rejects a non-boolean allowLocalhostCallback', () => {
+    let error: DeployConfigError | undefined;
+    try {
+      parseDeployConfig(validRaw({ allowLocalhostCallback: 'true' }));
+    } catch (err) {
+      error = err as DeployConfigError;
+    }
+    expect(error).toBeInstanceOf(DeployConfigError);
+    expect(error!.errors.some((e) => e.includes('allowLocalhostCallback'))).toBe(true);
   });
 
   it('applies per-field limit defaults when limits is partially specified', () => {

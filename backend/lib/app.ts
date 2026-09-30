@@ -1,0 +1,42 @@
+import * as cdk from 'aws-cdk-lib';
+import { BackendStack } from './backend-stack';
+import { EdgeWafStack } from './edge-waf-stack';
+import { DeployConfig } from './config/deploy-config';
+
+export interface BuiltStacks {
+  /** Only present when `config` is supplied — the CLOUDFRONT-scope WAF stack (always us-east-1, B88). */
+  edgeWaf?: EdgeWafStack;
+  backend: BackendStack;
+}
+
+/**
+ * Wires `EdgeWafStack` + `BackendStack` exactly as `bin/backend.ts` does. Extracted so tests can exercise
+ * the same cross-region wiring (crossRegionReferences, webAclArn passed from EdgeWafStack) the real CDK
+ * app entry point uses, instead of re-deriving it in test code.
+ */
+export function buildStacks(app: cdk.App, config: DeployConfig | undefined, frontendAssetPath: string): BuiltStacks {
+  if (config) {
+    // ADR: Region from deploy config | Rationale: B45 — Region is configurable via CDK context/env, never hardcoded
+    const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region };
+
+    // ADR: EdgeWafStack always us-east-1 | Rationale: B88 — AWS only accepts a CLOUDFRONT-scope web ACL in us-east-1, regardless of the deploy Region
+    const edgeWaf = new EdgeWafStack(app, 'EdgeWafStack', {
+      env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'us-east-1' },
+      crossRegionReferences: true,
+    });
+
+    const backend = new BackendStack(app, 'BackendStack', {
+      env,
+      crossRegionReferences: true,
+      config,
+      webAclArn: edgeWaf.webAclArn,
+      frontendAssetPath,
+    });
+
+    return { edgeWaf, backend };
+  }
+
+  // ADR: environment-agnostic fallback | Rationale: `cdk synth` must still work before `deploy.sh` has written a config (B46 single environment)
+  const backend = new BackendStack(app, 'BackendStack', { frontendAssetPath });
+  return { backend };
+}

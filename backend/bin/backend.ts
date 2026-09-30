@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import * as fs from 'fs';
+import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
-import { BackendStack } from '../lib/backend-stack';
+import { buildStacks } from '../lib/app';
 import { resolveConfigPath, tryLoadDeployConfig } from '../lib/config/deploy-config';
 
 const app = new cdk.App();
@@ -8,16 +10,19 @@ const app = new cdk.App();
 const configPath = resolveConfigPath(app);
 const config = tryLoadDeployConfig(configPath);
 
-if (config) {
-  // ADR: Region from deploy config | Rationale: B45 — Region is configurable via CDK context/env, never hardcoded
-  new BackendStack(app, 'BackendStack', {
-    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region },
-    config,
-  });
-} else {
+// ADR: frontend/dist required for every synth (config or not) | Rationale: B2 — BucketDeployment needs a real asset directory at synth time; failing fast here beats a cryptic CDK asset-staging error
+const frontendAssetPath = path.resolve(__dirname, '..', '..', 'frontend', 'dist');
+if (!fs.existsSync(frontendAssetPath)) {
+  throw new Error(
+    `Frontend build not found at ${frontendAssetPath}. Run: cd frontend && npm ci && npm run build`,
+  );
+}
+
+if (!config) {
   // ADR: environment-agnostic fallback | Rationale: `cdk synth` must still work before `deploy.sh` has written a config (B46 single environment)
   process.stderr.write(
     `Warning: no deploy config found at ${configPath}. Synthesizing an environment-agnostic stack (run deploy.sh first).\n`,
   );
-  new BackendStack(app, 'BackendStack', {});
 }
+
+buildStacks(app, config, frontendAssetPath);

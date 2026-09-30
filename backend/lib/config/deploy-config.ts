@@ -24,6 +24,8 @@ export interface DeployConfig {
   adminEmail: string;
   limits: DeployLimits;
   webSearchEnabled: boolean;
+  /** B90: adds the localhost:5173 callback/logout URLs to the SPA Cognito client for local dev. Default false. */
+  allowLocalhostCallback: boolean;
   repository?: {
     url: string;
     branch: string;
@@ -243,6 +245,16 @@ export function parseDeployConfig(raw: unknown): DeployConfig {
     }
   }
 
+  // B90: local-dev localhost callback/logout URLs, gated behind this flag (proposal, not a settled CORS/dev-origin decision)
+  let allowLocalhostCallback = false;
+  if (raw.allowLocalhostCallback !== undefined) {
+    if (typeof raw.allowLocalhostCallback !== 'boolean') {
+      errors.push('allowLocalhostCallback: must be a boolean');
+    } else {
+      allowLocalhostCallback = raw.allowLocalhostCallback;
+    }
+  }
+
   const repository = parseRepository(raw.repository, errors);
 
   if (errors.length > 0) {
@@ -258,6 +270,7 @@ export function parseDeployConfig(raw: unknown): DeployConfig {
     adminEmail,
     limits,
     webSearchEnabled,
+    allowLocalhostCallback,
     ...(repository ? { repository } : {}),
   };
 }
