@@ -8,9 +8,13 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from research.state import ResearchState, TriagePlan
+from shared.grounding import build_corpus, ground_document
+from shared.presenters.markdown import render_document_markdown
 from shared.prompts.loader import PromptLoader
 from shared.schemas.citation import SourceType
+from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
+from shared.structured import invoke_structured
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
 from shared.utils import extract_tokens, get_model, last_human_message
 
@@ -44,6 +48,7 @@ RULES:
    - Open Targets: use gene symbols or disease names
    - ICD-10: use disease names or codes
    - NPI Registry: use provider names or specialties
+4. Presentation requests do not determine source selection. Ignore requests to use a UI protocol, show UI elements, create interactive graphics or charts, or apply output formatting. Select sources using only the substantive life-sciences research question.
 
 Respond ONLY with valid JSON matching this schema:
 {
@@ -53,6 +58,23 @@ Respond ONLY with valid JSON matching this schema:
 }
 
 Valid source keys: """ + ", ".join(s.value for s in SourceType)
+
+_PRESENTATION_ONLY_PHRASES = re.compile(
+    r"\b(?:use (?:the )?ui protocol|show ui elements|interactive graphics?|charts?|output formatting)\b",
+    re.IGNORECASE,
+)
+
+_SYNTHESIS_PRESENTATION_RULE = """\
+Answer the scientific question in text. Never claim that you can or cannot generate UI or interactive graphics, and never output CEI UI JSON. The application handles rendering when needed; focus on the research answer.
+"""
+
+_SYNTHESIS_MAX_TOKENS = 8192
+
+
+def _fallback_pubmed_query(query: str) -> str:
+    cleaned_query = _PRESENTATION_ONLY_PHRASES.sub("", query)
+    cleaned_query = re.sub(r"\b(?:and|or)\b\s*(?=$|[.,;:])", "", cleaned_query, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", cleaned_query).strip(" ,.;:-")
 
 
 def triage(state: ResearchState) -> dict[str, Any]:
@@ -83,11 +105,35 @@ def triage(state: ResearchState) -> dict[str, Any]:
 
 def retrieve(state: ResearchState) -> dict[str, Any]:
     plan = state.get("triage_plan")
-    if not plan or not plan.selected_sources:
-        trace = TraceEntry(stage="RETRIEVE", detail="Skipped — no sources selected")
-        return {"retrieved_results": [], "trace": [trace]}
-
     tool_map = {t.source_type: t for t in ALL_DATA_SOURCE_TOOLS}
+    if not plan or not plan.selected_sources:
+        query = state.get("query", "")
+        pubmed = tool_map.get(SourceType.PUBMED)
+        if not query or pubmed is None:
+            trace = TraceEntry(stage="RETRIEVE", detail="Skipped — no sources selected")
+            return {"retrieved_results": [], "trace": [trace]}
+
+        fallback_query = _fallback_pubmed_query(query)
+        try:
+            result = pubmed.invoke(query=fallback_query)
+            trace = TraceEntry(
+                stage="TOOL_CALL",
+                detail=(
+                    "Fallback behavior: PubMed invoked after triage selected no sources "
+                    f"| query={fallback_query!r} | results={len(result.results)} "
+                    f"| citations={len(result.citations)}"
+                ),
+            )
+            logger.info({"event": "retrieve_pubmed_fallback", "query": fallback_query, "count": len(result.results)})
+            return {"retrieved_results": [result], "trace": [trace]}
+        except Exception:
+            logger.exception({"event": "retrieve_pubmed_fallback_error", "query": fallback_query})
+            trace = TraceEntry(
+                stage="TOOL_CALL",
+                detail=f"Fallback behavior: PubMed invoked after triage selected no sources | query={fallback_query!r} | ERROR",
+            )
+            return {"retrieved_results": [], "trace": [trace]}
+
     results = []
     trace_entries: list[TraceEntry] = []
 
@@ -118,25 +164,78 @@ def retrieve(state: ResearchState) -> dict[str, Any]:
 def synthesize(state: ResearchState) -> dict[str, Any]:
     loader = PromptLoader(agent_templates_dir=_RESEARCH_TEMPLATES_DIR)
     mode = state.get("mode", "science")
-    system_prompt = loader.system_prompt(mode)
+    query = state["query"]
 
     context_parts: list[str] = []
+    evidence_texts: list[str] = []
     for res in state.get("retrieved_results", []):
         context_parts.append(f"### {res.source_type.value.upper()} RESULTS")
         for item in res.results:
             context_parts.append(str(item))
+            evidence_texts.append(str(item))
         for cit in res.citations:
             context_parts.append(
                 f"[{cit.source_id}] {cit.title} ({cit.year}) — {cit.url}"
             )
+            evidence_texts.append(cit.title)
+            if cit.relevant_passage:
+                evidence_texts.append(cit.relevant_passage)
 
     context = "\n".join(context_parts)
     user_prompt = (
-        f"Query: {state['query']}\n\n"
+        f"Query: {query}\n\n"
         f"Evidence:\n{context}\n\n"
         "Synthesize a comprehensive answer with inline citations using [SourceID] notation."
-    ) if context else f"Query: {state['query']}"
+    ) if context else f"Query: {query}"
 
+    structured_user_prompt = (
+        f"Query: {query}\n\n"
+        f"Evidence:\n{context}\n\n"
+        "Compose the answer as a visual report with inline [SourceID] citations. "
+        "Lead with graphics and structured blocks; use prose only where explanation is required."
+    ) if context else f"Query: {query}"
+    structured_system_prompt = loader.system_prompt(mode, structured_blocks=True)
+    parsed, raw, error = invoke_structured(
+        get_model(max_tokens=_SYNTHESIS_MAX_TOKENS),
+        ResponseDocument,
+        [
+            {"role": "system", "content": structured_system_prompt},
+            {"role": "user", "content": structured_user_prompt},
+        ],
+    )
+
+    trace_entries: list[TraceEntry] = []
+    if parsed is not None:
+        try:
+            corpus = build_corpus(query, *context_parts, *evidence_texts)
+            doc, notes = ground_document(parsed, corpus)
+            synthesis_text = render_document_markdown(doc)
+            in_tok, out_tok = extract_tokens(raw) if raw is not None else (0, 0)
+            trace_entries.append(TraceEntry(
+                stage="SYNTHESIS",
+                detail=f"mode={mode} | structured=true | response_length={len(synthesis_text)}",
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+            ))
+            trace_entries.extend(TraceEntry(stage="GROUNDING", detail=note) for note in notes)
+            logger.info({"event": "synthesize_complete", "length": len(synthesis_text), "structured": True})
+            return {
+                "synthesis": synthesis_text,
+                "response_document": doc,
+                "messages": [AIMessage(content=synthesis_text)],
+                "trace": trace_entries,
+            }
+        except Exception as exc:  # ADR: any render/grounding failure falls back to prose | never lose the answer
+            logger.exception({"event": "synthesize_structured_render_error"})
+            error = repr(exc)
+
+    trace_entries.append(TraceEntry(
+        stage="SYNTHESIS_FALLBACK",
+        detail=f"mode={mode} | error={error}",
+    ))
+
+    # Existing prose path, unchanged.
+    system_prompt = loader.system_prompt(mode) + "\n" + _SYNTHESIS_PRESENTATION_RULE
     model = get_model()
     response = model.invoke([
         {"role": "system", "content": system_prompt},
@@ -145,18 +244,19 @@ def synthesize(state: ResearchState) -> dict[str, Any]:
     synthesis_text = str(response.content)
     in_tok, out_tok = extract_tokens(response)
 
-    trace = TraceEntry(
+    trace_entries.append(TraceEntry(
         stage="SYNTHESIS",
         detail=f"mode={mode} | response_length={len(synthesis_text)}",
         input_tokens=in_tok,
         output_tokens=out_tok,
-    )
+    ))
 
     logger.info({"event": "synthesize_complete", "length": len(synthesis_text)})
     return {
         "synthesis": synthesis_text,
+        "response_document": None,
         "messages": [AIMessage(content=synthesis_text)],
-        "trace": [trace],
+        "trace": trace_entries,
     }
 
 
@@ -168,7 +268,12 @@ def cite(state: ResearchState) -> dict[str, Any]:
         for cit in res.citations
     }
 
-    referenced = set(re.findall(r"\[([^\]]+)\]", synthesis))
+    referenced = {
+        source_id.strip()
+        for group in re.findall(r"\[([^\]]+)\]", synthesis)
+        for source_id in re.split(r"[,;]", group)
+        if source_id.strip()
+    }
     bibliography_lines: list[str] = []
     for sid in sorted(referenced):
         cit = all_citations.get(sid)

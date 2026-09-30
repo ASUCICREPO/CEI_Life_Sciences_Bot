@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections import OrderedDict
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -9,6 +10,8 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from drafting.state import DocumentType
+from shared.presenters import build_drafting_surface
+from shared.response_text import final_ai_text
 
 app = BedrockAgentCoreApp()
 log = app.logger
@@ -17,6 +20,17 @@ logging.basicConfig(level=logging.INFO)
 _CHECKPOINT_LIMIT = 128
 _checkpointer = InMemorySaver()
 _thread_ids: OrderedDict[str, bool] = OrderedDict()
+
+
+def _runtime_port() -> int:
+    raw_port = os.environ.get("CEI_RUNTIME_PORT", "8080")
+    try:
+        port = int(raw_port)
+    except ValueError as error:
+        raise ValueError("CEI_RUNTIME_PORT must be an integer TCP port.") from error
+    if not 1 <= port <= 65535:
+        raise ValueError("CEI_RUNTIME_PORT must be between 1 and 65535.")
+    return port
 
 
 def _touch_thread(thread_id: str) -> None:
@@ -95,6 +109,7 @@ async def invoke(payload, context):  # noqa: ANN001
         "research_questions": [],
         "research_findings": [],
         "draft": "",
+        "draft_document": None,
         "revision_feedback": None,
         "trace": [],
         "export_formats": export_formats,
@@ -111,22 +126,46 @@ async def invoke(payload, context):  # noqa: ANN001
         config={"configurable": {"thread_id": session_id}},
     )
 
-    final_messages = result.get("messages", [])
-    if not final_messages:
-        return {"result": "No response generated."}
+    text = final_ai_text(result.get("messages", []))
+    if text is None:
+        text = "No response generated."
+        return {
+            "result": text,
+            "text": text,
+            "ui": build_drafting_surface(
+                text,
+                surface_id="drafting-final",
+                exports=[],
+                chart_specs=[],
+                chart_instructions=None,
+                document=result.get("draft_document"),
+            ).model_dump(mode="json"),
+            "exports": [],
+        }
 
-    output = final_messages[-1].content if hasattr(final_messages[-1], "content") else str(final_messages[-1])
     trace_text = _format_trace(result.get("trace", []))
-    full_output = output + trace_text
+    full_output = text + trace_text
 
     exports = [
-        {k: e[k] for k in ("format", "filename", "local_path", "byte_size")}
-        for e in result.get("exports", [])
+        {key: export_item[key] for key in ("format", "filename", "byte_size") if key in export_item}
+        for export_item in result.get("exports", [])
     ]
 
-    log.info(f"Drafting agent complete: session={session_id}, length={len(output)}, exports={len(exports)}")
-    return {"result": full_output, "exports": exports}
+    log.info(f"Drafting agent complete: session={session_id}, length={len(text)}, exports={len(exports)}")
+    return {
+        "result": full_output,
+        "text": text,
+        "ui": build_drafting_surface(
+            text,
+            surface_id="drafting-final",
+            exports=exports,
+            chart_specs=result.get("chart_specs", []),
+            chart_instructions=result.get("chart_instructions"),
+            document=result.get("draft_document"),
+        ).model_dump(mode="json"),
+        "exports": exports,
+    }
 
 
 if __name__ == "__main__":
-    app.run()
+    app.run(port=_runtime_port())

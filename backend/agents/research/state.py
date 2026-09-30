@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 from shared.schemas.citation import SourceType
+from shared.schemas.response_blocks import ResponseDocument
 from shared.state import BaseAgentState, TraceEntry
 from shared.tools.base import DataSourceResult
 
@@ -19,3 +20,4 @@ class ResearchState(BaseAgentState):
     triage_plan: TriagePlan | None
     retrieved_results: list[DataSourceResult]
     synthesis: str
+    response_document: ResponseDocument | None

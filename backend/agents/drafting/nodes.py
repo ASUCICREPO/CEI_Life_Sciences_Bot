@@ -11,11 +11,15 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel, ConfigDict
 
 from drafting.state import DocumentType, DraftingState, Guideline
+from shared.grounding import build_corpus, ground_document, is_grounded
+from shared.presenters.markdown import document_sections_for_export, render_document_markdown
 from shared.prompts.loader import PromptLoader
 from shared.schemas.citation import SourceType
+from shared.schemas.response_blocks import ResponseDocument
 from shared.config import config
 from shared.state import TraceEntry
-from shared.tools.chart import CHART_FORMATS, ChartSpec, ChartTool
+from shared.structured import invoke_structured
+from shared.tools.chart import CHART_FORMATS, ChartSpec, ChartTool, place_charts
 from shared.tools.code_interpreter import CodeInterpreterTool
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
 from shared.tools.export import ExportTool
@@ -35,10 +39,16 @@ _GUIDELINE_SOURCES: dict[DocumentType, list[SourceType]] = {
 
 
 _VISUALS_RULE = (
-    "Charts are rendered and inserted into the document automatically by the system. "
-    "Do NOT write plotting code (matplotlib, seaborn, plotly, R, or any other) and do NOT describe how to make a chart. "
-    "Where a chart would help, put the numbers in a markdown table under the relevant '## ' heading."
+    "Charts come from chart blocks, not from code. Do NOT write plotting code (matplotlib, seaborn, plotly, R, "
+    "or any other) and do NOT describe how to make a chart. If you are returning a ResponseDocument, put "
+    "chart-worthy series in a chart block. If you are writing plain text, put the numbers in a markdown table "
+    "under the relevant '## ' heading instead."
 )
+
+_DRAFT_MAX_TOKENS = 16384
+
+# ChartTool has no horizontal-bar renderer; render it as a vertical bar chart instead.
+_EXPORT_CHART_TYPE_MAP = {"bar-horizontal": "bar"}
 
 _PLOT_CODE_BLOCK = re.compile(
     r"```[^\n]*\n(?:(?!```).)*?(?:matplotlib|pyplot|plt\.|seaborn|plotly|ggplot)(?:(?!```).)*?```\n?",
@@ -292,19 +302,85 @@ def _findings_block(findings: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+def _drafting_corpus(
+    base_text: str,
+    guidelines: list[Guideline],
+    findings: list[dict],
+    chart_data: dict[str, Any],
+) -> str:
+    """Evidence corpus for grounding: the base text, guidelines, research findings, and known chart data."""
+    parts: list[str] = [base_text]
+    parts.extend(g.requirement for g in guidelines)
+    parts.extend(f"{f.get('question', '')} {f.get('answer', '')}" for f in findings)
+    for series in chart_data.values():
+        if not isinstance(series, dict):
+            continue
+        for key, values in series.items():
+            if key == "x":
+                continue
+            if isinstance(values, list):
+                parts.extend(str(v) for v in values)
+            else:
+                parts.append(str(values))
+    return build_corpus(*parts)
+
+
+def _chart_specs_from_document(document: ResponseDocument) -> list[dict[str, Any]]:
+    """Build chart specs directly from a grounded document's chart blocks — no LLM detection call."""
+    specs: list[dict[str, Any]] = []
+    for section in document.sections:
+        for block in section.blocks:
+            if getattr(block, "kind", None) != "chart":
+                continue
+            data: dict[str, Any] = {"x": list(block.categories)}
+            for series in block.series:
+                data[series.name] = list(series.values)
+            specs.append({
+                "title": block.title,
+                "chart_type": _EXPORT_CHART_TYPE_MAP.get(block.chart_type, block.chart_type),
+                "x_label": block.x_label or "",
+                "y_label": block.y_label or "",
+                "section": section.heading,
+                "data": data,
+            })
+    return specs
+
+
+def _render_sections_text(
+    title: str,
+    sections: list[dict[str, Any]],
+    chart_titles: list[str],
+    chart_sections: dict[str, str] | None = None,
+) -> str:
+    """Render sections to markdown text with figure captions, never embedded chart images."""
+    placed, unmatched = place_charts(sections, chart_titles, chart_sections)
+    lines = [f"# {title}", ""]
+    for sec in sorted(sections, key=lambda s: s.get("order", 0)):
+        if sec.get("heading"):
+            lines.append(f"## {sec['heading']}")
+            lines.append("")
+        lines.append(sec.get("content", ""))
+        lines.append("")
+        for chart_title in placed.get(sec.get("order", 0), []):
+            lines.append(f"*Figure: {chart_title}*")
+            lines.append("")
+    if unmatched:
+        lines += ["## Figures", ""]
+        for chart_title in unmatched:
+            lines.append(f"*Figure: {chart_title}*")
+            lines.append("")
+    return "\n".join(lines)
+
+
 def draft(state: DraftingState) -> dict[str, Any]:
     """Generate the initial document draft using gathered guidelines and sources."""
     query = last_human_message(state)
     mode = state.get("mode", "science")
     doc_type = state["document_type"]
     guidelines = state.get("guidelines", [])
+    findings = state.get("research_findings", [])
 
     loader = PromptLoader(agent_templates_dir=_DRAFTING_TEMPLATES_DIR)
-    system_prompt = loader.system_prompt(
-        mode,
-        document_type=doc_type.value,
-        guidelines=guidelines,
-    )
 
     guidelines_text = "\n".join(f"- [{g.source}] {g.requirement}" for g in guidelines)
     if guidelines_text:
@@ -321,10 +397,59 @@ def draft(state: DraftingState) -> dict[str, Any]:
             f"Generate a complete {doc_type.value} document draft.\n\n"
             f"{_VISUALS_RULE}"
         )
-    findings = state.get("research_findings", [])
     if findings:
         user_prompt += "\n\n" + _findings_block(findings)
 
+    structured_system_prompt = loader.system_prompt(
+        mode,
+        document_type=doc_type.value,
+        guidelines=guidelines,
+        structured_blocks=True,
+    )
+    parsed, raw, error = invoke_structured(
+        get_model(max_tokens=_DRAFT_MAX_TOKENS),
+        ResponseDocument,
+        [
+            {"role": "system", "content": structured_system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
+
+    trace_entries: list[TraceEntry] = []
+    if parsed is not None:
+        try:
+            corpus = _drafting_corpus(query, guidelines, findings, state.get("chart_data", {}) or {})
+            doc, notes = ground_document(parsed, corpus)
+            draft_text = render_document_markdown(doc)
+            in_tok, out_tok = extract_tokens(raw) if raw is not None else (0, 0)
+            trace_entries.append(TraceEntry(
+                stage="DRAFT",
+                detail=(
+                    f"doc_type={doc_type.value} | mode={mode} | structured=true | length={len(draft_text)} "
+                    f"| guidelines={len(guidelines)} | research_findings={len(findings)}"
+                ),
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+            ))
+            trace_entries.extend(TraceEntry(stage="GROUNDING", detail=note) for note in notes)
+            logger.info({"event": "draft_complete", "doc_type": doc_type.value, "length": len(draft_text), "structured": True})
+            return {
+                "draft": draft_text,
+                "draft_document": doc,
+                "messages": [AIMessage(content=draft_text)],
+                "trace": trace_entries,
+            }
+        except Exception as exc:  # ADR: any render/grounding failure falls back to prose | never lose the draft
+            logger.exception({"event": "draft_structured_render_error"})
+            error = repr(exc)
+
+    trace_entries.append(TraceEntry(
+        stage="DRAFT_FALLBACK",
+        detail=f"doc_type={doc_type.value} | mode={mode} | error={error}",
+    ))
+
+    # Existing prose path, unchanged.
+    system_prompt = loader.system_prompt(mode, document_type=doc_type.value, guidelines=guidelines)
     model = get_model()
     response = model.invoke([
         {"role": "system", "content": system_prompt},
@@ -333,18 +458,19 @@ def draft(state: DraftingState) -> dict[str, Any]:
     draft_text = _strip_plot_code(str(response.content))
     in_tok, out_tok = extract_tokens(response)
 
-    trace = TraceEntry(
+    trace_entries.append(TraceEntry(
         stage="DRAFT",
         detail=f"doc_type={doc_type.value} | mode={mode} | length={len(draft_text)} | guidelines={len(guidelines)} | research_findings={len(findings)}",
         input_tokens=in_tok,
         output_tokens=out_tok,
-    )
+    ))
 
     logger.info({"event": "draft_complete", "doc_type": doc_type.value, "length": len(draft_text)})
     return {
         "draft": draft_text,
+        "draft_document": None,
         "messages": [AIMessage(content=draft_text)],
-        "trace": [trace],
+        "trace": trace_entries,
     }
 
 
@@ -355,13 +481,9 @@ def revise(state: DraftingState) -> dict[str, Any]:
     guidelines = state.get("guidelines", [])
     current_draft = state.get("draft", "")
     feedback = state.get("revision_feedback", "")
+    findings = state.get("research_findings", [])
 
     loader = PromptLoader(agent_templates_dir=_DRAFTING_TEMPLATES_DIR)
-    system_prompt = loader.system_prompt(
-        mode,
-        document_type=doc_type.value,
-        guidelines=guidelines,
-    )
 
     guidelines_text = "\n".join(f"- [{g.source}] {g.requirement}" for g in guidelines)
     user_prompt = (
@@ -372,10 +494,56 @@ def revise(state: DraftingState) -> dict[str, Any]:
         f"with all guidelines. Use [SourceID] notation for citations.\n\n"
         f"{_VISUALS_RULE}"
     )
-    findings = state.get("research_findings", [])
     if findings:
         user_prompt += "\n\n" + _findings_block(findings)
 
+    structured_system_prompt = loader.system_prompt(
+        mode,
+        document_type=doc_type.value,
+        guidelines=guidelines,
+        structured_blocks=True,
+    )
+    parsed, raw, error = invoke_structured(
+        get_model(max_tokens=_DRAFT_MAX_TOKENS),
+        ResponseDocument,
+        [
+            {"role": "system", "content": structured_system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
+
+    trace_entries: list[TraceEntry] = []
+    if parsed is not None:
+        try:
+            corpus = _drafting_corpus(
+                f"{current_draft}\n{feedback}", guidelines, findings, state.get("chart_data", {}) or {}
+            )
+            doc, notes = ground_document(parsed, corpus)
+            revised_text = render_document_markdown(doc)
+            in_tok, out_tok = extract_tokens(raw) if raw is not None else (0, 0)
+            trace_entries.append(TraceEntry(
+                stage="REVISE",
+                detail=f"feedback_length={len(feedback)} | structured=true | revised_length={len(revised_text)}",
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+            ))
+            trace_entries.extend(TraceEntry(stage="GROUNDING", detail=note) for note in notes)
+            logger.info({"event": "revise_complete", "length": len(revised_text), "structured": True})
+            return {
+                "draft": revised_text,
+                "draft_document": doc,
+                "revision_feedback": None,
+                "messages": [AIMessage(content=revised_text)],
+                "trace": trace_entries,
+            }
+        except Exception as exc:  # ADR: any render/grounding failure falls back to prose | never lose the revision
+            logger.exception({"event": "revise_structured_render_error"})
+            error = repr(exc)
+
+    trace_entries.append(TraceEntry(stage="REVISE_FALLBACK", detail=f"feedback_length={len(feedback)} | error={error}"))
+
+    # Existing prose path, unchanged.
+    system_prompt = loader.system_prompt(mode, document_type=doc_type.value, guidelines=guidelines)
     model = get_model()
     response = model.invoke([
         {"role": "system", "content": system_prompt},
@@ -384,19 +552,20 @@ def revise(state: DraftingState) -> dict[str, Any]:
     revised_text = _strip_plot_code(str(response.content))
     in_tok, out_tok = extract_tokens(response)
 
-    trace = TraceEntry(
+    trace_entries.append(TraceEntry(
         stage="REVISE",
         detail=f"feedback_length={len(feedback)} | revised_length={len(revised_text)}",
         input_tokens=in_tok,
         output_tokens=out_tok,
-    )
+    ))
 
     logger.info({"event": "revise_complete", "length": len(revised_text)})
     return {
         "draft": revised_text,
+        "draft_document": None,
         "revision_feedback": None,
         "messages": [AIMessage(content=revised_text)],
-        "trace": [trace],
+        "trace": trace_entries,
     }
 
 
@@ -408,15 +577,25 @@ def should_revise(state: DraftingState) -> str:
 
 
 def plan_visuals(state: DraftingState) -> dict[str, Any]:
-    """Analyze the draft for chart opportunities; fetch data if needed."""
-    draft_text = state.get("draft", "")
-    export_formats = state.get("export_formats", [])
-    existing_chart_data: dict[str, Any] = state.get("chart_data", {}) or {}
+    """Build chart specs — from the grounded document's chart blocks when one exists, else by LLM detection.
 
-    # Skip visuals for text-only formats
-    if not CHART_FORMATS.intersection(export_formats):
-        trace = TraceEntry(stage="PLAN_VISUALS", detail="Skipped — no chart-capable export formats requested")
-        return {"chart_specs": [], "trace": [trace]}
+    Specs are always computed (the UI needs them); the export step decides which formats get rendered PNGs.
+    """
+    document: ResponseDocument | None = state.get("draft_document")
+    if document is not None:
+        chart_specs = _chart_specs_from_document(document)
+        trace = TraceEntry(
+            stage="PLAN_VISUALS",
+            detail=f"structured=true | charts_from_document={len(chart_specs)}",
+        )
+        logger.info({"event": "plan_visuals_complete", "charts_ready": len(chart_specs), "structured": True})
+        return {"chart_specs": chart_specs, "trace": [trace]}
+
+    draft_text = state.get("draft", "")
+    guidelines = state.get("guidelines", [])
+    findings = state.get("research_findings", [])
+    existing_chart_data: dict[str, Any] = state.get("chart_data", {}) or {}
+    corpus = _drafting_corpus(draft_text, guidelines, findings, existing_chart_data)
 
     # LLM call: detect chart opportunities in the draft
     class _ChartOpportunity(BaseModel):
@@ -489,8 +668,8 @@ Only identify genuinely valuable charts — not decorative ones. Return an empty
             })
             continue
 
-        # Use the data the LLM read from the draft, if every number is in the draft
-        grounded = _grounded_chart_data(opp.x, opp.series, draft_text)
+        # Use the data the LLM read from the draft, if every number is grounded in the corpus
+        grounded = _grounded_chart_data(opp.x, opp.series, corpus)
         if grounded:
             updated_chart_data[opp.title] = grounded
             chart_specs.append({
@@ -559,15 +738,17 @@ Only identify genuinely valuable charts — not decorative ones. Return an empty
 def _grounded_chart_data(
     x: list[str],
     series: dict[str, list[float]],
-    draft: str,
+    corpus: str,
 ) -> dict[str, Any] | None:
-    """Accept LLM-read chart data only if the shape is valid and every number appears in the draft."""
+    """Accept LLM-read chart data only if the shape is valid and every number is grounded in the corpus.
+
+    # ADR: number-boundary grounding via shared.grounding.is_grounded | a plain substring check matches "1" inside "2019"
+    """
     if not x or not series or any(len(v) != len(x) for v in series.values()):
         return None
-    draft_plain = draft.replace(",", "")
     for values in series.values():
         for v in values:
-            if f"{v:g}" not in draft_plain:
+            if not is_grounded(v, corpus):
                 return None
     return {"x": list(x), **{name: list(v) for name, v in series.items()}}
 
@@ -625,34 +806,39 @@ def _fetch_chart_data_from_tools(data_needed: str, tool_map: dict) -> dict[str, 
 def export_documents(state: DraftingState) -> dict[str, Any]:
     """Render charts and export the draft to all requested formats."""
     export_formats = state.get("export_formats", ["md", "txt"])
+    document: ResponseDocument | None = state.get("draft_document")
     draft_text = state.get("draft", "")
     chart_specs_raw: list[dict] = state.get("chart_specs", [])
     doc_type = state.get("document_type", "document")
     doc_type_str = doc_type.value if hasattr(doc_type, "value") else str(doc_type)
 
-    # Derive title from first heading in draft or fallback
-    import re
-    title_match = re.search(r"^#\s+(.+)$", draft_text, re.MULTILINE)
-    title = title_match.group(1).strip() if title_match else f"{doc_type_str}_document"
+    if document is not None:
+        title = document.title
+        sections: list[dict] = document_sections_for_export(document)
+    else:
+        # Derive title from first heading in draft or fallback
+        import re
+        title_match = re.search(r"^#\s+(.+)$", draft_text, re.MULTILINE)
+        title = title_match.group(1).strip() if title_match else f"{doc_type_str}_document"
 
-    # Build sections from draft headings
-    sections: list[dict] = []
-    current_heading = ""
-    current_content_lines: list[str] = []
-    order = 0
-    for line in draft_text.splitlines():
-        if line.startswith("## "):
-            if current_content_lines:
-                sections.append({"heading": current_heading, "content": "\n".join(current_content_lines).strip(), "order": order})
-                order += 1
-                current_content_lines = []
-            current_heading = line[3:].strip()
-        elif line.startswith("# "):
-            pass  # Skip document title line
-        else:
-            current_content_lines.append(line)
-    if current_content_lines:
-        sections.append({"heading": current_heading, "content": "\n".join(current_content_lines).strip(), "order": order})
+        # Build sections from draft headings
+        sections = []
+        current_heading = ""
+        current_content_lines: list[str] = []
+        order = 0
+        for line in draft_text.splitlines():
+            if line.startswith("## "):
+                if current_content_lines:
+                    sections.append({"heading": current_heading, "content": "\n".join(current_content_lines).strip(), "order": order})
+                    order += 1
+                    current_content_lines = []
+                current_heading = line[3:].strip()
+            elif line.startswith("# "):
+                pass  # Skip document title line
+            else:
+                current_content_lines.append(line)
+        if current_content_lines:
+            sections.append({"heading": current_heading, "content": "\n".join(current_content_lines).strip(), "order": order})
 
     trace_entries: list[TraceEntry] = []
 
@@ -706,11 +892,14 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
     export_summary = ", ".join(f"{a.format}:{a.filename}" for a in artifacts)
     logger.info({"event": "export_documents_complete", "exports": export_summary})
 
-    # The returned document is the final version with charts already inserted
-    final_document = ExportTool.render_markdown(title, sections, rendered_charts, chart_sections)
+    # ADR: agent text never embeds base64 chart images | exports keep PNGs, the chat message stays text-only
+    if document is not None:
+        final_text = render_document_markdown(document, chart_mode="table")
+    else:
+        final_text = _render_sections_text(title, sections, list(rendered_charts), chart_sections)
 
     return {
-        "messages": [AIMessage(content=final_document)],
+        "messages": [AIMessage(content=final_text)],
         "exports": [a.model_dump() for a in artifacts],
         "trace": trace_entries,
     }

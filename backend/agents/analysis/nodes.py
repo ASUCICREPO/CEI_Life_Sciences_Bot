@@ -21,5 +21,5 @@ def compare(state: AnalysisState) -> dict[str, Any]:
 
 
 def report(state: AnalysisState) -> dict[str, Any]:
-    """Produce the final analysis report with citations and A2UI components."""
+    """Produce the final analysis report with citations and CEI UI components."""
     raise NotImplementedError

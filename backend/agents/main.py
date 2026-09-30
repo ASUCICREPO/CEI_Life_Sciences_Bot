@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections import OrderedDict
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from shared.presenters import build_research_surface
+from shared.response_text import final_ai_text
+from typing import List, Dict, Union, Any
 
 app = BedrockAgentCoreApp()
 log = app.logger
@@ -15,6 +19,17 @@ logging.basicConfig(level=logging.INFO)
 _CHECKPOINT_LIMIT = 128
 _checkpointer = InMemorySaver()
 _thread_ids: OrderedDict[str, bool] = OrderedDict()
+
+
+def _runtime_port() -> int:
+    raw_port = os.environ.get("CEI_RUNTIME_PORT", "8080")
+    try:
+        port = int(raw_port)
+    except ValueError as error:
+        raise ValueError("CEI_RUNTIME_PORT must be an integer TCP port.") from error
+    if not 1 <= port <= 65535:
+        raise ValueError("CEI_RUNTIME_PORT must be between 1 and 65535.")
+    return port
 
 
 def _touch_thread(thread_id: str) -> None:
@@ -27,7 +42,7 @@ def _touch_thread(thread_id: str) -> None:
     _thread_ids[thread_id] = True
 
 
-def _format_trace(trace_entries: list) -> str:
+def _format_trace(trace_entries: List[Dict[str, Any]]) -> str:
     if not trace_entries:
         return ""
     lines = ["", "═══ AGENT TRACE ═══"]
@@ -78,6 +93,7 @@ async def invoke(payload, context):  # noqa: ANN001
         "triage_plan": None,
         "retrieved_results": [],
         "synthesis": "",
+        "response_document": None,
         "trace": [],
     }
 
@@ -88,17 +104,35 @@ async def invoke(payload, context):  # noqa: ANN001
         config={"configurable": {"thread_id": session_id}},
     )
 
-    final_messages = result.get("messages", [])
-    if not final_messages:
-        return {"result": "No response generated."}
+    text = final_ai_text(result.get("messages", []))
+    if text is None:
+        text = "No response generated."
+        return {
+            "result": text,
+            "text": text,
+            "ui": build_research_surface(
+                text,
+                surface_id="research-final",
+                retrieved_results=result.get("retrieved_results", []),
+                document=result.get("response_document"),
+            ).model_dump(mode="json"),
+        }
 
-    output = final_messages[-1].content if hasattr(final_messages[-1], "content") else str(final_messages[-1])
     trace_text = _format_trace(result.get("trace", []))
-    full_output = output + trace_text
+    full_output = text + trace_text
 
-    log.info(f"Research agent complete: session={session_id}, length={len(output)}")
-    return {"result": full_output}
+    log.info(f"Research agent complete: session={session_id}, length={len(text)}")
+    return {
+        "result": full_output,
+        "text": text,
+        "ui": build_research_surface(
+            text,
+            surface_id="research-final",
+            retrieved_results=result.get("retrieved_results", []),
+            document=result.get("response_document"),
+        ).model_dump(mode="json"),
+    }
 
 
 if __name__ == "__main__":
-    app.run()
+    app.run(port=_runtime_port())

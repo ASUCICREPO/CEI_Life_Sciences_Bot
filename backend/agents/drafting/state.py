@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from shared.schemas.response_blocks import ResponseDocument
 from shared.state import BaseAgentState
 
 
@@ -29,6 +30,7 @@ class DraftingState(BaseAgentState):
     research_questions: list[str]
     research_findings: list[dict]  # [{"question": str, "answer": str}] from the Research Agent subagent
     draft: str
+    draft_document: ResponseDocument | None
     revision_feedback: str | None
     export_formats: list[str]
     chart_specs: list[dict]

@@ -11,7 +11,7 @@ def plan(state: PipelineState) -> dict[str, Any]:
 
 
 def approve(state: PipelineState) -> dict[str, Any]:
-    """Present the plan to the user via A2UI ReviewGate and wait for approval."""
+    """Present the plan to the user via CEI UI ReviewGate and wait for approval."""
     raise NotImplementedError
 
 
