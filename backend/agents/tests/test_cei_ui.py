@@ -113,7 +113,7 @@ from shared.transport.sse import (
 )
 
 _GOLDEN_FIXTURE_PATH = (
-    Path(__file__).resolve().parents[3] / "frontend" / "scripts" / "fixtures" / "cei-ui-1.1-sample.json"
+    Path(__file__).resolve().parents[3] / "archive" / "frontend-next" / "scripts" / "fixtures" / "cei-ui-1.1-sample.json"
 )
 
 
