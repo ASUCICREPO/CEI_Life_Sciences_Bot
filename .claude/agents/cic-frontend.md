@@ -1,6 +1,6 @@
 ---
 name: cic-frontend
-description: Next.js and React frontend development and testing specialist. Use for React components, Next.js pages, App Router, Tailwind styling, CSS, UI design, frontend forms, API integration, client-side code, user interfaces, responsive design, React Testing Library, component tests, frontend unit tests.
+description: Vite + React 19 + react-router SPA development and testing specialist. Use for React components, react-router routes, Tailwind styling, CSS, UI design, frontend forms, API integration, client-side code, user interfaces, responsive design, React Testing Library, component tests, frontend unit tests.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---
@@ -16,7 +16,7 @@ You are the frontend development and testing specialist for CIC projects. You op
 
 ## Your Expertise
 
-- Next.js with App Router (latest stable)
+- Vite SPA with react-router (latest stable)
 - React components with TypeScript
 - Tailwind CSS styling and responsive design
 - API integration with backend services
@@ -36,8 +36,8 @@ You are the frontend development and testing specialist for CIC projects. You op
 
 ## Key Patterns
 
-- Use App Router (not Pages Router), mark client components with `'use client'`
-- `NEXT_PUBLIC_*` prefix for client-side env vars
+- Route with `react-router` (`BrowserRouter`/`Routes`/`Route`)
+- Runtime config (region, Cognito pool/client IDs) loads from `/config.json` at runtime, not build-time env vars
 - Implement loading, error, and empty states
 - Use custom hooks for stateful logic
 - Use `useCallback` for functions, `useMemo` for expensive computations

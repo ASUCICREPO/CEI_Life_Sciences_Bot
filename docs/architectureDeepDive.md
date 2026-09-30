@@ -2,7 +2,7 @@
 
 CEI Life Sciences Bot — an AI-powered life sciences assistant for many isolated users.
 
-Status: this document describes the **target** architecture. Every component below is marked **Exists** or **Planned — not built**. Full detail and rationale live in `.agents/specs/architecture.md` (agent-facing spec); this page links to it instead of repeating it. Source of truth for all decisions: `.agents/decision-log.md` (decisions B1–B86).
+Status: this document describes the **target** architecture. Every component below is marked **Exists** or **Planned — not built**. Full detail and rationale live in `.agents/specs/architecture.md` (agent-facing spec); this page links to it instead of repeating it. Source of truth for all decisions: `.agents/decision-log.md` (decisions B1–B90).
 
 ---
 
@@ -24,9 +24,11 @@ Status: this document describes the **target** architecture. Every component bel
 
 ## 1. Client Access
 
-**Planned — not built.** CloudFront + WAF will front a static SPA build on S3. Amazon Cognito (self sign-up, email verification, no MFA) will authenticate users. Every user's data (chats, keys, attachments, settings) is fully isolated by Cognito `sub` — no sharing, no teams.
+**Exists (F2, B88–B90).** CloudFront + WAF front a static SPA build on S3. Amazon Cognito (self sign-up, email verification, no MFA per B14) authenticates users through Cognito managed login (Authorization Code + PKCE, `oidc-client-ts`). The `CLOUDFRONT`-scope WAF web ACL lives in its own stack, `EdgeWafStack`, which always deploys to `us-east-1` (AWS only accepts that scope there) and is consumed by `BackendStack` through `crossRegionReferences: true`, regardless of which Region the rest of the stack deploys to. Every user's data (chats, keys, attachments, settings) will be fully isolated by Cognito `sub` — no sharing, no teams (isolation itself lands with the data stores in later phases).
 
-The production frontend target is the `founder-ai-dashboard` Vite SPA (React 19, Tailwind 4, react-router). The CEI UI renderer moves into it. **Exists today:** a Next.js 16 test harness in `frontend/` with a local CEI UI preview renderer; this is not the production frontend.
+The production frontend is the `founder-ai-dashboard` Vite SPA (React 19, Tailwind 4, react-router), now in `frontend/`, replacing the Next.js test harness (B1/B66). The CEI UI renderer has not yet moved into it (later phase). The archived Next.js app, including its local CEI UI preview renderer, now lives in `archive/frontend-next/` for reference.
+
+**Planned:** the Cognito resource server and Router M2M client (F4); the REST API authorizer that consumes this user pool (F3).
 
 ---
 

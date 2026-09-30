@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Status: **Partly built.** `deploy.sh` exists and works today (F1, B87). It sets up a CodeBuild project that runs `cdk deploy`. But the CDK stack it deploys (`BackendStack`) still defines only the AgentCore Code Interpreter — the full product stack (Cognito, API Gateway, Lambdas, tables, and so on) is **planned, not built**. This guide marks each part "Exists" or "Planned". Full detail: `.agents/specs/architecture.md`, `.agents/decision-log.md` (B45–B48, B87), `.agents/phases/F01-deploy-foundation.md`.
+Status: **Partly built.** `deploy.sh` exists and works today (F1, B87). It sets up a CodeBuild project that runs `cdk deploy --all` for two stacks: `BackendStack` (Code Interpreter, Cognito, the pre-sign-up domain check, and the S3 + CloudFront + WAF-fronted dashboard, F2/B88–B90) and `EdgeWafStack` (the `us-east-1` WAF web ACL, B88). The rest of the product stack (the REST API Gateway, Session Runner/Router Lambdas, DynamoDB tables, and so on) is **planned, not built**. This guide marks each part "Exists" or "Planned". Full detail: `.agents/specs/architecture.md`, `.agents/decision-log.md` (B45–B48, B87–B90), `.agents/phases/F01-deploy-foundation.md`, `.agents/phases/F02-hosting-auth.md`.
 
 ---
 
@@ -46,6 +46,7 @@ Run `./deploy.sh --help` to see this list from the script itself.
 | `--rps <n>` | Per-user requests/second limit (default 20) |
 | `--max-realtime <n>` | Max concurrent real-time runs per user (default 2) |
 | `--max-background <n>` | Max concurrent background runs per user (default 1) |
+| `--allow-localhost-callback` | Add `http://localhost:5173` as an extra Cognito SPA callback/logout URL (B90, local dev only; default off) |
 | `--github-pat-stdin` | Read a GitHub PAT from stdin (for private repos, non-interactive use) |
 | `--non-interactive` | Never prompt; fail if a required value is missing |
 | `--yes` | Skip the confirmation prompt |
@@ -62,6 +63,10 @@ If you omit a flag, `deploy.sh` prompts for it (unless `--non-interactive` is se
 
 If your repository is private, answer "yes" when `deploy.sh` asks, then paste a GitHub personal access token (input is hidden, read from `/dev/tty`). `deploy.sh` never writes the token to disk, to `cei.deploy.json`, or to shell history. It stores the token in Secrets Manager as `cei/deploy/github-pat`, and attaches it to the `cei-life-sciences-deploy` CodeBuild project only, through the project's own `source.auth` field (`SECRETS_MANAGER`). The token is never set as the account-wide default GitHub credential, so it does not affect any other CodeBuild project in the account.
 
+### Local dev callback URL (`--allow-localhost-callback`)
+
+By default, the Cognito SPA app client only accepts the deployed CloudFront domain as a callback/logout URL. Pass `--allow-localhost-callback`, or answer "yes" to the matching prompt, to also add `http://localhost:5173/auth/callback` and `http://localhost:5173/` (B90). This is a proposal for local development, not a settled CORS/dev-origin decision — leave it off unless you need to run the SPA against a deployed Cognito pool from `npm run dev`.
+
 ### Pinned build commit
 
 `deploy.sh` pins the build to a specific commit SHA, passed to `codebuild start-build --source-version`, and prints it in the configuration summary as "Source version". It resolves the SHA as follows:
@@ -77,12 +82,13 @@ This means: if you have local, unpushed commits, the build does **not** deploy t
 1. `backend/cei.deploy.json` — the collected configuration (not committed; see `.gitignore`).
 2. Runs `npm ci` in `backend/`, then the Region pre-flight check (see below). If pre-flight fails, the script stops before touching AWS.
 3. `cdk bootstrap`, only if the `CDKToolkit` stack is not already in the target Region.
-4. The GitHub PAT secret in Secrets Manager, only if you gave one.
-5. The IAM role `cei-deploy-codebuild-role` and inline policy `cei-deploy-codebuild-policy` (created or updated).
-6. The CodeBuild project `cei-life-sciences-deploy` (created or updated), source set to your repository URL and branch.
-7. A CodeBuild build, pinned to the resolved commit SHA, started right away, using `buildspec.yml`.
+4. `cdk bootstrap` in `us-east-1` too, only if that stack is not already there **and** the target Region is not itself `us-east-1` — `EdgeWafStack` (B88) always deploys to `us-east-1`, regardless of the chosen Region.
+5. The GitHub PAT secret in Secrets Manager, only if you gave one.
+6. The IAM role `cei-deploy-codebuild-role` and inline policy `cei-deploy-codebuild-policy` (created or updated). The policy's `sts:AssumeRole` and `ssm:GetParameter` statements cover the `us-east-1` bootstrap roles too, in addition to the target Region.
+7. The CodeBuild project `cei-life-sciences-deploy` (created or updated), source set to your repository URL and branch.
+8. A CodeBuild build, pinned to the resolved commit SHA, started right away, using `buildspec.yml`.
 
-There is no separate CDK pipeline stack — the role and project are created directly with the AWS CLI (B87). `BackendStack` stays the only product stack.
+There is no separate CDK pipeline stack — the role and project are created directly with the AWS CLI (B87). `BackendStack` and `EdgeWafStack` are the only two product stacks (B88).
 
 ### Ownership tagging and resource takeover protection
 
@@ -110,38 +116,56 @@ The pre-flight script (`backend/scripts/preflight.ts`) checks, before any CodeBu
 
 `buildspec.yml` (Exists) runs in CodeBuild:
 
-1. `install` — `npm ci` in `backend/` (Node.js 22 runtime).
+1. `install` — `npm ci` in `backend/` (Node.js 22 runtime) **and** in `frontend/`.
 2. `pre_build` — decode the configuration and write it to `backend/cei.deploy.json`; run the Region pre-flight again (catches Region drift between the local run and the build).
-3. `build` — `npm run build`, `npm test`, then `cdk deploy --all --require-approval never -c ceiConfigFile=cei.deploy.json`.
+3. `build` — `npm run build` in `frontend/` first (produces `frontend/dist`), then `npm run build` and `npm test` in `backend/`, then `cdk deploy --all --require-approval never -c ceiConfigFile=cei.deploy.json`.
 
-Today, `cdk deploy` only deploys the Code Interpreter construct and the `CodeInterpreterId`/`WebSearchEnabled` stack outputs (Planned: Cognito, the REST API Gateway, Session Runner/Router Lambdas, AgentCore Gateway and Policy, AgentCore Runtimes, DynamoDB tables, S3 buckets, SQS, Secrets Manager, and CloudWatch alarms/SNS — these are added by later phases, F2 onward). See [Provisioned Resources](./provisioned-resources.md) for the exact current list.
+The frontend build must run before `cdk deploy`: `backend/bin/backend.ts` resolves `frontendAssetPath` to `../frontend/dist` and stops with a clear error ("build the frontend first: cd frontend && npm ci && npm run build") if that directory does not exist, because `BackendStack`'s `BucketDeployment` needs a real asset directory at synth time.
 
----
-
-## Planned: frontend deployment
-
-The production frontend target is a static build of the Vite dashboard (replacing the current Next.js `frontend/` test harness — see [Architecture Deep Dive](./architectureDeepDive.md), B1/B66), served from **S3 + CloudFront**. There is no Vercel or Amplify deployment target for production; those options are removed from this project's plan.
-
-Planned steps: build the static SPA, upload it to the S3 bucket created by CDK, and invalidate the CloudFront distribution. CloudFront needs an SPA fallback (403/404 → `index.html`) for client-side routing.
+`cdk deploy --all` now deploys both `BackendStack` (Code Interpreter, Cognito, the S3/CloudFront-fronted dashboard, F2) and `EdgeWafStack` (the `us-east-1` WAF web ACL, B88). Planned for later phases: the REST API Gateway, Session Runner/Router Lambdas, AgentCore Gateway and Policy, AgentCore Runtimes, DynamoDB tables, additional S3 buckets, SQS, Secrets Manager (product API keys), and CloudWatch alarms/SNS. See [Provisioned Resources](./provisioned-resources.md) for the exact current list.
 
 ---
 
-## Planned: post-deployment verification
+## Frontend deployment (Exists, F2)
 
-Once the above exists, verification will include: checking the CloudFormation stack status, confirming the Cognito pool accepts sign-ups from allowed email domains, testing `/chat/stream` end to end, and confirming CloudWatch alarms reach the admin email.
+The production frontend is the `founder-ai-dashboard` Vite SPA in `frontend/` (replacing the archived Next.js test harness, now in `archive/frontend-next/` — see [Architecture Deep Dive](./architectureDeepDive.md), B1/B66), served from **S3 + CloudFront + WAF**. There is no Vercel or Amplify deployment target for production; those options are removed from this project's plan.
+
+Steps (done automatically by `buildspec.yml`, or manually for local testing):
+
+1. `cd frontend && npm ci && npm run build` — produces the static build in `frontend/dist`.
+2. `cd backend && npx cdk deploy --all` — `BackendStack`'s `SiteAssetsDeployment` uploads `frontend/dist` to the private site bucket, then `RuntimeConfigDeployment` writes `/config.json` (region, Cognito user pool ID, SPA client ID, Cognito domain) with `Cache-Control: no-cache` so the SPA always fetches the current runtime config. Each deployment invalidates the CloudFront distribution for the paths it touched.
+3. The SPA fetches `/config.json` before it renders (see `frontend/src/main.tsx`), so the same static build works against any deployment.
+
+CloudFront serves the SPA fallback for client-side routing: a 403 or 404 from S3 (for example on a deep link like `/history`) returns `/index.html` with HTTP 200 instead of an error page.
+
+---
+
+## Post-deployment verification
+
+After `./deploy.sh` succeeds, verify (see `.agents/phases/F02-hosting-auth.md` task 10, not yet run against a real deployment as of this writing):
+
+1. Open a deep link (for example `<SiteUrl>/history`) — the SPA loads (the CloudFront fallback works).
+2. Sign up with a disallowed email domain — Cognito rejects it (the pre-sign-up Lambda trigger).
+3. Sign up with an allowed email domain — receive the verification email, verify, log in, and land on the dashboard shell with no report pages in navigation.
+4. Reload the page — you stay logged in (a silent redirect through the Cognito session cookie); click "Sign out" — you return to Cognito managed login.
+5. Rate-rule smoke test: send a burst of requests (for example 1500 in a short window) from one IP to the CloudFront domain — the WAF rate-based rule should return 403.
+
+Once the REST API and later phases exist, verification will also include: testing `/chat/stream` end to end and confirming CloudWatch alarms reach the admin email.
 
 ---
 
 ## Cleanup
 
-`cdk destroy` only removes what CDK manages — today, the Code Interpreter construct and its CloudFormation output:
+`cdk destroy --all` removes both CDK-managed stacks — `BackendStack` (Code Interpreter, Cognito, the S3/CloudFront/WAF-fronted dashboard) and `EdgeWafStack` (the `us-east-1` WAF web ACL):
 
 ```bash
 cd backend
-cdk destroy
+cdk destroy --all
 ```
 
-> **Warning:** once the full stack exists, `cdk destroy` will remove all deployed product resources — confirm nothing important is only stored there before running it.
+> **Warning:** `cdk destroy` removes every deployed product resource except the Cognito user pool — confirm nothing important is only stored there before running it.
+
+**The Cognito user pool is retained.** `deletionProtection: true` and `RemovalPolicy.RETAIN` on `UserPool` mean `cdk destroy` does not delete it — deletion protection blocks CloudFormation from removing it even if you try, and the removal policy also tells CloudFormation to leave it in place on stack deletion. To remove it by hand once you are sure the user data is no longer needed: in the Cognito console (or `aws cognito-idp`), first turn off deletion protection on the user pool (`UpdateUserPool` with `DeletionProtection: INACTIVE`), then delete the user pool. This permanently deletes every user account in it.
 
 `deploy.sh` creates some resources with the AWS CLI, outside CDK. `cdk destroy` does **not** remove these. To remove them by hand: delete the CodeBuild project `cei-life-sciences-deploy`, delete the IAM role `cei-deploy-codebuild-role`, and (if you gave a GitHub PAT) delete the Secrets Manager secret `cei/deploy/github-pat`.
 
@@ -152,5 +176,6 @@ cdk destroy
 - [Architecture Deep Dive](./architectureDeepDive.md) — target architecture and current status per component
 - [Provisioned Resources](./provisioned-resources.md) — what is really deployed today
 - `.agents/specs/architecture.md` — full target architecture spec
-- `.agents/decision-log.md` — decisions behind the deployment design (B45–B48, B87)
+- `.agents/decision-log.md` — decisions behind the deployment design (B45–B48, B87–B90)
 - `.agents/phases/F01-deploy-foundation.md` — the F1 build phase that delivered `deploy.sh`
+- `.agents/phases/F02-hosting-auth.md` — the F2 build phase that delivered Cognito, the S3/CloudFront/WAF-fronted dashboard, and the edge WAF stack
