@@ -67,6 +67,8 @@ Options:
   --rps <n>                     Per-user requests/second limit (default: 20)
   --max-realtime <n>            Max concurrent real-time runs/user (default: 2)
   --max-background <n>          Max concurrent background runs/user (default: 1)
+  --allow-localhost-callback     Add http://localhost:5173 as an extra Cognito
+                                 SPA callback/logout URL (B90, local dev only)
   --github-pat-stdin            Read a GitHub personal access token from stdin
                                  (for private repos, non-interactive use)
   --non-interactive              Never prompt; fail if a required value is missing
@@ -117,6 +119,7 @@ ADMIN_EMAIL_FLAG=""
 RPS_FLAG=""
 MAX_REALTIME_FLAG=""
 MAX_BACKGROUND_FLAG=""
+ALLOW_LOCALHOST_CALLBACK_FLAG=""
 GITHUB_PAT_STDIN="false"
 NON_INTERACTIVE="false"
 ASSUME_YES="false"
@@ -135,6 +138,7 @@ while [ $# -gt 0 ]; do
     --rps) RPS_FLAG="${2:-}"; shift 2 ;;
     --max-realtime) MAX_REALTIME_FLAG="${2:-}"; shift 2 ;;
     --max-background) MAX_BACKGROUND_FLAG="${2:-}"; shift 2 ;;
+    --allow-localhost-callback) ALLOW_LOCALHOST_CALLBACK_FLAG="true"; shift 1 ;;
     --github-pat-stdin) GITHUB_PAT_STDIN="true"; shift 1 ;;
     --non-interactive) NON_INTERACTIVE="true"; shift 1 ;;
     --yes) ASSUME_YES="true"; shift 1 ;;
@@ -149,7 +153,15 @@ done
 # so a piped token can never be consumed by mistake even on platforms where /dev/tty is unusable
 GITHUB_PAT=""
 if [ "$GITHUB_PAT_STDIN" = "true" ]; then
-  IFS= read -r GITHUB_PAT || [ -n "$GITHUB_PAT" ]
+  if [ -t 0 ]; then
+    # ADR: -s (silent) when stdin is a real terminal | Rationale: security review — `--github-pat-stdin`
+    # is meant for piped, non-interactive use; if stdin is actually a TTY, a plain `read` would echo the
+    # token to the screen as it's typed. `-s` suppresses its own newline echo too, so print one after.
+    IFS= read -rs GITHUB_PAT || [ -n "$GITHUB_PAT" ]
+    echo
+  else
+    IFS= read -r GITHUB_PAT || [ -n "$GITHUB_PAT" ]
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -230,6 +242,21 @@ prompt ADMIN_EMAIL "$ADMIN_EMAIL_FLAG" "Admin alert email address" "" true
 prompt RPS "$RPS_FLAG" "Per-user requests/second limit" "20" true
 prompt MAX_REALTIME "$MAX_REALTIME_FLAG" "Max concurrent real-time runs per user" "2" true
 prompt MAX_BACKGROUND "$MAX_BACKGROUND_FLAG" "Max concurrent background runs per user" "1" true
+
+# ADR: a boolean switch, not a prompt-with-default value | Rationale: B90 — this is a local-dev-only
+# proposal (security.md CORS/dev-origin TBD), so it must default to false and only turn on when asked
+if [ "$ALLOW_LOCALHOST_CALLBACK_FLAG" = "true" ]; then
+  ALLOW_LOCALHOST_CALLBACK="true"
+elif [ "$NON_INTERACTIVE" = "true" ]; then
+  ALLOW_LOCALHOST_CALLBACK="false"
+else
+  ALLOW_LOCALHOST_CALLBACK_ANSWER=""
+  read -rp "Add http://localhost:5173 as a Cognito callback/logout URL for local dev? [y/N]: " ALLOW_LOCALHOST_CALLBACK_ANSWER < /dev/tty
+  case "$ALLOW_LOCALHOST_CALLBACK_ANSWER" in
+    [Yy]|[Yy][Ee][Ss]) ALLOW_LOCALHOST_CALLBACK="true" ;;
+    *) ALLOW_LOCALHOST_CALLBACK="false" ;;
+  esac
+fi
 
 # GITHUB_PAT was already read from stdin above (--github-pat-stdin) if that flag was set.
 if [ "$GITHUB_PAT_STDIN" != "true" ] && [ "$NON_INTERACTIVE" != "true" ]; then
@@ -313,6 +340,7 @@ Deployment configuration
   Requests/sec limit:      $RPS
   Max real-time runs/user: $MAX_REALTIME
   Max background runs:     $MAX_BACKGROUND
+  Allow localhost callback: $ALLOW_LOCALHOST_CALLBACK
   GitHub PAT provided:     $( [ -n "$GITHUB_PAT" ] && echo yes || echo no )
   AWS account:             $ACCOUNT_ID
   Dry run:                 $DRY_RUN
@@ -350,6 +378,7 @@ write_config() {
   CEI_MAX_BACKGROUND="$MAX_BACKGROUND" \
   CEI_REPO_URL="$REPO_URL" \
   CEI_BRANCH="$BRANCH" \
+  CEI_ALLOW_LOCALHOST_CALLBACK="$ALLOW_LOCALHOST_CALLBACK" \
   node -e '
     const fs = require("fs");
     const splitList = (v) => (v || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -366,6 +395,7 @@ write_config() {
         maxBackgroundRunsPerUser: Number(process.env.CEI_MAX_BACKGROUND)
       },
       webSearchEnabled: false,
+      allowLocalhostCallback: process.env.CEI_ALLOW_LOCALHOST_CALLBACK === "true",
       repository: {
         url: process.env.CEI_REPO_URL,
         branch: process.env.CEI_BRANCH
@@ -415,6 +445,17 @@ if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region "$REGIO
   ( cd "$BACKEND_DIR" && npx cdk bootstrap "aws://$ACCOUNT_ID/$REGION" )
 else
   echo "CDKToolkit already present in $REGION."
+fi
+
+# ADR: also bootstrap us-east-1 | Rationale: B88 — EdgeWafStack (the CLOUDFRONT-scope WAF web ACL)
+# always deploys to us-east-1 regardless of the chosen Region
+if [ "$REGION" != "us-east-1" ]; then
+  if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region us-east-1 >/dev/null 2>&1; then
+    echo "CDKToolkit not found in us-east-1 — bootstrapping..."
+    ( cd "$BACKEND_DIR" && npx cdk bootstrap "aws://$ACCOUNT_ID/us-east-1" )
+  else
+    echo "CDKToolkit already present in us-east-1."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -498,6 +539,16 @@ if [ -n "$GITHUB_SECRET_ARN" ]; then
   secret_statement=",{\"Sid\":\"ReadGithubPatSecret\",\"Effect\":\"Allow\",\"Action\":\"secretsmanager:GetSecretValue\",\"Resource\":\"$GITHUB_SECRET_ARN\"}"
 fi
 
+# ADR: widen to include us-east-1 | Rationale: B88 — EdgeWafStack always deploys to us-east-1, so
+# the CodeBuild role needs the same cdk-hnb659fds-* AssumeRole (and bootstrap-version read) there too,
+# in addition to whatever $REGION the rest of BackendStack deploys to
+ASSUME_ROLE_RESOURCES="\"arn:$PARTITION:iam::$ACCOUNT_ID:role/cdk-hnb659fds-*-$ACCOUNT_ID-$REGION\""
+BOOTSTRAP_VERSION_RESOURCES="\"arn:$PARTITION:ssm:$REGION:$ACCOUNT_ID:parameter/cdk-bootstrap/hnb659fds/version\""
+if [ "$REGION" != "us-east-1" ]; then
+  ASSUME_ROLE_RESOURCES="$ASSUME_ROLE_RESOURCES,\"arn:$PARTITION:iam::$ACCOUNT_ID:role/cdk-hnb659fds-*-$ACCOUNT_ID-us-east-1\""
+  BOOTSTRAP_VERSION_RESOURCES="$BOOTSTRAP_VERSION_RESOURCES,\"arn:$PARTITION:ssm:us-east-1:$ACCOUNT_ID:parameter/cdk-bootstrap/hnb659fds/version\""
+fi
+
 mktemp_secure policy_file
 cat > "$policy_file" <<EOF
 {
@@ -507,7 +558,7 @@ cat > "$policy_file" <<EOF
       "Sid": "AssumeCdkBootstrapRoles",
       "Effect": "Allow",
       "Action": "sts:AssumeRole",
-      "Resource": "arn:$PARTITION:iam::$ACCOUNT_ID:role/cdk-hnb659fds-*-$ACCOUNT_ID-$REGION",
+      "Resource": [$ASSUME_ROLE_RESOURCES],
       "Condition": {
         "StringEquals": {
           "iam:ResourceTag/aws-cdk:bootstrap-role": ["deploy", "file-publishing", "image-publishing", "lookup"]
@@ -519,7 +570,7 @@ cat > "$policy_file" <<EOF
       "Effect": "Allow",
       "Action": "ssm:GetParameter",
       "Resource": [
-        "arn:$PARTITION:ssm:$REGION:$ACCOUNT_ID:parameter/cdk-bootstrap/hnb659fds/version",
+        $BOOTSTRAP_VERSION_RESOURCES,
         "arn:$PARTITION:ssm:$REGION::parameter/aws/service/global-infrastructure/*"
       ]
     },

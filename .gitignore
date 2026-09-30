@@ -71,3 +71,7 @@ __pycache__/
 
 # deploy.sh-generated deployment config (F1, B47) — environment-specific, regenerated per run
 backend/cei.deploy.json
+
+# Frontend production build + local runtime config (F2, B1/B66) — built/generated, not committed
+frontend/dist/
+frontend/public/config.json

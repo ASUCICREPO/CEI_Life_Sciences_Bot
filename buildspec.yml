@@ -14,6 +14,8 @@ phases:
       nodejs: 22
     commands:
       - cd "$CODEBUILD_SRC_DIR/backend" && npm ci
+      # ADR: frontend build dependencies installed here too (F2, B1/B66) | Rationale: BackendStack's BucketDeployment needs a built frontend/dist before `cdk deploy`
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm ci
   pre_build:
     commands:
       - echo "$CEI_DEPLOY_CONFIG" | base64 -d > "$CODEBUILD_SRC_DIR/backend/cei.deploy.json"
@@ -21,6 +23,7 @@ phases:
       - cd "$CODEBUILD_SRC_DIR/backend" && npx ts-node scripts/preflight.ts --config cei.deploy.json --write
   build:
     commands:
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm run build
       - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
       - cd "$CODEBUILD_SRC_DIR/backend" && npm test
       - cd "$CODEBUILD_SRC_DIR/backend" && npx cdk deploy --all --require-approval never -c ceiConfigFile=cei.deploy.json
