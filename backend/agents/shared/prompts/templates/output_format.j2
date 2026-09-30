@@ -1,1 +1,5 @@
+{% if structured_blocks %}
+{% include "response_blocks.j2" %}
+{% else %}
 Structure your response with clear sections. Use headings for major findings. Present citations inline using [SourceID] notation. End with a summary of confidence levels and any open questions.
+{% endif %}
