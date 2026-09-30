@@ -117,49 +117,53 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 
 ---
 
-## D6: Agent-to-UI Protocol — A2UI (Google)
+## D6: Agent-to-UI Protocol - CEI UI
 
-**Decision:** Adopt the A2UI specification (v1.0, Apache 2.0, `google/A2UI`) for agent-to-UI rendering.
+**Decision:** Use the custom CEI UI protocol for rich agent responses. The content type is `application/vnd.cei.ui+json`, the protocol ID is `cei-ui`, and the response field is `ui`. The protocol is now at version 1.1.
 
-**How it works:**
-- Agent emits A2UI JSON (`application/a2ui+json`) as structured tool output or SSE event payload
-- Frontend uses the official A2UI React renderer for standard components (Text, Card, List, Button, ChoicePicker, TextField, Tabs, Modal, etc.)
-- Domain-specific components (CitationChip, ConfidenceBadge, EvidencePanel, ProvenanceTrail, ReviewGate) registered as custom catalog entries
-- Catalog-based security: frontend advertises which component types it trusts
-- Data binding via JSON Pointer paths allows agent to update data without resending the component tree
-- Streaming-friendly: flat component structure renders incrementally as the agent generates
+**Scope for this phase:**
+- A completed response contains one flat, allowlisted component graph.
+- Deterministic presenters create CEI UI from typed agent state. Models do not create component records, arbitrary UI, or JavaScript. The one exception is `Artifact.html`, which is model-authored but never executes outside a sandboxed iframe (see the "Sandboxed model-authored artifacts" ADR below).
+- The first transport is completed JSON. Typed POST actions are part of the contract.
+- Final SSE surfaces and progressive patches are deferred.
+- Plain text is required as a fallback: when `ui` fails validation, the client drops it and shows `text` with a notice, and the local proxy omits `ui` and sets `ui_error`.
 
-**18 built-in A2UI components:** Text, Image, Icon, Video, AudioPlayer, Divider, Row, Column, List, Card, Tabs, Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput.
+**1.1 addition:** Six new leaf components — `Table`, `StatGrid`, `Callout`, `Timeline`, `Comparison`, `Artifact` — so research and drafting answers can be rendered as tables, metric tiles, comparisons, timelines, callouts, and sandboxed interactive artifacts instead of one Markdown block. 1.1 is additive: servers emit `"1.1"`; clients and stored chat history continue to accept `"1.0"`.
 
----
+**Current status:** CEI UI 1.1 schemas, deterministic presenters, completed response surfaces, frontend validation and rendering, and local typed action dispatch are implemented. The local Next.js proxy routes are disabled unless `CEI_ENABLE_LOCAL_PROXY=true`. They are for preview only because the production frontend target is a static S3 and CloudFront deployment. Production authentication, Session Runner routing, SSE delivery, and graph resume are not implemented.
 
-## D7: Typed Structured Output — AgentCore Tool Output + A2UI
-
-**Decision:** Agent produces typed outputs (TargetAssessment, VariantReport, RegulatoryBrief, etc.) via structured tool calls with JSON schemas. These are also rendered as A2UI component trees for the frontend.
-
-**Flow:** Agent calls a tool like `submit_target_assessment` with a typed JSON schema → the result is stored in DynamoDB → the agent also emits A2UI components for real-time rendering → frontend renders both the streaming A2UI and stores the structured data for export.
+**Rationale:** A small CEI-owned contract gives the application a stable allowlist, direct validation, typed actions, and no dependency on executable model-generated UI beyond the sandboxed artifact exception. See [CEI UI Protocol 1.1](./cei-ui-protocol.md).
 
 ---
 
-## D8: Human-in-the-Loop — AgentCore Inline Functions + A2UI
+## D7: Typed Presentation Output - ResponseDocument Blocks + CEI UI
 
-**Decision:** Use AgentCore's `inline_function` tool type for all HITL interactions. Render HITL prompts as A2UI components.
+**Decision:** The research and drafting agents produce a typed `ResponseDocument` (`backend/agents/shared/schemas/response_blocks.py`) through a structured tool call: a title, summary, up to four key metrics, and one to twelve sections of typed presentation blocks (`prose`, `table`, `metrics`, `chart`, `comparison`, `callout`, `timeline`, `artifact`). Deterministic presenters map these blocks to CEI UI surfaces.
+
+**Flow:** An agent submits a `ResponseDocument`. `shared/grounding.py` checks every non-prose block's numbers against an evidence corpus and sets `verification` server-side (the model never sets it). A presenter maps the grounded blocks to an allowlisted CEI UI graph and returns it in the completed JSON response. Persistence, export storage, and streaming delivery apply only when their infrastructure is implemented.
+
+**Note:** The domain-specific typed outputs originally described here (`TargetAssessment`, `VariantReport`, `RegulatoryBrief`, `typed_outputs.py`) are not used for presentation. `ResponseDocument` blocks are the one presentation-facing typed contract for research and drafting; any future domain-typed outputs would still need to go through a presenter to reach CEI UI.
+
+---
+
+## D8: Human-in-the-Loop - Typed Actions + CEI UI
+
+**Decision:** Keep the intent of typed inline-function prompts for HITL interactions. Render each prompt as a CEI UI component and return each user response as a typed POST action.
 
 **Inline function tools:**
-- `ask_user_question` — present a question with options (rendered as A2UI ChoicePicker)
-- `present_alternatives` — show multiple options with descriptions (rendered as A2UI Card list)
-- `request_plan_approval` — show a pipeline plan for review (rendered as A2UI Card + Button)
-- `get_user_input` — free-text input (rendered as A2UI TextField)
+- `ask_user_question` - present a question with a `ChoicePicker`
+- `present_alternatives` - show options with a `Card` list
+- `request_plan_approval` - show a plan with a `ReviewGate`
+- `get_user_input` - request text with a `TextField`
 
-**Flow:**
-1. Agent calls an inline function (e.g., `ask_user_question`)
-2. AgentCore pauses execution, streams the tool call back to Session Runner Lambda
-3. Session Runner emits an SSE `hitl_request` event with A2UI JSON to the frontend
-4. Frontend renders the A2UI components (interactive form/options)
-5. User responds → frontend POSTs to REST endpoint → Session Runner re-invokes the harness with the tool result
-6. Agent resumes with the user's input
+**Target flow:**
+1. The agent requests a typed interaction.
+2. The presenter creates a CEI UI surface with a typed action descriptor.
+3. The client sends the action by POST with the session, surface, revision, component, and interaction IDs.
+4. The server validates the action and returns `accepted`, `completed`, `stale`, `rejected`, or `error`.
+5. When pause and resume support exists, the server resumes the saved graph with the validated value.
 
-**Key property:** AgentCore does not persist the inline function turn to the session until resolved. If the user never responds, the session stays clean.
+**Current limitation:** The current helpers return HITL UI data, and the local preview can submit and validate typed actions through its opt-in proxy. The repository has no production action endpoint, Session Runner, or actual LangGraph pause and resume flow.
 
 ---
 
@@ -187,7 +191,7 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 **Decision:** The Pipeline Manager Agent (Goal 4) follows this flow:
 
 1. **Plan generation:** Agent generates a step-by-step plan with estimated durations and dependencies
-2. **User review:** Plan presented via A2UI components. User can comment on parts and refine
+2. **User review:** Plan presented with CEI UI components. User can comment on parts and refine
 3. **Approval gate:** User must explicitly approve before execution starts
 4. **Execution:** Manager launches concurrent, sequential, and looped sub-tasks on Fargate
 5. **Step monitoring:** Each step reports status (idle/running/completed/partial/failed)
@@ -230,6 +234,30 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 ## D15: Collaboration — Single-User
 
 **Decision:** Single-user system. Each user has their own sessions, exports, and settings. No shared workspaces, team review, or multi-user features.
+
+---
+
+## D17: Sandboxed Model-Authored Artifacts
+
+**Context:** Research and drafting answers needed an interactive view (for example, a dose-response slider) to look like a Claude artifact. Every other CEI UI component is built by a deterministic presenter from typed data; the model never writes a component record. An interactive view is different: the visualization logic itself — not just the data — has to come from the model, because the presenter cannot anticipate every interaction a user might want.
+
+**Decision:** Add one component, `Artifact` (wire) / `ArtifactBlock` (model-facing), that carries model-authored `html` (vanilla JS, SVG, or canvas; a body fragment only) plus an optional `data` table. This is the only place in CEI UI where model output becomes executable code. It runs only inside a sandboxed iframe with `sandbox="allow-scripts"`, a host-built `srcDoc`, a restrictive CSP `<meta>` tag, a single whitelisted resize message, and a navigation tripwire that unmounts the frame on any second load. See "Artifact Security" in [CEI UI Protocol 1.1](./cei-ui-protocol.md) for the full mechanism. A server-side and client-side denylist lint (`ARTIFACT_HTML_DENYLIST`) rejects obvious network, navigation, storage, and frame-escape patterns before a surface is ever produced, as defense in depth — not as the security boundary.
+
+**Alternatives considered and rejected:**
+- **Typed-only, no artifact.** Keep every CEI UI component fully typed and presenter-built, with no model-authored code at all. Rejected: this cannot produce a genuinely interactive, model-directed view (for example, a slider whose behavior depends on what the model decided to show); the "Claude artifact" goal requires some model-authored logic.
+- **Server-rendered images.** Have the model describe a chart and render it server-side to a static image (PNG/SVG) instead of shipping live HTML/JS. Rejected: static images cannot be interactive, and this was already the drafting agent's chart approach pre-1.1 (base64 PNGs), which is exactly what this work moves away from.
+- **`allow-same-origin` on the iframe.** Would let artifact scripts read `document.domain`-adjacent state and simplify some debugging. Rejected: combined with `allow-scripts`, `allow-same-origin` lets a sandboxed frame access the embedding page's origin, defeating the sandbox; the two tokens must never be combined for untrusted content.
+- **A vendored chart library inside the sandbox.** Would give the model a safer, more consistent way to draw charts. Rejected for now: it adds a trusted, audited dependency inside the sandbox and expands the reviewable surface; artifacts are vanilla JS/SVG/canvas only until a specific need justifies the added dependency.
+
+**Consequences:**
+- The prompt does not limit how many blocks or artifacts an answer uses; it directs the model to prefer graphics over prose. The protocol still caps each artifact at 64 KiB `html` and 64 KiB `data`, with a combined per-surface cap of 262,144 bytes and at most 4 artifacts per surface. The presenter degrades artifacts past the fourth to a Callout plus a data Table.
+- The frontend needs a dedicated `ArtifactFrame` component, a resize protocol, and a navigation tripwire; this is meaningfully more client complexity than any other CEI UI component.
+
+**Residual risk:** The sandbox (no `allow-same-origin`) plus CSP is the boundary, not the denylist lint. Three risks remain even with the sandbox correctly configured: (1) a sandboxed frame can still attempt one self-navigation before the tripwire's second `onLoad` fires, which could leak a small amount of artifact-local data in that single outgoing navigation; (2) `srcDoc` documents inherit the parent page's CSP in addition to their own `<meta>` CSP, so a future production CloudFront/CDN CSP header must deliberately accommodate the artifact's CSP rather than silently conflict with it; (3) the `<meta>` CSP cannot enforce `frame-ancestors`, so framing of the app itself must be controlled at the top level, not inside the artifact.
+
+**Kill switch:** `NEXT_PUBLIC_CEI_ENABLE_ARTIFACTS` can disable artifact execution entirely without a schema change. When it is off, the frontend renders only the artifact's description and data table, never the `html`.
+
+**Status:** Implemented.
 
 ---
 

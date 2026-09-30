@@ -10,7 +10,9 @@ CEI Life Sciences Bot — an AI-powered life sciences assistant.
 
 ---
 
-## Architecture Flow
+## Target Architecture Flow
+
+This section describes the planned production architecture. It does not describe resources that are already deployed. The current CDK stack defines only the AgentCore Code Interpreter. The repository does not yet contain the Session Runner, API Gateway, Fargate tasks, data stores, queues, authentication resources, or static hosting resources described below.
 
 ### 1. Client Access
 
@@ -20,7 +22,7 @@ User opens the web app. CloudFront serves the static Next.js build from S3. WAF 
 
 Authenticated user sends a message. The request goes through the HTTP API Gateway (streaming routes) to the **Session Runner** Lambda. The Session Runner passes the request to the **Session Router**, which delegates to the **AgentCore Runtime** (Amazon Bedrock AgentCore).
 
-AgentCore runs the agent with access to its tool set (see [Agent Tools](#agent-tools)). The response streams back to the client as Server-Sent Events (SSE). This path handles requests that complete within the **15-minute API Gateway streaming timeout**.
+AgentCore runs the agent with access to its tool set (see [Agent Tools](#agent-tools)). This target path will stream text and status events to the client. Final CEI UI surface delivery by SSE is deferred. This path is planned for requests that complete within the **15-minute API Gateway streaming timeout**.
 
 ### 3. Background Jobs (Async Path)
 
@@ -46,6 +48,18 @@ All served through the same HTTP API Gateway on REST routes:
 
 ---
 
+## CEI UI Protocol
+
+CEI UI 1.1 is the approved agent-to-UI protocol. A completed JSON response uses the `ui` field with content type `application/vnd.cei.ui+json`, protocol ID `cei-ui`. Servers emit version `1.1`; clients and stored chat history also accept `1.0`, since 1.1 only adds components (`Table`, `StatGrid`, `Callout`, `Timeline`, `Comparison`, `Artifact`) and never changes 1.0 meaning. The surface has `surface_id`, `revision`, `root_id`, and a flat `components` graph.
+
+Models never emit component records or arbitrary UI. Deterministic presenters convert a typed `ResponseDocument` of presentation blocks into allowlisted components. The only model-authored code in the product is the `html` of an `Artifact` component, and it runs only inside a sandboxed iframe, never in the main page. Clients validate the full graph and show the plain-text response when validation or version checks fail. Interactive components use typed POST actions.
+
+The implemented delivery phase supports completed JSON surfaces. The local Next.js CEI UI renderer can submit typed actions through preview proxy routes. These routes require `CEI_ENABLE_LOCAL_PROXY=true` and cannot be the production API because the production frontend target is a static S3 and CloudFront deployment.
+
+Final production SSE surface delivery and progressive patches are deferred. The current repository has no production authentication or action endpoint, Session Runner, or implemented LangGraph pause and resume path. See [CEI UI Protocol 1.1](./cei-ui-protocol.md) for the contract, security limits, artifact sandboxing, and action states.
+
+---
+
 ## Agent Tools
 
 The AgentCore agent can call the following tools via MCP-based tool calling:
@@ -64,7 +78,7 @@ The AgentCore agent can call the following tools via MCP-based tool calling:
 
 ---
 
-## Cloud Services / Technology Stack
+## Target Cloud Services / Technology Stack
 
 ### Frontend
 - **Next.js 16** — React 19 with App Router, Tailwind CSS 4
