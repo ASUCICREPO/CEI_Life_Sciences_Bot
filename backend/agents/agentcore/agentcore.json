@@ -15,6 +15,15 @@
       "runtimeVersion": "PYTHON_3_12",
       "networkMode": "PUBLIC",
       "protocol": "HTTP"
+    },
+    {
+      "name": "CEIDraftingAgent",
+      "build": "CodeZip",
+      "entrypoint": "drafting_main.py",
+      "codeLocation": ".",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP"
     }
   ],
   "memories": [],
