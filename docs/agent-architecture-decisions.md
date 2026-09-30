@@ -6,6 +6,8 @@ Decisions made during the planning phase for the CEI Life Sciences Bot AgentCore
 
 ## D1: Agent Topology — Multi-Agent with Manager
 
+**Partly superseded by B15, B17, B80 (see `.agents/decision-log.md`).** Routing for dashboard tasks (Goals 1–3) is unchanged (deterministic lookup, no model call). Free-text chat is new: it goes to a Session Router classifier call that can pick any of the four agents (B15/B17), which D1's "already classified in the task launcher UI" wording did not cover. When that classifier's confidence is low, the Router asks the user to pick one of the four agents with a `ChoicePicker` instead of guessing (B80). B21/B26/B27/B29/B30 also add a fifth runtime — 11 single-source tool agents — alongside the four agents below.
+
 **Decision:** Multiple specialized AgentCore agents coordinated by a manager.
 
 **Structure:**
@@ -19,6 +21,8 @@ Decisions made during the planning phase for the CEI Life Sciences Bot AgentCore
 ---
 
 ## D2: Data Source Integration — Lambda Tools via AgentCore Gateway
+
+**Partly superseded by B19, B26, B27, B30, B85 (see `.agents/decision-log.md`).** The Lambda-behind-Gateway design is kept (B19). New since D2: an 11th source group (NCBI: taxonomy, sequence search, BLAST) originally added for the tool-agent runtime (B27), but specialist agents get the NCBI scope too, on the same footing as the other 10 sources — NCBI is not tool-agent only (B85); specialist agents call the Gateway directly and never through a tool agent (B26); and a Cedar Policy layer enforces per-source scope on every call (B30). `CEI_DIRECT_MODE` is removed from production paths (B19).
 
 **Decision:** Each of the 10 data sources is a Lambda function behind AgentCore Gateway.
 
@@ -45,6 +49,8 @@ Decisions made during the planning phase for the CEI Life Sciences Bot AgentCore
 
 ## D3: AI Provider — Bedrock Only, User-Selectable Model with Blocklist
 
+**Refined by B18, B76 (see `.agents/decision-log.md`).** Kept: Bedrock-only, per-chat model selection, configurable blocklist. B76 adds an explicit rule: there is no per-user model restriction beyond the one global blocklist.
+
 **Decision:** All inference runs through Amazon Bedrock. Users select their preferred model per chat from dropdown menus. Admins/developers control which models are available to users.
 
 **Why:** AgentCore supports Bedrock model IDs natively. No custom inference routing needed. Simplest architecture.
@@ -59,6 +65,10 @@ Decisions made during the planning phase for the CEI Life Sciences Bot AgentCore
 ---
 
 ## D16: Prompt Caching
+
+**Placement note:** D16 appears here, out of numeric order (between D3 and D4), because it was recorded in the prototype in this position. It is not renumbered, per `.agents/decision-log.md` B61.
+
+**Kept (B61) — see `.agents/decision-log.md`.** No change to this decision; it stays as written below.
 
 **Decision:** Enable explicit prompt caching for all eligible models to reduce cost on repeated system prompts and tool definitions.
 
@@ -86,6 +96,8 @@ Decisions made during the planning phase for the CEI Life Sciences Bot AgentCore
 
 ## D4: Science / Business Mode — Full Agent Behavior Change
 
+**Refined by B55 (see `.agents/decision-log.md`).** The mode is selected per chat when the chat starts, and can be changed inside that chat. This replaces the "global top-bar toggle" model implied by an earlier prototype UI. The system-prompt-variant mechanism described below is unchanged.
+
 **Decision:** The mode toggle changes the agent's system prompt, tone, domain focus, output format, and audience targeting.
 
 - **Science mode:** Emphasizes raw evidence, methodologies, statistical rigor, research comparisons, experimental details.
@@ -96,6 +108,8 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 ---
 
 ## D5: Citation Grounding — Tool-Level Enforcement
+
+**Extended by B10 (see `.agents/decision-log.md`).** Grounding itself is unchanged and stays server-side. B10 adds a streaming presentation rule: text streams token by token with a "verifying citations" pending state, and citation chips (or a flag on ungrounded claims) attach once grounding for that block completes.
 
 **Decision:** Every data source Lambda returns structured citations with each result.
 
@@ -118,6 +132,8 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 ---
 
 ## D6: Agent-to-UI Protocol - CEI UI
+
+**Extended by B60 (see `.agents/decision-log.md`).** CEI UI 1.2 adds progressive SSE patch events on top of the same 1.1 component contract described below — a transport change only, not a new component catalog. See `docs/cei-ui-protocol.md` "Planned: CEI UI 1.2 progressive streaming".
 
 **Decision:** Use the custom CEI UI protocol for rich agent responses. The content type is `application/vnd.cei.ui+json`, the protocol ID is `cei-ui`, and the response field is `ui`. The protocol is now at version 1.1.
 
@@ -148,6 +164,8 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 
 ## D8: Human-in-the-Loop - Typed Actions + CEI UI
 
+**Superseded by B56 (see `.agents/decision-log.md`).** Replaces this record's "Current limitation" statement that there is no pause/resume: B56 decides real pause and resume through a LangGraph `interrupt`, checkpointed (B28) and resumed by a typed POST action, with no fixed time limit on the wait (B57). B72 also fixes the specific HITL point for each agent (Research: clarifying question on ambiguous/no-source triage; Drafting: outline approval and revision-request interrupt; Analysis: scope confirmation; all agents: general questions). B82 refines B57: the wait actually runs up to the AgentCore Memory short-term event's maximum expiry (the maximum available value, expected around 365 days, exact number to verify); past that point the surface shows "expired, start again" instead of resuming.
+
 **Decision:** Keep the intent of typed inline-function prompts for HITL interactions. Render each prompt as a CEI UI component and return each user response as a typed POST action.
 
 **Inline function tools:**
@@ -169,6 +187,8 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 
 ## D9: Synchronous vs Async Execution
 
+**Superseded by B2, B23, B25, B79 (see `.agents/decision-log.md`).** The "one HTTP API Gateway" below is replaced by **one Regional REST API (v1)**, because HTTP API v2 cannot stream (B2). The Fargate task in the async flow is replaced by an **AgentCore Runtime async session** (max 8 h, 2 vCPU/8 GB) — Fargate is removed from the architecture (B25). B23 adds the actual trigger rule: Pipeline Manager runs are always async; the other three agents go async when a plan-step estimate crosses a threshold. B79 sets that threshold at 10 minutes and adds an explicit rule: this decision is made once, before any part of the answer streams — there is no mid-run handoff from a streaming run to a background job.
+
 **Decision:** Two execution paths through one HTTP API Gateway.
 
 | Path | Route Type | Compute | Timeout | Use Case |
@@ -188,6 +208,8 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 
 ## D10: Pipeline Orchestration — Plan Approval + Self-Healing
 
+**Partly superseded by B25, B54, B83 (see `.agents/decision-log.md`).** Step 4 ("launches ... sub-tasks on Fargate") is superseded: Fargate is removed and replaced by AgentCore Runtime async sessions (B25). Steps 2–3 are superseded by B54: there is no visual plan-builder UI; the user asks in the chat, the Pipeline Manager proposes a plan with `request_plan_approval` (a CEI UI `ReviewGate`), and the user approves or edits it in the chat before the job runs async and `/pipeline` shows live step status. B83 fixes the dispatch mechanism: each step calls the target specialist agent's runtime directly with `InvokeAgentRuntime` (not an in-process call); concurrent steps run in separate AgentCore Runtime sessions, each with its own compute allocation and its own trace.
+
 **Decision:** The Pipeline Manager Agent (Goal 4) follows this flow:
 
 1. **Plan generation:** Agent generates a step-by-step plan with estimated durations and dependencies
@@ -205,7 +227,9 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 
 ## D11: Export — Soft Acknowledgment Gate
 
-**Decision:** Soft acknowledgment before export. User confirms "I have reviewed this for accuracy" before exporting. The acknowledgment is logged.
+**Superseded by B41 (see `.agents/decision-log.md`); refined by B61, B74, B81.** The export format list below is replaced: PDF, DOCX, Markdown, CSV, LaTeX (B41); slides/PPTX is deferred and optional, and `txt` stays in the allowlist (B61). The soft-acknowledgment gate itself is unchanged in intent. B74 adds that exports happen both ways: the agent can produce an export during a run, and every completed answer also gets an explicit Export action (`POST /sessions/{id}/turns/{turn}/export`) with the same review acknowledgment. B81 fixes the exact UI: an "I have reviewed this output" checkbox in the export dialog, with the Export button disabled until it is checked; the acknowledgment is logged.
+
+**Decision:** Soft acknowledgment before export. User checks "I have reviewed this output" before exporting; the Export button is disabled until checked. The acknowledgment is logged.
 
 **Export formats (from API contract):** PDF, slides, CSV, Markdown, DOCX.
 
@@ -215,23 +239,31 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 
 ## D12: Session Persistence — Indefinite
 
+**Pagination TBD resolved by B59 (see `.agents/decision-log.md`).** B59 fixes the pagination strategy this record left open: cursor pages of turns (for example the last 20, older turns loading on scroll-up via the DynamoDB `LastEvaluatedKey`), with the trace of a turn loading only when its thinking block is expanded, rendered in a virtualized list. B58 also fixes what "indefinite" means: retained until the user deletes the chat or the account.
+
 **Decision:** Sessions persist indefinitely until the user deletes them. No TTL. Chat History Store in DynamoDB. Lazy loading required on the frontend to prevent browser crashes on large histories (pagination strategy TBD).
 
 ---
 
 ## D13: Monitoring — User-Triggered Only
 
-**Decision:** No automatic scheduled monitoring (Goal 3). User manually triggers monitoring checks. No EventBridge rules or background scheduling infrastructure needed.
+**Removed (B61).** See `.agents/decision-log.md`. Kept below for history only; this decision no longer applies.
+
+**Decision (historical, removed):** No automatic scheduled monitoring (Goal 3). User manually triggers monitoring checks. No EventBridge rules or background scheduling infrastructure needed.
 
 ---
 
 ## D14: Alerts — In-Dashboard Only
+
+**Kept (B24) — see `.agents/decision-log.md`.** No change to this decision; it stays as written below.
 
 **Decision:** Monitoring alerts appear in the dashboard when the user logs in. No email, Slack, or webhook notifications.
 
 ---
 
 ## D15: Collaboration — Single-User
+
+**Superseded by B12 (see `.agents/decision-log.md`).** The system is not single-user: many users are fully isolated. Each user sees only their own chats, keys, attachments, and settings. There is still no sharing and no teams — that part of D15 is unchanged. All data is partitioned by Cognito `sub`.
 
 **Decision:** Single-user system. Each user has their own sessions, exports, and settings. No shared workspaces, team review, or multi-user features.
 
@@ -263,22 +295,22 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 
 ## Open Questions (Remaining)
 
-These open questions from the prototype have not been resolved and do not block agent architecture:
+These open questions from the prototype have not been resolved and do not block agent architecture. Where a B-decision resolves or partly resolves one, it is noted in the Status column (see `.agents/decision-log.md`).
 
-| # | Question | Category |
-|---|---|---|
-| 1 | Full CEI Gateway logo or separate product identity? | Branding |
-| 2 | Product name? | Branding |
-| 3 | Formal brand guidelines or derive from website? | Branding |
-| 8 | Mock cost estimates and approval modals in prototype? | Prototype |
-| 9 | Patent/FTO: private patent vector DB or public sources only? | Data sources |
-| 10 | Windows client support? | Platform |
-| 11 | Additional stakeholder reviewers? | Process |
-| 12 | Onboarding flow: every new user or first visit? Re-runnable? | UX |
-| 14 | Max concurrent sessions per user? | Architecture |
-| 19 | Demo scenarios: generic or actual portfolio companies? | Demo |
-| 20 | Include all verticals (diagnostics, devices, therapeutics)? | Demo |
-| 21 | Compute-gated task representation? | UX |
-| 22 | Is prototype the Week 1 or Week 4 deliverable? | Timeline |
-| 23 | Engineering handoff recipient? | Process |
-| 24 | Component library constraints beyond React/TS/Vite/Tailwind? | Frontend |
+| # | Question | Category | Status |
+|---|---|---|---|
+| 1 | Full CEI Gateway logo or separate product identity? | Branding | Open |
+| 2 | Product name? | Branding | Open (also listed in the decision log's "Still open") |
+| 3 | Formal brand guidelines or derive from website? | Branding | Open |
+| 8 | Mock cost estimates and approval modals in prototype? | Prototype | Resolved by B5 (live token/cost counter is real, not mocked) and B54 (plan approval happens through a chat `ReviewGate`, not a modal) |
+| 9 | Patent/FTO: private patent vector DB or public sources only? | Data sources | Open |
+| 10 | Windows client support? | Platform | Open |
+| 11 | Additional stakeholder reviewers? | Process | Open |
+| 12 | Onboarding flow: every new user or first visit? Re-runnable? | UX | Open |
+| 14 | Max concurrent sessions per user? | Architecture | Resolved by B22 (2 concurrent real-time runs, 1 concurrent background run per user) |
+| 19 | Demo scenarios: generic or actual portfolio companies? | Demo | Open |
+| 20 | Include all verticals (diagnostics, devices, therapeutics)? | Demo | Open |
+| 21 | Compute-gated task representation? | UX | Resolved by B23/B79 (a run predicted to exceed 10 minutes hands off to a background job in the UI, decided once before streaming starts, with no mid-run handoff) |
+| 22 | Is prototype the Week 1 or Week 4 deliverable? | Timeline | Open |
+| 23 | Engineering handoff recipient? | Process | Open |
+| 24 | Component library constraints beyond React/TS/Vite/Tailwind? | Frontend | Partly resolved by B1 (production frontend is the Vite SPA: React 19, Tailwind 4, react-router `BrowserRouter`) |
