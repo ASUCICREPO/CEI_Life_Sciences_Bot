@@ -63,8 +63,12 @@ class PubMedTool(DataSourceTool):
                 pmid = pmid_el.text if pmid_el is not None else ""
                 title_el = article.find(".//ArticleTitle")
                 title = title_el.text or "" if title_el is not None else ""
-                abstract_el = article.find(".//AbstractText")
-                abstract = abstract_el.text or "" if abstract_el is not None else ""
+                # Structured abstracts split into labeled parts; RESULTS holds the numbers.
+                abstract = "\n".join(
+                    (f"{part.get('Label')}: " if part.get("Label") else "")
+                    + "".join(part.itertext()).strip()
+                    for part in article.findall(".//Abstract/AbstractText")
+                )
                 year_el = article.find(".//PubDate/Year")
                 year_text = year_el.text if year_el is not None else ""
                 year = int(year_text) if year_text and year_text.isdigit() else 0

@@ -6,9 +6,10 @@ from enum import StrEnum
 from typing import Any, Literal
 
 import boto3
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from shared.config import config
+from shared.schemas.cei_ui import CEIUISurface
 
 
 class MessageRole(StrEnum):
@@ -20,8 +21,16 @@ class MessageRole(StrEnum):
 class ContentBlock(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    block_type: Literal["text", "a2ui", "thinking"]
+    block_type: Literal["text", "ui", "a2ui", "thinking"]
     body: str | dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_ui_body(self) -> ContentBlock:
+        if self.block_type == "ui":
+            if not isinstance(self.body, dict):
+                raise ValueError("ui content blocks require an object body")
+            CEIUISurface.model_validate(self.body)
+        return self
 
 
 class ChatHistoryRecord(BaseModel):
