@@ -1,41 +1,40 @@
-# Provisioned Resources — CEI Life Sciences Research Agent
+# Provisioned Resources — CEI Life Sciences Bot
+
+This page lists only what is **really deployed today** through `backend/lib/backend-stack.ts`. For the full target architecture, and everything that is planned but not yet built, see [Architecture Deep Dive](./architectureDeepDive.md) and `.agents/specs/architecture.md`.
+
+---
+
+## What is deployed
 
 | Resource | Service | Status | Notes |
 |---|---|---|---|
-| Research Agent Runtime | AgentCore Runtime | Provisioned via CDK | Entry point: `main.py`; handler: `handler` |
-| Code Interpreter | AgentCore Code Interpreter | Provisioned via CDK | Custom resource, Public Network Mode; ID stored in `CEI_CODE_INTERPRETER_ID` |
-| AgentCore Memory (checkpointer) | AgentCore Memory | SDK-managed | `AgentCoreMemorySaver`; memory ID `research-{user_id}`; no explicit CDK resource needed |
-| AgentCore Memory (store) | AgentCore Memory | SDK-managed | `AgentCoreMemoryStore`; memory ID `research-store-{user_id}`; no explicit CDK resource needed |
-| Claude Sonnet 5 | Amazon Bedrock | Model access required | Model ID: `anthropic.claude-sonnet-5-v1`; enable in Bedrock console per region |
-| Claude Sonnet 3.7 (fallback) | Amazon Bedrock | Model access required | Fallback model; enable in Bedrock console per region |
-| Packages S3 Bucket | S3 | Must be provisioned | Stores `life-sciences-packages.tar.gz` for Code Interpreter; bucket name set via `CEI_PACKAGES_S3_BUCKET` |
-| Agent Execution Role | IAM | Provisioned via CDK | Needs permissions listed below |
-| Chat History Store | DynamoDB | Provisioned via CDK | Table name: `ChatHistoryStore` |
-| Chat Metadata Store | DynamoDB | Provisioned via CDK | Table name: `ChatMetadataStore` |
-| Job ID Store | DynamoDB | Provisioned via CDK | Table name: `JobIdStore` |
-| User Metadata Table | DynamoDB | Provisioned via CDK | Table name: `UserMetadataTable` |
-| Attachment Metadata Store | DynamoDB | Provisioned via CDK | Table name: `AttachmentMetadataStore` |
-| Attachments Bucket | S3 | Provisioned via CDK | Bucket name set via `CEI_ATTACHMENTS_BUCKET` |
-| API Key Store | Secrets Manager | Provisioned per user | Secret prefix: `cei/user-keys` |
+| Code Interpreter (`ceiLifeSciencesCI`) | AgentCore Code Interpreter | Provisioned via CDK | `CodeInterpreterCustom` construct in `backend/lib/backend-stack.ts`; public network mode (needed for calls to external database APIs and Python package installs) |
+| `CodeInterpreterId` stack output | CloudFormation output | Provisioned via CDK | Exported as `CeiCodeInterpreterId`; intended to be passed to future runtimes/Lambdas as `CEI_CODE_INTERPRETER_ID` |
 
-## Agent Execution Role — Required IAM Permissions
+That is the entire content of the CDK stack today. No IAM role, Lambda, API Gateway, Cognito pool, DynamoDB table, S3 bucket, SQS queue, or CloudWatch resource is defined in this repository's infrastructure code.
 
-| Permission | Resource | Reason |
-|---|---|---|
-| `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` | Bedrock model ARNs | LLM inference via `ChatBedrockConverse` |
-| `bedrock-agentcore:*` | AgentCore runtime and memory ARNs | Agent invocation, memory read/write |
-| `s3:GetObject`, `s3:PutObject` | Packages bucket, Attachments bucket | Code Interpreter package install; attachment access |
-| `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem`, `dynamodb:Query` | All DynamoDB table ARNs | Session history, metadata, job tracking |
-| `secretsmanager:GetSecretValue` | `arn:aws:secretsmanager:*:*:secret:cei/user-keys/*` | User-owned API keys for data source tools |
-| `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` | CloudWatch log group ARN | Structured JSON logging |
+---
 
-## Environment Variables Required at Runtime
+## What exists outside CDK (not AWS-provisioned)
 
-| Variable | Example Value | Source |
-|---|---|---|
-| `CEI_AWS_REGION` | `us-east-1` | CDK / task definition |
-| `CEI_DEFAULT_MODEL_ID` | `anthropic.claude-sonnet-5-v1` | CDK / task definition |
-| `CEI_CODE_INTERPRETER_ID` | `aws.codeinterpreter.v1` | CDK / task definition |
-| `CEI_PACKAGES_S3_BUCKET` | `cei-code-interp-packages-prod` | CDK output |
-| `CEI_PACKAGES_S3_KEY` | `life-sciences-packages.tar.gz` | CDK / task definition |
-| `CEI_DIRECT_MODE` | `true` (CLI) / `false` (Lambda-backed) | Deployment context |
+These run locally today and are not deployed AWS resources:
+
+- **Research and Drafting agent graphs** (`backend/agents/research/`, `backend/agents/drafting/`) — run locally via the AgentCore CLI, using `InMemorySaver` as the checkpointer (not `AgentCoreMemorySaver`).
+- **Analysis and Pipeline Manager agent graphs** — wired, but every node raises `NotImplementedError`.
+- **Data source calls** (`backend/agents/shared/tools/data_sources/`) — direct HTTP calls to PubMed, ClinicalTrials.gov, bioRxiv, medRxiv, ChEMBL, Open Targets, CMS Coverage, ICD-10, NPI Registry, and PubChem. No AgentCore Gateway, no Lambda deployment.
+- **CEI UI 1.1 presenters and schemas** (`backend/agents/shared/presenters/`, `backend/agents/shared/schemas/`) — produce completed JSON `ui` surfaces locally.
+- **Frontend** (`frontend/`) — a Next.js 16 test harness with local proxy routes (`CEI_ENABLE_LOCAL_PROXY=true`) and a CEI UI preview renderer. It is not deployed to S3/CloudFront and is not the planned production frontend (see the Vite dashboard plan in [Architecture Deep Dive](./architectureDeepDive.md)).
+
+## What is not deployed and not built at all
+
+Everything else in the target architecture — Cognito, the REST API Gateway, the Session Runner and Session Router Lambdas, the AgentCore Gateway and Cedar Policy engine, the tool-agent runtime, DynamoDB tables (Session Metadata, Chat History, Job ID, User Metadata, Attachment Metadata), S3 buckets (Attachments, static frontend, S3 Vectors), Secrets Manager, SQS, Bedrock Knowledge Base, Bedrock Guardrails, AgentCore Memory (short- and long-term), the Web Search connector, the Life Sciences Operations Lambda, and CloudWatch alarms/SNS — is **planned, not built**. See [Architecture Deep Dive](./architectureDeepDive.md) for the full component table, status per component, and `.agents/specs/architecture.md` for detail.
+
+---
+
+## Planned resources
+
+For the target list of every AWS resource this project will provision, with phase and status, see:
+
+- [Architecture Deep Dive](./architectureDeepDive.md) — human-readable component table
+- `.agents/specs/architecture.md` — full component table with build phase per resource
+- `.agents/decision-log.md` — the decisions behind each resource choice

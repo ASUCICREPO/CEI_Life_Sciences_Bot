@@ -1,286 +1,128 @@
-# [INSERT_PROJECT_NAME] APIs
+# CEI Life Sciences Bot — API
 
-This document provides comprehensive API documentation for [INSERT_PROJECT_NAME].
+Status: **Planned — not built.** No API Gateway, Lambda route, or Cognito authorizer exists in this repository yet (`backend/lib/backend-stack.ts` defines only the AgentCore Code Interpreter). Everything in this document is the target design. Full detail: `.agents/specs/api.md`; the SSE event body carried on `/chat/stream` is defined in `.agents/specs/streaming-protocol.md`.
 
 ---
 
 ## Overview
 
-[INSERT_API_OVERVIEW - Brief description of what the APIs do and their purpose]
+One Regional REST API (API Gateway v1) serves every route. `/chat/stream` streams a chat turn as Server-Sent Events (CEI UI 1.2). Every other route is a normal buffered REST call. This design replaces an earlier plan for a separate HTTP API Gateway, because HTTP API (v2) cannot stream responses.
 
 ---
 
 ## Base URL
 
 ```
-https://[INSERT_API_ID].execute-api.[INSERT_REGION].amazonaws.com/[INSERT_STAGE]/
+https://[api-id].execute-api.[region].amazonaws.com/[stage]/
 ```
 
-> **[PLACEHOLDER]** Replace with your actual API Gateway endpoint after deployment
-
-**Example:**
-```
-https://xxxxxxxxxx.execute-api.us-east-1.amazonaws.com/prod/
-```
+**Planned.** The Region is configurable (no fixed Region); the endpoint is Regional (not edge-optimized) so it sits behind the project's own CloudFront distribution, because the edge-optimized endpoint's 30-second idle timeout is too short for streaming.
 
 ---
 
 ## Authentication
 
-[INSERT_AUTHENTICATION_METHOD - Describe how API requests should be authenticated]
-
-### Headers Required
-| Header | Description | Required |
-|--------|-------------|----------|
-| `[INSERT_HEADER_1]` | [INSERT_DESCRIPTION] | Yes/No |
-| `[INSERT_HEADER_2]` | [INSERT_DESCRIPTION] | Yes/No |
-| `Content-Type` | `application/json` | Yes |
+**Planned.** Every route requires a valid Amazon Cognito User Pools bearer token (`Authorization: Bearer <token>`), checked by one Cognito authorizer shared across all routes, including `/chat/stream`. There is no MFA. Each user only ever sees their own data (partitioned by Cognito `sub`).
 
 ---
 
-## 1) [INSERT_API_GROUP_1_NAME - e.g., "Chat Endpoints"]
+## Streaming note (`/chat/stream`)
 
-[INSERT_GROUP_DESCRIPTION - Brief description of this group of endpoints]
+`/chat/stream` is the one route with `responseTransferMode: STREAM`. It returns `text/event-stream`, delivered over `fetch` + `ReadableStream` (not `EventSource`, because `EventSource` cannot send an `Authorization` header). A heartbeat comment is sent every 15–20 seconds. Limits: 15-minute maximum stream duration, 5-minute idle timeout, 2 MB/s after the first 10 MB. The event catalog (`surface_begin`, `component_add`, `text_delta`, `component_update`, `grounding_update`, `trace_event`, `progress`, `usage`, `hitl_request`, `job_handoff`, `surface_end`, `error`) is CEI UI 1.2 — full definition in `.agents/specs/streaming-protocol.md` and `docs/cei-ui-protocol.md`.
 
----
+A run whose plan step estimates more than 10 minutes does not stream to completion; it emits `job_handoff` and the client switches to the Jobs routes below. This decision is made once, before any part of the answer streams — there is no mid-run handoff from a streaming run to a background job.
 
-#### POST /[INSERT_ENDPOINT_1] — [INSERT_BRIEF_DESCRIPTION]
-
-- **Purpose**: [INSERT_DETAILED_PURPOSE]
-
-- **Request body**:
-```json
-{
-  "[INSERT_FIELD_1]": "[INSERT_TYPE] - [INSERT_DESCRIPTION]",
-  "[INSERT_FIELD_2]": "[INSERT_TYPE] - [INSERT_DESCRIPTION]",
-  "[INSERT_FIELD_3]": "[INSERT_TYPE] - [INSERT_DESCRIPTION]"
-}
-```
-
-- **Example request**:
-```json
-{
-  "[INSERT_FIELD_1]": "[INSERT_EXAMPLE_VALUE]",
-  "[INSERT_FIELD_2]": "[INSERT_EXAMPLE_VALUE]"
-}
-```
-
-- **Response**:
-```json
-{
-  "[INSERT_RESPONSE_FIELD_1]": "[INSERT_TYPE] - [INSERT_DESCRIPTION]",
-  "[INSERT_RESPONSE_FIELD_2]": "[INSERT_TYPE] - [INSERT_DESCRIPTION]"
-}
-```
-
-- **Example response**:
-```json
-{
-  "[INSERT_RESPONSE_FIELD_1]": "[INSERT_EXAMPLE_VALUE]",
-  "[INSERT_RESPONSE_FIELD_2]": "[INSERT_EXAMPLE_VALUE]"
-}
-```
-
-- **Status codes**:
-  - `200 OK` - [INSERT_SUCCESS_DESCRIPTION]
-  - `400 Bad Request` - [INSERT_ERROR_DESCRIPTION]
-  - `500 Internal Server Error` - [INSERT_ERROR_DESCRIPTION]
+The Session Router can also return a `ChoicePicker` surface asking the user to pick one of the 4 agents, when a free-text request's classifier confidence is low. The user's pick then starts the run.
 
 ---
 
-#### GET /[INSERT_ENDPOINT_2] — [INSERT_BRIEF_DESCRIPTION]
+## Standard error envelope
 
-- **Purpose**: [INSERT_DETAILED_PURPOSE]
+**Planned.** Every non-2xx response uses this shape:
 
-- **Query parameters**:
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `[INSERT_PARAM_1]` | [INSERT_TYPE] | Yes/No | [INSERT_DESCRIPTION] |
-| `[INSERT_PARAM_2]` | [INSERT_TYPE] | Yes/No | [INSERT_DESCRIPTION] |
-
-- **Example request**:
-```
-GET /[INSERT_ENDPOINT]?[INSERT_PARAM_1]=[INSERT_VALUE]&[INSERT_PARAM_2]=[INSERT_VALUE]
-```
-
-- **Response**:
 ```json
 {
-  "[INSERT_RESPONSE_FIELD]": "[INSERT_TYPE] - [INSERT_DESCRIPTION]"
-}
-```
-
----
-
-## 2) [INSERT_API_GROUP_2_NAME - e.g., "Document Endpoints"]
-
-[INSERT_GROUP_DESCRIPTION]
-
----
-
-#### POST /[INSERT_ENDPOINT_3] — [INSERT_BRIEF_DESCRIPTION]
-
-- **Purpose**: [INSERT_DETAILED_PURPOSE]
-
-- **Request body**:
-```json
-{
-  "[INSERT_FIELD]": "[INSERT_TYPE] - [INSERT_DESCRIPTION]"
-}
-```
-
-- **Response**:
-```json
-{
-  "[INSERT_RESPONSE_FIELD]": "[INSERT_TYPE] - [INSERT_DESCRIPTION]"
-}
-```
-
----
-
-#### DELETE /[INSERT_ENDPOINT_4] — [INSERT_BRIEF_DESCRIPTION]
-
-- **Purpose**: [INSERT_DETAILED_PURPOSE]
-
-- **Path parameters**:
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `[INSERT_PARAM]` | [INSERT_TYPE] | [INSERT_DESCRIPTION] |
-
-- **Response**:
-```json
-{
-  "message": "string - Success/error message"
-}
-```
-
----
-
-## 3) [INSERT_API_GROUP_3_NAME - e.g., "Admin Endpoints"]
-
-[INSERT_GROUP_DESCRIPTION]
-
----
-
-#### [INSERT_HTTP_METHOD] /[INSERT_ENDPOINT] — [INSERT_BRIEF_DESCRIPTION]
-
-- **Purpose**: [INSERT_DETAILED_PURPOSE]
-
-- **Request/Response**: [INSERT_DETAILS]
-
----
-
-## Response Format
-
-All API responses follow this general structure:
-
-### Success Response
-```json
-{
-  "statusCode": 200,
-  "body": {
-    "[INSERT_DATA_FIELD]": "[INSERT_DATA]"
-  }
-}
-```
-
-### Error Response
-```json
-{
-  "statusCode": "[INSERT_ERROR_CODE]",
   "error": {
-    "message": "[INSERT_ERROR_MESSAGE]",
-    "code": "[INSERT_ERROR_CODE_STRING]"
+    "code": "invalid_request",
+    "message": "The session_id field is required.",
+    "request_id": "req_018f...",
+    "retriable": false
   }
 }
 ```
 
----
+`code` is one of: `invalid_request`, `unauthorized`, `forbidden`, `not_found`, `rate_limited`, `concurrency_limit`, `stale_revision`, `service_unavailable`, `internal_error`. `message` is always a safe, redacted, user-facing string — never a stack trace, model ID, or secret.
 
-## Error Codes
-
-| Code | Name | Description |
-|------|------|-------------|
-| `400` | Bad Request | [INSERT_DESCRIPTION] |
-| `401` | Unauthorized | [INSERT_DESCRIPTION] |
-| `403` | Forbidden | [INSERT_DESCRIPTION] |
-| `404` | Not Found | [INSERT_DESCRIPTION] |
-| `429` | Too Many Requests | [INSERT_DESCRIPTION] |
-| `500` | Internal Server Error | [INSERT_DESCRIPTION] |
-
----
-
-## Rate Limiting
-
-[INSERT_RATE_LIMITING_DETAILS - Describe any rate limits on the API]
-
-- **Requests per second**: [INSERT_LIMIT]
-- **Requests per day**: [INSERT_LIMIT]
-- **Burst limit**: [INSERT_LIMIT]
+| Code | When |
+|---|---|
+| `unauthorized` | Missing or invalid Cognito token |
+| `forbidden` | A Cedar Policy deny, or a resource that belongs to another user |
+| `not_found` | The session/job/file/export ID does not exist for this user |
+| `rate_limited` | The account-wide API Gateway throttle (20 requests/second) |
+| `concurrency_limit` | The user is already at their concurrent-run limit (2 real-time, 1 background) |
+| `stale_revision` | A `/ui-actions` request targets a surface revision that is no longer current |
+| `invalid_request` | The request body failed schema validation |
+| `service_unavailable` / `internal_error` | An upstream failure (AgentCore, DynamoDB, etc.); message is always the redacted generic string |
 
 ---
 
-## SDK / Client Examples
+## Pagination
 
-### JavaScript/TypeScript
-```typescript
-// [INSERT_EXAMPLE_CODE]
-const response = await fetch('[INSERT_API_URL]/[INSERT_ENDPOINT]', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    '[INSERT_AUTH_HEADER]': '[INSERT_AUTH_VALUE]'
-  },
-  body: JSON.stringify({
-    [INSERT_REQUEST_BODY]
-  })
-});
+**Planned.** List and history routes take `?limit=N&cursor=<opaque>`. `cursor` is an opaque, base64-encoded continuation token; the server never exposes raw DynamoDB keys.
 
-const data = await response.json();
+```json
+{
+  "items": [ /* ... */ ],
+  "next_cursor": "eyJ...",
+  "has_more": true
+}
 ```
 
-### Python
-```python
-# [INSERT_EXAMPLE_CODE]
-import requests
-
-response = requests.post(
-    '[INSERT_API_URL]/[INSERT_ENDPOINT]',
-    headers={
-        'Content-Type': 'application/json',
-        '[INSERT_AUTH_HEADER]': '[INSERT_AUTH_VALUE]'
-    },
-    json={
-        '[INSERT_FIELD]': '[INSERT_VALUE]'
-    }
-)
-
-data = response.json()
-```
-
-### cURL
-```bash
-curl -X POST '[INSERT_API_URL]/[INSERT_ENDPOINT]' \
-  -H 'Content-Type: application/json' \
-  -H '[INSERT_AUTH_HEADER]: [INSERT_AUTH_VALUE]' \
-  -d '{
-    "[INSERT_FIELD]": "[INSERT_VALUE]"
-  }'
-```
+Default `limit` is 20; maximum is 100. `next_cursor` is `null` and `has_more` is `false` on the last page.
 
 ---
 
-## Changelog
+## Route table
 
-| Version | Date | Changes |
-|---------|------|---------|
-| [INSERT_VERSION] | [INSERT_DATE] | [INSERT_CHANGES] |
+Every route requires the Cognito authorizer. All routes are **Planned — not built**.
+
+| Method | Path | Mode | Purpose |
+|---|---|---|---|
+| POST | `/chat/stream` | STREAM | Send a chat message; streams the answer as CEI UI 1.2 SSE |
+| POST | `/tools/{source}/chat/stream` | STREAM | Chat with exactly one data source (a "tool agent"); same event catalog as `/chat/stream` |
+| POST | `/sessions` | BUFFERED | Create a chat session |
+| GET | `/sessions` | BUFFERED | List the caller's sessions (paginated) |
+| GET | `/sessions/{sessionId}` | BUFFERED | Get one session's metadata |
+| PATCH | `/sessions/{sessionId}` | BUFFERED | Update session title and/or mode |
+| DELETE | `/sessions/{sessionId}` | BUFFERED | Delete a session (starts the delete cascade, `202 Accepted`) |
+| GET | `/sessions/{sessionId}/history` | BUFFERED | Cursor-paginated turn history (no trace) |
+| GET | `/sessions/{sessionId}/turns/{messageId}/trace` | BUFFERED | Load one turn's trace log (lazy-loaded on thinking-block expand) |
+| POST | `/ui-actions` | BUFFERED | Submit a typed CEI UI action (including HITL answers) |
+| POST | `/sessions/{sessionId}/attachments/presign` | BUFFERED | Get a pre-signed S3 POST for a file upload (max 55 MB) |
+| GET | `/sessions/{sessionId}/attachments/{fileId}` | BUFFERED | Get attachment processing status |
+| DELETE | `/sessions/{sessionId}/attachments/{fileId}` | BUFFERED | Delete an attachment and its Knowledge Base chunks |
+| GET | `/jobs` | BUFFERED | List the caller's background jobs |
+| GET | `/jobs/{jobId}` | BUFFERED | Get one background job's status |
+| POST | `/jobs/{jobId}/cancel` | BUFFERED | Cancel a running background job (`202 Accepted`) |
+| GET | `/settings` | BUFFERED | Get user settings (default model, default mode, configured sources) |
+| PUT | `/settings` | BUFFERED | Update user settings |
+| GET | `/models` | BUFFERED | List selectable Bedrock models (blocklist already applied) |
+| PUT | `/settings/api-keys/{sourceId}` | BUFFERED | Store a user-owned API key for one data source |
+| DELETE | `/settings/api-keys/{sourceId}` | BUFFERED | Remove a stored API key |
+| GET | `/exports/{exportId}/download` | BUFFERED | Get a pre-signed download URL for a completed export |
+| POST | `/account/delete` | BUFFERED | Delete the account and all of its data (`202 Accepted`) |
+
+There is no `POST /jobs` route — background jobs are always started internally by the Session Router or the Pipeline Manager, never created directly by a client.
+
+Full request/response bodies for every route, the exact HITL action shape, and export format list (PDF, DOCX, Markdown, CSV, LaTeX, TXT): `.agents/specs/api.md`.
 
 ---
 
-## Support
+## Still to decide
 
-For API-related issues or questions:
-- [INSERT_SUPPORT_CHANNEL]
-- [INSERT_DOCUMENTATION_LINK]
+- Whether the Router→Runtime token travels as an allowlisted custom header or as `Authorization`.
+- The exact error shape returned to the agent (and then to the user) when a Cedar Policy deny happens mid-run.
 
+Already decided since this page was first drafted: default/maximum pagination `limit` is 20/100; `/chat/stream` reconnect/resume uses `resume_from_seq` on the same route; chat/account delete responses are asynchronous, `202 Accepted`, with a Deletion Worker cascade; a client can request an ad hoc export of an existing answer (`POST /sessions/{id}/turns/{turn}/export`); and the async threshold is 10 minutes, decided once before streaming starts, with no mid-run handoff.
+
+See `.agents/specs/api.md` for the full TBD list.
