@@ -19,11 +19,32 @@ phases:
   pre_build:
     commands:
       - echo "$CEI_DEPLOY_CONFIG" | base64 -d > "$CODEBUILD_SRC_DIR/backend/cei.deploy.json"
-      # ADR: re-run pre-flight in CodeBuild, not just in deploy.sh | Rationale: CDK reads this file directly, and this catches Region drift between the local run and the build
+      # ADR: pre-flight runs only in CodeBuild, never locally in deploy.sh | Rationale: every build step (including this one) belongs in CodeBuild; this is the only place Region drift between a prior local run and this build gets caught
       - cd "$CODEBUILD_SRC_DIR/backend" && npx ts-node scripts/preflight.ts --config cei.deploy.json --write
   build:
     commands:
       - cd "$CODEBUILD_SRC_DIR/frontend" && npm run build
+      # ADR: cdk bootstrap runs here, after the frontend build | Rationale: `cdk synth` (which
+      # bootstrap also triggers) throws if frontend/dist is missing; bootstrap must also run before
+      # `cdk deploy`, so this is the earliest point in the build where both constraints are satisfied
+      - |
+        cd "$CODEBUILD_SRC_DIR/backend"
+        ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+        DEPLOY_REGION="$(node -p "require('./cei.deploy.json').region")"
+        BOOTSTRAP_REGIONS="$DEPLOY_REGION"
+        if [ "$DEPLOY_REGION" != "us-east-1" ]; then
+          # ADR: also bootstrap us-east-1 | Rationale: B88 — EdgeWafStack (the CLOUDFRONT-scope WAF web ACL) always deploys to us-east-1 regardless of the chosen Region
+          BOOTSTRAP_REGIONS="$BOOTSTRAP_REGIONS us-east-1"
+        fi
+        for region in $BOOTSTRAP_REGIONS; do
+          if aws cloudformation describe-stacks --stack-name CDKToolkit --region "$region" >/dev/null 2>&1; then
+            echo "CDKToolkit already present in $region."
+          else
+            echo "CDKToolkit not found in $region — bootstrapping..."
+            # ADR: --bootstrap-kms-key-id AWS_MANAGED_KEY | Rationale: skips creating a customer-managed KMS key for the assets bucket, so the CodeBuild role's bootstrap policy (deploy.sh) needs no KMS permissions
+            npx cdk bootstrap "aws://$ACCOUNT_ID/$region" --bootstrap-kms-key-id AWS_MANAGED_KEY -c ceiConfigFile=cei.deploy.json
+          fi
+        done
       - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
       - cd "$CODEBUILD_SRC_DIR/backend" && npm test
       - cd "$CODEBUILD_SRC_DIR/backend" && npx cdk deploy --all --require-approval never -c ceiConfigFile=cei.deploy.json

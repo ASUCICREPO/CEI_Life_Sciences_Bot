@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # CEI Life Sciences Bot — guided deployment (F1, B47).
 #
-# Collects deployment configuration, runs the backend pre-flight Region check,
-# then creates/updates a CodeBuild project that builds and `cdk deploy`s the
-# BackendStack. Works in bash on Linux, macOS, CloudShell and Git Bash.
+# Collects deployment configuration, then creates/updates a CodeBuild project
+# that installs dependencies, runs the backend pre-flight Region check, builds
+# the frontend, bootstraps CDK if needed, and `cdk deploy`s the BackendStack —
+# every build step runs in CodeBuild, never locally. Works in bash on Linux,
+# macOS, CloudShell and Git Bash.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,9 +53,10 @@ print_help() {
   cat <<'EOF'
 Usage: ./deploy.sh [options]
 
-Collects CEI Life Sciences Bot deployment configuration, runs the backend
-Region pre-flight check, then creates/updates the CodeBuild deployment
-pipeline and starts a build.
+Collects CEI Life Sciences Bot deployment configuration, then creates/updates
+the CodeBuild deployment pipeline and starts a build. The Region pre-flight
+check, the frontend build, CDK bootstrap and `cdk deploy` all run inside that
+CodeBuild build, not on your machine.
 
 Options:
   --region <region>            AWS Region to deploy into
@@ -73,7 +76,7 @@ Options:
                                  (for private repos, non-interactive use)
   --non-interactive              Never prompt; fail if a required value is missing
   --yes                         Skip the confirmation prompt
-  --dry-run                     Run pre-flight only; make no AWS writes
+  --dry-run                     Validate configuration only; make no AWS writes
   -h, --help                    Show this help and exit
 
 Interactive mode (no --non-interactive) prompts for any value not supplied by
@@ -91,17 +94,22 @@ it matches the remote branch head, else the branch's current remote SHA
 used instead and a warning is printed.
 
 Your AWS credentials need at least:
-  iam: GetRole, CreateRole, UpdateAssumeRolePolicy, PutRolePolicy, TagRole,
-       PassRole (on cei-deploy-codebuild-role)
+  sts: GetCallerIdentity
+  iam: GetRole, CreateRole, UpdateAssumeRolePolicy, PutRolePolicy,
+       DeleteRolePolicy, TagRole, PassRole (on cei-deploy-codebuild-role)
   secretsmanager: CreateSecret, PutSecretValue, DescribeSecret, TagResource
        (only if a PAT is given)
   codebuild: BatchGetProjects, CreateProject, UpdateProject, StartBuild,
        BatchGetBuilds
-  cloudformation: DescribeStacks
-  ssm: GetParameter
-  bedrock: GetFoundationModelAvailability, GetInferenceProfile
-  Plus the (broader, one-time) CDK bootstrap permissions if CDKToolkit is not
-  already bootstrapped in the Region.
+  cloudformation: DescribeStacks (CDKToolkit, read-only — to decide whether
+       the CodeBuild role needs the one-time bootstrap policy below)
+
+All actual build steps (npm ci, pre-flight, frontend/backend build, `cdk
+bootstrap`, `cdk deploy`) run inside CodeBuild, never on your machine. If
+CDKToolkit is not yet bootstrapped in a Region this run needs, deploy.sh
+attaches a separate, narrowly-scoped "cei-deploy-bootstrap" inline policy to
+the CodeBuild role (removed again once bootstrap is no longer needed) so
+CodeBuild — not your local credentials — can run `cdk bootstrap`.
 EOF
 }
 
@@ -171,9 +179,10 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || { echo "Required command not found: $1" >&2; exit 1; }
 }
 
+# ADR: no `require_cmd npm` | Rationale: every build step (npm ci, preflight, frontend/backend
+# build, cdk bootstrap/deploy) now runs in CodeBuild; deploy.sh only uses `node -e` to write JSON
 require_cmd aws
 require_cmd node
-require_cmd npm
 
 NODE_VERSION="$(node -v | sed 's/^v//')"
 NODE_MAJOR="${NODE_VERSION%%.*}"
@@ -346,12 +355,12 @@ Deployment configuration
   Dry run:                 $DRY_RUN
 
 Your AWS credentials need at least:
-  iam:GetRole/CreateRole/UpdateAssumeRolePolicy/PutRolePolicy/TagRole/PassRole
+  sts:GetCallerIdentity
+  iam:GetRole/CreateRole/UpdateAssumeRolePolicy/PutRolePolicy/DeleteRolePolicy/TagRole/PassRole
   secretsmanager:CreateSecret/PutSecretValue/DescribeSecret/TagResource (if a PAT is given)
   codebuild:BatchGetProjects/CreateProject/UpdateProject/StartBuild/BatchGetBuilds
-  cloudformation:DescribeStacks, ssm:GetParameter
-  bedrock:GetFoundationModelAvailability/GetInferenceProfile
-  (plus the CDK bootstrap permissions, only if CDKToolkit is not yet bootstrapped)
+  cloudformation:DescribeStacks (CDKToolkit, read-only Region check)
+All build steps (npm ci, pre-flight, frontend build, cdk bootstrap/deploy) run in CodeBuild.
 SUMMARY
 
 if [ "$ASSUME_YES" != "true" ]; then
@@ -364,7 +373,11 @@ if [ "$ASSUME_YES" != "true" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 3 — write cei.deploy.json, npm ci, pre-flight (fail fast, no AWS writes yet)
+# Step 3 — write cei.deploy.json
+# ADR: no local npm ci / pre-flight here | Rationale: every build step runs in CodeBuild;
+# buildspec.yml re-runs `preflight.ts --config cei.deploy.json --write` against this same
+# file (decoded from CEI_DEPLOY_CONFIG) before `cdk deploy`, so webSearchEnabled below is
+# only a safe default until CodeBuild's pre-flight overwrites it with the real probed value
 # ---------------------------------------------------------------------------
 write_config() {
   CEI_REGION="$REGION" \
@@ -408,55 +421,52 @@ write_config() {
 write_config
 echo "Wrote $CONFIG_FILE"
 
-echo "Installing backend dependencies (npm ci)..."
-( cd "$BACKEND_DIR" && npm ci )
-
-echo "Running Region pre-flight check..."
-set +e
-( cd "$BACKEND_DIR" && npx ts-node scripts/preflight.ts --config "$(basename "$CONFIG_FILE")" --write )
-PREFLIGHT_STATUS=$?
-set -e
-if [ "$PREFLIGHT_STATUS" -ne 0 ]; then
-  echo "Pre-flight check failed (exit $PREFLIGHT_STATUS). See errors above. Stopping before any CodeBuild or CDK action." >&2
-  exit 1
-fi
-
 # ---------------------------------------------------------------------------
 # Step 4 — dry run stops here
 # ---------------------------------------------------------------------------
 if [ "$DRY_RUN" = "true" ]; then
+  DRY_RUN_BOOTSTRAP_REGIONS="$REGION"
+  if [ "$REGION" != "us-east-1" ]; then
+    DRY_RUN_BOOTSTRAP_REGIONS="$DRY_RUN_BOOTSTRAP_REGIONS and us-east-1"
+  fi
   cat <<EOF
 
-Dry run complete: pre-flight checks passed and no AWS resources were created.
+Dry run complete: config validation passed and no AWS resources were created.
+(The Region pre-flight check itself now runs inside CodeBuild, not here.)
 A real run would create/update:
-  - IAM role:              $ROLE_NAME
+  - IAM role:              $ROLE_NAME (plus a temporary bootstrap policy if CDKToolkit
+                            is missing in $DRY_RUN_BOOTSTRAP_REGIONS — see below)
   - CodeBuild project:     $PROJECT_NAME (source $REPO_URL@$BRANCH, image $BUILD_IMAGE)
   - CodeBuild GitHub source credentials (only if a PAT was supplied)
-  - CloudFormation stack CDKToolkit in $REGION (only if not already bootstrapped)
+  - CloudFormation stack CDKToolkit in $DRY_RUN_BOOTSTRAP_REGIONS, run by CodeBuild
+    (only where not already bootstrapped)
 EOF
   exit 0
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5 — CDK bootstrap
+# Step 5 — CDK bootstrap check (read-only; the actual `cdk bootstrap` run
+# happens inside CodeBuild — see buildspec.yml — once frontend/dist exists,
+# which `cdk synth` requires). This only decides whether the CodeBuild role
+# needs the one-time "cei-deploy-bootstrap" inline policy below.
 # ---------------------------------------------------------------------------
-if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region "$REGION" >/dev/null 2>&1; then
-  echo "CDKToolkit not found in $REGION — bootstrapping..."
-  ( cd "$BACKEND_DIR" && npx cdk bootstrap "aws://$ACCOUNT_ID/$REGION" )
-else
-  echo "CDKToolkit already present in $REGION."
-fi
-
-# ADR: also bootstrap us-east-1 | Rationale: B88 — EdgeWafStack (the CLOUDFRONT-scope WAF web ACL)
-# always deploys to us-east-1 regardless of the chosen Region
-if [ "$REGION" != "us-east-1" ]; then
-  if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region us-east-1 >/dev/null 2>&1; then
-    echo "CDKToolkit not found in us-east-1 — bootstrapping..."
-    ( cd "$BACKEND_DIR" && npx cdk bootstrap "aws://$ACCOUNT_ID/us-east-1" )
+# ADR: dedupe $REGION and us-east-1 with a separate "seen" array | Rationale: B88 — EdgeWafStack
+# always deploys to us-east-1, which may equal $REGION; BOOTSTRAP_REGIONS alone can't tell "already
+# checked" from "needs bootstrapping", so a second (already-bootstrapped) Region would be re-checked
+SEEN_REGIONS=()
+BOOTSTRAP_REGIONS=()
+for r in "$REGION" "us-east-1"; do
+  case " ${SEEN_REGIONS[*]:-} " in
+    *" $r "*) continue ;;
+  esac
+  SEEN_REGIONS+=("$r")
+  if aws cloudformation describe-stacks --stack-name CDKToolkit --region "$r" >/dev/null 2>&1; then
+    echo "CDKToolkit already present in $r."
   else
-    echo "CDKToolkit already present in us-east-1."
+    echo "CDKToolkit not found in $r — CodeBuild will bootstrap it."
+    BOOTSTRAP_REGIONS+=("$r")
   fi
-fi
+done
 
 # ---------------------------------------------------------------------------
 # Step 8 (done before the IAM role so its policy can reference the secret) —
@@ -608,6 +618,123 @@ else
 fi
 aws iam put-role-policy --role-name "$ROLE_NAME" --policy-name "$ROLE_POLICY_NAME" --policy-document "file://$policy_file"
 ROLE_ARN="$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text)"
+
+# ---------------------------------------------------------------------------
+# Step 6b — the one-time "cei-deploy-bootstrap" inline policy. Attached only
+# when $BOOTSTRAP_REGIONS (computed in Step 5) is non-empty, so the CodeBuild
+# role can run `cdk bootstrap` itself; removed again once no Region needs it.
+# ADR: scoped to the exact resources the installed CDK CLI's bootstrap-template.yaml
+# creates (cdk-hnb659fds-* IAM roles, S3 assets bucket, ECR assets repo, SSM version
+# parameter, the CDKToolkit stack itself) | Rationale: least privilege — this is
+# strictly narrower than a full CDK bootstrap/admin policy, and buildspec.yml passes
+# --bootstrap-kms-key-id AWS_MANAGED_KEY so no customer KMS key (and no KMS
+# permissions) are ever needed here
+# ---------------------------------------------------------------------------
+BOOTSTRAP_POLICY_NAME="cei-deploy-bootstrap"
+if [ "${#BOOTSTRAP_REGIONS[@]}" -gt 0 ]; then
+  echo "Attaching the one-time $BOOTSTRAP_POLICY_NAME policy for: ${BOOTSTRAP_REGIONS[*]}..."
+  mktemp_secure bootstrap_policy_file
+  CEI_PARTITION="$PARTITION" \
+  CEI_ACCOUNT="$ACCOUNT_ID" \
+  CEI_REGIONS="$(IFS=,; echo "${BOOTSTRAP_REGIONS[*]}")" \
+  node -e '
+    const fs = require("fs");
+    const partition = process.env.CEI_PARTITION;
+    const account = process.env.CEI_ACCOUNT;
+    const regions = process.env.CEI_REGIONS.split(",");
+
+    const forEachRegion = (fn) => regions.map(fn);
+
+    const statements = [
+      {
+        Sid: "CloudFormationBootstrapStack",
+        Effect: "Allow",
+        Action: [
+          "cloudformation:CreateStack",
+          "cloudformation:UpdateStack",
+          "cloudformation:DeleteStack",
+          "cloudformation:DescribeStacks",
+          "cloudformation:DescribeStackEvents",
+          "cloudformation:GetTemplate",
+          "cloudformation:GetTemplateSummary",
+          "cloudformation:CreateChangeSet",
+          "cloudformation:DescribeChangeSet",
+          "cloudformation:ExecuteChangeSet",
+          "cloudformation:DeleteChangeSet",
+          "cloudformation:RollbackStack",
+          "cloudformation:ContinueUpdateRollback"
+        ],
+        Resource: forEachRegion((r) => `arn:${partition}:cloudformation:${r}:${account}:stack/CDKToolkit/*`)
+      },
+      {
+        Sid: "BootstrapIamRoles",
+        Effect: "Allow",
+        Action: [
+          "iam:CreateRole",
+          "iam:GetRole",
+          "iam:DeleteRole",
+          "iam:UpdateRole",
+          "iam:UpdateAssumeRolePolicy",
+          "iam:PutRolePolicy",
+          "iam:GetRolePolicy",
+          "iam:DeleteRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:AttachRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:ListAttachedRolePolicies",
+          "iam:TagRole",
+          "iam:UntagRole",
+          "iam:ListRoleTags",
+          "iam:PassRole"
+        ],
+        Resource: forEachRegion((r) => `arn:${partition}:iam::${account}:role/cdk-hnb659fds-*-${account}-${r}`)
+      },
+      {
+        Sid: "BootstrapAssetsBucket",
+        Effect: "Allow",
+        Action: [
+          "s3:CreateBucket",
+          "s3:PutBucketPolicy",
+          "s3:GetBucketPolicy",
+          "s3:PutBucketVersioning",
+          "s3:GetBucketVersioning",
+          "s3:PutEncryptionConfiguration",
+          "s3:GetEncryptionConfiguration",
+          "s3:PutLifecycleConfiguration",
+          "s3:GetLifecycleConfiguration",
+          "s3:PutBucketPublicAccessBlock",
+          "s3:GetBucketPublicAccessBlock"
+        ],
+        Resource: forEachRegion((r) => `arn:${partition}:s3:::cdk-hnb659fds-assets-${account}-${r}`)
+      },
+      {
+        Sid: "BootstrapContainerAssetsRepo",
+        Effect: "Allow",
+        Action: [
+          "ecr:CreateRepository",
+          "ecr:DescribeRepositories",
+          "ecr:SetRepositoryPolicy",
+          "ecr:GetRepositoryPolicy",
+          "ecr:PutLifecyclePolicy",
+          "ecr:GetLifecyclePolicy",
+          "ecr:TagResource"
+        ],
+        Resource: forEachRegion((r) => `arn:${partition}:ecr:${r}:${account}:repository/cdk-hnb659fds-container-assets-${account}-${r}`)
+      },
+      {
+        Sid: "BootstrapVersionParameter",
+        Effect: "Allow",
+        Action: ["ssm:PutParameter", "ssm:GetParameter", "ssm:AddTagsToResource"],
+        Resource: forEachRegion((r) => `arn:${partition}:ssm:${r}:${account}:parameter/cdk-bootstrap/hnb659fds/*`)
+      }
+    ];
+    fs.writeFileSync(process.argv[1], JSON.stringify({ Version: "2012-10-17", Statement: statements }, null, 2));
+  ' "$bootstrap_policy_file"
+  aws iam put-role-policy --role-name "$ROLE_NAME" --policy-name "$BOOTSTRAP_POLICY_NAME" --policy-document "file://$bootstrap_policy_file"
+else
+  echo "Removing the $BOOTSTRAP_POLICY_NAME policy, if present (no Region needs bootstrapping)..."
+  aws iam delete-role-policy --role-name "$ROLE_NAME" --policy-name "$BOOTSTRAP_POLICY_NAME" >/dev/null 2>&1 || true
+fi
 
 echo "Waiting for IAM propagation..."
 sleep 10
