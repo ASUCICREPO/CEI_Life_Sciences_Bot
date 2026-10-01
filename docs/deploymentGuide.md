@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Status: **Partly built.** `deploy.sh` exists and works today (F1, B87). It sets up a CodeBuild project that runs `cdk deploy --all` for two stacks: `BackendStack` (Code Interpreter, Cognito, the pre-sign-up domain check, and the S3 + CloudFront + WAF-fronted dashboard, F2/B88–B90) and `EdgeWafStack` (the `us-east-1` WAF web ACL, B88). The rest of the product stack (the REST API Gateway, Session Runner/Router Lambdas, DynamoDB tables, and so on) is **planned, not built**. This guide marks each part "Exists" or "Planned". Full detail: `.agents/specs/architecture.md`, `.agents/decision-log.md` (B45–B48, B87–B90), `.agents/phases/F01-deploy-foundation.md`, `.agents/phases/F02-hosting-auth.md`.
+Status: **Partly built.** `deploy.sh` exists and works today (F1, B87, B91). It sets up a CodeBuild project that runs `cdk deploy --all` for two stacks: `BackendStack` (Code Interpreter, Cognito, the pre-sign-up domain check, and the S3 + CloudFront + WAF-fronted dashboard, F2/B88–B90) and `EdgeWafStack` (the `us-east-1` WAF web ACL, B88). The rest of the product stack (the REST API Gateway, Session Runner/Router Lambdas, DynamoDB tables, and so on) is **planned, not built**. This guide marks each part "Exists" or "Planned". Full detail: `.agents/specs/architecture.md`, `.agents/decision-log.md` (B45–B48, B87–B91), `.agents/phases/F01-deploy-foundation.md`, `.agents/phases/F02-hosting-auth.md`.
 
 ---
 
@@ -14,20 +14,21 @@ Status: **Partly built.** `deploy.sh` exists and works today (F1, B87). It sets 
 
 ## `deploy.sh` guided setup (Exists)
 
-`deploy.sh` sits at the repo root. It collects configuration, runs a Region pre-flight check, then creates or updates a CodeBuild project and starts a build. It works in bash on Linux, macOS, CloudShell, and Git Bash.
+`deploy.sh` sits at the repo root. **All build steps now run in CodeBuild, never locally (B91).** `deploy.sh` itself only collects configuration, does one read-only Region check, then creates or updates a CodeBuild project and starts a build. `npm ci`, the Region pre-flight check, the frontend build, `cdk bootstrap`, and `cdk deploy` all run inside that CodeBuild build (see [Backend deployment](#backend-deployment-build-steps) below). `deploy.sh` works in bash on Linux, macOS, CloudShell, and Git Bash.
 
 ### Prerequisites
 
 - AWS CLI v2, signed in with credentials for the target account.
-- Node.js >= 20 and npm.
+- Node.js >= 20 (`deploy.sh` only runs `node -e` to write JSON; it does not run `npm ci` or any npm script, so npm itself is not required locally).
+- git (to resolve the default repository URL/branch and to pin the build to a commit SHA via `git ls-remote`).
+- bash.
+- CloudShell already has all four, so it needs no setup beyond signing in.
 - Your AWS credentials need at least:
-  - `iam:GetRole`, `iam:CreateRole`, `iam:UpdateAssumeRolePolicy`, `iam:PutRolePolicy`, `iam:TagRole`, `iam:PassRole` (on `cei-deploy-codebuild-role`)
+  - `iam:GetRole`, `iam:CreateRole`, `iam:UpdateAssumeRolePolicy`, `iam:PutRolePolicy`, `iam:DeleteRolePolicy`, `iam:TagRole`, `iam:PassRole` (on `cei-deploy-codebuild-role`)
   - `secretsmanager:CreateSecret`, `secretsmanager:PutSecretValue`, `secretsmanager:DescribeSecret`, `secretsmanager:TagResource` (only if a PAT is given)
   - `codebuild:BatchGetProjects`, `codebuild:CreateProject`, `codebuild:UpdateProject`, `codebuild:StartBuild`, `codebuild:BatchGetBuilds`
-  - `cloudformation:DescribeStacks`
-  - `ssm:GetParameter`
-  - `bedrock:GetFoundationModelAvailability`, `bedrock:GetInferenceProfile`
-  - Plus the (broader, one-time) CDK bootstrap permissions if `CDKToolkit` is not already bootstrapped in the Region
+  - `cloudformation:DescribeStacks` (read-only, on `CDKToolkit` in the deploy Region and in `us-east-1` — this only decides whether the CodeBuild role needs the one-time bootstrap policy below)
+  - No local CDK bootstrap permission is needed: `deploy.sh` only writes the `cei-deploy-bootstrap` inline policy onto the CodeBuild role (covered by `iam:PutRolePolicy` above); the CodeBuild role itself, not your local credentials, runs `cdk bootstrap`.
 
 Run `./deploy.sh --help` to see this list from the script itself.
 
@@ -50,7 +51,7 @@ Run `./deploy.sh --help` to see this list from the script itself.
 | `--github-pat-stdin` | Read a GitHub PAT from stdin (for private repos, non-interactive use) |
 | `--non-interactive` | Never prompt; fail if a required value is missing |
 | `--yes` | Skip the confirmation prompt |
-| `--dry-run` | Run pre-flight only; make no AWS writes |
+| `--dry-run` | Validate configuration only; make no AWS writes (the Region pre-flight itself runs only inside CodeBuild, not here) |
 | `-h`, `--help` | Show help and exit |
 
 If you omit a flag, `deploy.sh` prompts for it (unless `--non-interactive` is set). Interactive prompts always read from `/dev/tty`, so `--github-pat-stdin` can pipe a token over stdin in the same invocation without a prompt consuming it. If given, `--github-pat-stdin` reads its input first, before any other prompt runs.
@@ -79,14 +80,13 @@ This means: if you have local, unpushed commits, the build does **not** deploy t
 
 ### What `deploy.sh` creates
 
-1. `backend/cei.deploy.json` — the collected configuration (not committed; see `.gitignore`).
-2. Runs `npm ci` in `backend/`, then the Region pre-flight check (see below). If pre-flight fails, the script stops before touching AWS.
-3. `cdk bootstrap`, only if the `CDKToolkit` stack is not already in the target Region.
-4. `cdk bootstrap` in `us-east-1` too, only if that stack is not already there **and** the target Region is not itself `us-east-1` — `EdgeWafStack` (B88) always deploys to `us-east-1`, regardless of the chosen Region.
-5. The GitHub PAT secret in Secrets Manager, only if you gave one.
-6. The IAM role `cei-deploy-codebuild-role` and inline policy `cei-deploy-codebuild-policy` (created or updated). The policy's `sts:AssumeRole` and `ssm:GetParameter` statements cover the `us-east-1` bootstrap roles too, in addition to the target Region.
-7. The CodeBuild project `cei-life-sciences-deploy` (created or updated), source set to your repository URL and branch.
-8. A CodeBuild build, pinned to the resolved commit SHA, started right away, using `buildspec.yml`.
+1. `backend/cei.deploy.json` — the collected configuration (not committed; see `.gitignore`). `webSearchEnabled` is written as a placeholder (`false`) here; CodeBuild's pre-flight overwrites it with the real probed value (B91).
+2. A read-only `cloudformation:DescribeStacks` check for `CDKToolkit` in the target Region and in `us-east-1` (deduplicated if they are the same Region). This makes no changes — it only decides whether the CodeBuild role needs the one-time `cei-deploy-bootstrap` policy below. The actual `cdk bootstrap` run happens later, inside CodeBuild (B91).
+3. The GitHub PAT secret in Secrets Manager, only if you gave one.
+4. The IAM role `cei-deploy-codebuild-role` and inline policy `cei-deploy-codebuild-policy` (created or updated).
+5. The one-time inline policy `cei-deploy-bootstrap` on that role — attached only for Regions that step 2 found still need `CDKToolkit` (so the CodeBuild role, not your local credentials, can run `cdk bootstrap`), and removed again once no Region needs it.
+6. The CodeBuild project `cei-life-sciences-deploy` (created or updated), source set to your repository URL and branch.
+7. A CodeBuild build, pinned to the resolved commit SHA, started right away, using `buildspec.yml`. **Every actual build step — `npm ci`, the Region pre-flight, the frontend build, `cdk bootstrap` (where still needed), `cdk deploy` — runs inside that CodeBuild build, never on your machine (B91).**
 
 There is no separate CDK pipeline stack — the role and project are created directly with the AWS CLI (B87). `BackendStack` and `EdgeWafStack` are the only two product stacks (B88).
 
@@ -98,9 +98,13 @@ Every resource `deploy.sh` creates (the IAM role, the CodeBuild project, and the
 
 The `cei-deploy-codebuild-role` trust policy only lets `codebuild.amazonaws.com` assume the role when both `aws:SourceAccount` (the deploying account) and `aws:SourceArn` (the specific `cei-life-sciences-deploy` project ARN) match. The role's own permission to assume the CDK bootstrap roles is scoped to `cdk-hnb659fds-*-<account>-<region>` (that account and Region's bootstrap roles only), not a bare wildcard.
 
+### The one-time `cei-deploy-bootstrap` policy (B91)
+
+`deploy.sh` attaches a separate inline policy, `cei-deploy-bootstrap`, to `cei-deploy-codebuild-role`, but only for a run where a Region still needs `CDKToolkit` (per the read-only check in step 2 above); it removes the policy again once no Region needs it. The policy is scoped to exactly what `cdk bootstrap` creates: CloudFormation on the `CDKToolkit` stack; IAM on `cdk-hnb659fds-*-<account>-<region>` roles (including `PassRole` and `AttachRolePolicy`); S3 on the `cdk-hnb659fds-assets-<account>-<region>` bucket; ECR on the `cdk-hnb659fds-container-assets-<account>-<region>` repository; and SSM on `/cdk-bootstrap/hnb659fds/*`. `buildspec.yml` passes `--bootstrap-kms-key-id AWS_MANAGED_KEY`, so no customer-managed KMS key, and no KMS permission, is ever needed here. This policy lets the CodeBuild role run `cdk bootstrap` itself; it does not give your local credentials any new permission.
+
 ### Pre-flight failures
 
-The pre-flight script (`backend/scripts/preflight.ts`) checks, before any CodeBuild or CDK action: AgentCore Runtime/Gateway/Policy/Memory availability in the Region (SSM service check plus a doc-checked capability matrix), S3 Vectors, Bedrock Knowledge Bases, and that the default and router Bedrock models are available, authorized, entitled, and (for inference profiles) `ACTIVE` in that Region. Any failure prints a specific error to stderr and stops `deploy.sh` before it creates or changes anything in AWS. Outside the three AgentCore Web Search Regions (us-east-1, eu-west-1, ap-northeast-1), pre-flight does not fail — it only sets `webSearchEnabled: false` in the config.
+The pre-flight script (`backend/scripts/preflight.ts`) runs only inside CodeBuild's `pre_build` phase (B91) — never locally in `deploy.sh`. It checks, before any `cdk bootstrap` or `cdk deploy`: AgentCore Runtime/Gateway/Policy/Memory availability in the Region (SSM service check plus a doc-checked capability matrix), S3 Vectors, Bedrock Knowledge Bases, and that the default and router Bedrock models are available, authorized, entitled, and (for inference profiles) `ACTIVE` in that Region. Any failure prints a specific error to stderr and fails the CodeBuild build before it changes anything else in AWS. Outside the three AgentCore Web Search Regions (us-east-1, eu-west-1, ap-northeast-1), pre-flight does not fail — it only sets `webSearchEnabled: false` in the config.
 
 ### Watching the build
 
@@ -108,19 +112,19 @@ The pre-flight script (`backend/scripts/preflight.ts`) checks, before any CodeBu
 
 ### `--dry-run`
 
-`--dry-run` runs every step through pre-flight, then stops. It prints what a real run would create, but makes no AWS writes.
+`--dry-run` validates configuration, then stops before any AWS write (including the read-only `CDKToolkit` check). It prints what a real run would create. The Region pre-flight itself only runs later, inside CodeBuild — a dry run does not exercise it.
 
 ---
 
 ## Backend deployment (build steps)
 
-`buildspec.yml` (Exists) runs in CodeBuild:
+`buildspec.yml` (Exists) runs in CodeBuild. **This is where every build step actually happens (B91) — `deploy.sh` runs none of these steps itself:**
 
 1. `install` — `npm ci` in `backend/` (Node.js 22 runtime) **and** in `frontend/`.
-2. `pre_build` — decode the configuration and write it to `backend/cei.deploy.json`; run the Region pre-flight again (catches Region drift between the local run and the build).
-3. `build` — `npm run build` in `frontend/` first (produces `frontend/dist`), then `npm run build` and `npm test` in `backend/`, then `cdk deploy --all --require-approval never -c ceiConfigFile=cei.deploy.json`.
+2. `pre_build` — decode the configuration and write it to `backend/cei.deploy.json`; run the Region pre-flight (`npx ts-node scripts/preflight.ts --config cei.deploy.json --write`). This is the only place the pre-flight runs; a failure here fails the build before any `cdk bootstrap` or `cdk deploy`.
+3. `build` — `npm run build` in `frontend/` first (produces `frontend/dist`); then, for each Region that still needs `CDKToolkit` (the deploy Region and `us-east-1`, deduplicated — `EdgeWafStack` always deploys to `us-east-1`), `npx cdk bootstrap --bootstrap-kms-key-id AWS_MANAGED_KEY`; then `npm run build` and `npm test` in `backend/`; then `cdk deploy --all --require-approval never -c ceiConfigFile=cei.deploy.json`.
 
-The frontend build must run before `cdk deploy`: `backend/bin/backend.ts` resolves `frontendAssetPath` to `../frontend/dist` and stops with a clear error ("build the frontend first: cd frontend && npm ci && npm run build") if that directory does not exist, because `BackendStack`'s `BucketDeployment` needs a real asset directory at synth time.
+The frontend build must run before `cdk bootstrap` and `cdk deploy`: `backend/bin/backend.ts` resolves `frontendAssetPath` to `../frontend/dist` and stops with a clear error ("build the frontend first: cd frontend && npm ci && npm run build") if that directory does not exist, because `BackendStack`'s `BucketDeployment` needs a real asset directory at synth time, and `cdk bootstrap` also triggers a synth. (This is exactly the failure the user hit running `deploy.sh` from AWS CloudShell before B91: the old flow ran `cdk bootstrap` locally, before `frontend/dist` existed.)
 
 `cdk deploy --all` now deploys both `BackendStack` (Code Interpreter, Cognito, the S3/CloudFront-fronted dashboard, F2) and `EdgeWafStack` (the `us-east-1` WAF web ACL, B88). Planned for later phases: the REST API Gateway, Session Runner/Router Lambdas, AgentCore Gateway and Policy, AgentCore Runtimes, DynamoDB tables, additional S3 buckets, SQS, Secrets Manager (product API keys), and CloudWatch alarms/SNS. See [Provisioned Resources](./provisioned-resources.md) for the exact current list.
 
@@ -176,6 +180,6 @@ cdk destroy --all
 - [Architecture Deep Dive](./architectureDeepDive.md) — target architecture and current status per component
 - [Provisioned Resources](./provisioned-resources.md) — what is really deployed today
 - `.agents/specs/architecture.md` — full target architecture spec
-- `.agents/decision-log.md` — decisions behind the deployment design (B45–B48, B87–B90)
+- `.agents/decision-log.md` — decisions behind the deployment design (B45–B48, B87–B91)
 - `.agents/phases/F01-deploy-foundation.md` — the F1 build phase that delivered `deploy.sh`
 - `.agents/phases/F02-hosting-auth.md` — the F2 build phase that delivered Cognito, the S3/CloudFront/WAF-fronted dashboard, and the edge WAF stack

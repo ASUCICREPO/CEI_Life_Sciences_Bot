@@ -37,6 +37,7 @@ Serve the `founder-ai-dashboard` SPA (copied into `frontend/`, replacing the arc
 ## Implementation notes
 
 - **WAF stack split (B88).** `backend/lib/edge-waf-stack.ts` defines `EdgeWafStack`, a small stack that only holds the `CLOUDFRONT`-scope `CfnWebACL`. It always deploys to `us-east-1`. `backend/bin/backend.ts` creates it (when a deploy config exists) and passes its `webAclArn` output into `BackendStack` via `crossRegionReferences: true`.
+- **Build location (B91).** The `us-east-1` `CDKToolkit` bootstrap that `EdgeWafStack` needs now runs inside CodeBuild (`buildspec.yml`), not locally in `deploy.sh`. `deploy.sh` only checks, read-only, whether `us-east-1` already has `CDKToolkit`, to decide if the CodeBuild role needs the one-time bootstrap policy.
 - **Login library (B89).** `oidc-client-ts` 3.5.0. Cognito managed login (hosted pages), Authorization Code + PKCE. Tokens live in memory only (`InMemoryWebStorage`); OAuth state lives in `sessionStorage`. Cognito's OIDC discovery document has no `end_session_endpoint`, so `frontend/src/lib/auth/userManager.ts` builds the logout URL by hand: `<cognitoDomain>/logout?client_id=…&logout_uri=<origin>/`.
 - **Password policy.** Minimum 12 characters, upper + lower + digit + symbol required. `AccountRecovery.EMAIL_ONLY`. MFA off (B14).
 - **Token lifetimes.** Access and ID tokens: 60 minutes. Refresh token: 7 days.
