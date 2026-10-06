@@ -1,0 +1,32 @@
+{
+  "content_type": "application/vnd.cei.ui+json",
+  "protocol": "cei-ui",
+  "version": "1.1",
+  "surface_id": "research-final",
+  "revision": 1,
+  "root_id": "root",
+  "components": [
+    {"type": "Tabs", "id": "root", "tabs": [{"label": "Answer", "child_id": "answer-col"}, {"label": "Evidence", "child_id": "evidence-panel"}], "active_index": 0},
+    {"type": "Column", "id": "answer-col", "children": ["header-card", "s0-card", "confidence-callout"]},
+    {"type": "Card", "id": "header-card", "title": "GLP-1 agonists: Phase 3 efficacy", "children": ["header-summary", "header-metrics"], "actions": []},
+    {"type": "Markdown", "id": "header-summary", "content": "Semaglutide gives the largest weight loss in the retrieved trials [PMID:111]."},
+    {"type": "StatGrid", "id": "header-metrics", "metrics": [
+      {"label": "Mean weight loss", "value": "14.9", "numeric_value": 14.9, "unit": "%", "context": "STEP 1, 68 weeks", "trend": "down", "sentiment": "positive", "verified": true},
+      {"label": "Participants", "value": "1,961", "numeric_value": 1961, "verified": false}
+    ]},
+    {"type": "Card", "id": "s0-card", "title": "Efficacy", "children": ["s0-b0-table", "s0-b1-chart", "s0-b2-comparison", "s0-b3-timeline", "s0-b4-artifact", "s0-sources"], "actions": []},
+    {"type": "Table", "id": "s0-b0-table", "title": "Weight loss by agent", "caption": "Values marked † were not found in retrieved evidence.",
+      "columns": [{"key": "c0", "label": "Agent", "align": "left", "kind": "text"}, {"key": "c1", "label": "Weight loss (%)", "align": "right", "kind": "number"}],
+      "rows": [["Semaglutide", 14.9], ["Liraglutide", 8.0]],
+      "flagged_cells": [{"row": 1, "column": 1}], "sortable": true},
+    {"type": "Graph", "id": "s0-b1-chart", "graph_type": "bar-vertical", "title": "Weight loss (%)", "categories": ["Semaglutide", "Liraglutide"], "series": [{"name": "Weight loss", "values": [14.9, 8.0]}], "x_label": "Agent", "y_label": "%"},
+    {"type": "Comparison", "id": "s0-b2-comparison", "title": "Agent comparison", "options": ["Semaglutide", "Liraglutide"], "criteria": [{"label": "Dosing", "values": ["Weekly", "Daily"], "best_index": 0}], "recommendation": "Weekly dosing favors adherence."},
+    {"type": "Timeline", "id": "s0-b3-timeline", "title": "Approvals", "items": [{"item_id": "e0", "date_label": "2014", "title": "Liraglutide approved for obesity", "status": "completed"}, {"item_id": "e1", "date_label": "2021", "title": "Semaglutide approved for obesity", "description": "STEP program", "status": "completed"}]},
+    {"type": "Artifact", "id": "s0-b4-artifact", "title": "Dose explorer", "description": "Slider that shows weight loss by dose.", "html": "<div id=\"out\"></div><input id=\"dose\" type=\"range\" min=\"0\" max=\"1\"><script>const d = JSON.parse(document.getElementById('cei-data').textContent); document.getElementById('dose').addEventListener('input', (e) => { document.getElementById('out').textContent = d.rows[e.target.value][1]; });</script>", "data": {"columns": ["Dose", "Weight loss"], "rows": [["1.0 mg", 6.0], ["2.4 mg", 14.9]]}, "height": 320},
+    {"type": "Row", "id": "s0-sources", "children": ["s0-chip-0"]},
+    {"type": "CitationChip", "id": "s0-chip-0", "citation": {"citation_id": "PMID:111", "title": "STEP 1 trial", "source_type": "pubmed", "url": "https://pubmed.ncbi.nlm.nih.gov/111/", "year": 2021}},
+    {"type": "Callout", "id": "confidence-callout", "tone": "info", "title": "Confidence: medium", "content": "Two trials; head-to-head data are limited [PMID:111]."},
+    {"type": "EvidencePanel", "id": "evidence-panel", "summary": "Showing 1 of 1 citations", "citations": [{"citation_id": "PMID:111", "title": "STEP 1 trial", "source_type": "pubmed", "url": "https://pubmed.ncbi.nlm.nih.gov/111/", "year": 2021}], "children": ["evidence-chip-0"]},
+    {"type": "CitationChip", "id": "evidence-chip-0", "citation": {"citation_id": "PMID:111", "title": "STEP 1 trial", "source_type": "pubmed", "url": "https://pubmed.ncbi.nlm.nih.gov/111/", "year": 2021}}
+  ]
+}
