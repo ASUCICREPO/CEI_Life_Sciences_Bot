@@ -1,6 +1,6 @@
 # F01 — Deploy foundation
 
-Status: in progress | Depends on: — | Decisions: B45, B46, B47, B48, B52, B87 | Specs: [`../specs/architecture.md`](../specs/architecture.md) (Deploy foundation row, §1 component table), [`../specs/security.md`](../specs/security.md) (Infrastructure as code hygiene, Encryption)
+Status: done (sandbox `deploy.sh` run passed, verified by the user on 2026-10-05) | Depends on: — | Decisions: B45, B46, B47, B48, B52, B87 | Specs: [`../specs/architecture.md`](../specs/architecture.md) (Deploy foundation row, §1 component table), [`../specs/security.md`](../specs/security.md) (Infrastructure as code hygiene, Encryption)
 
 ## Goal
 

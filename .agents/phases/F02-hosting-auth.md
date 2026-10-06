@@ -1,6 +1,6 @@
 # F02 — Hosting + auth
 
-Status: in progress (manual deployed verification remains — task 10) | Depends on: F1 | Decisions: B1, B12, B13, B14, B16, B53, B66, B88, B89, B90 | Specs: [`../specs/architecture.md`](../specs/architecture.md) §1 (S3/CloudFront/WAF/Cognito rows), [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) §1–2, [`../specs/security.md`](../specs/security.md) (network/edge, identity and access)
+Status: done (manual deployed verification passed, verified by the user on 2026-10-05) | Depends on: F1 | Decisions: B1, B12, B13, B14, B16, B53, B66, B88, B89, B90 | Specs: [`../specs/architecture.md`](../specs/architecture.md) §1 (S3/CloudFront/WAF/Cognito rows), [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) §1–2, [`../specs/security.md`](../specs/security.md) (network/edge, identity and access)
 
 ## Goal
 
@@ -32,7 +32,7 @@ Serve the `founder-ai-dashboard` SPA (copied into `frontend/`, replacing the arc
 - [x] 7. Build `frontend/src/lib/auth/`: PKCE login redirect, callback handling, token storage (memory + refresh, not `localStorage` for access tokens if avoidable), logout.
 - [x] 8. Add the S3 static bucket (private, OAC) + CloudFront distribution construct with an SPA fallback (custom error response: 403/404 → `/index.html`, HTTP 200) and the WAF `WebACL` (AWS-managed rule groups + a rate-based rule per `security.md`'s T5 mitigation) associated with the distribution.
 - [x] 9. Confirm CORS/CSP posture per `security.md`'s open items: the API origin restriction is F3 scope, but the CloudFront response headers policy (CSP top-level header) should be stubbed here even though its Artifact-sandbox interaction (per `docs/cei-ui-protocol.md` "CSP inheritance") is not fully solved until later — record whatever is deferred explicitly as a TBD, do not silently skip it.
-- [ ] 10. Manually verify: sign up with an allowed-domain email, receive verification, verify, log in, land on the dashboard shell with no report pages in navigation.
+- [x] 10. Manually verify: sign up with an allowed-domain email, receive verification, verify, log in, land on the dashboard shell with no report pages in navigation.
 
 ## Implementation notes
 
