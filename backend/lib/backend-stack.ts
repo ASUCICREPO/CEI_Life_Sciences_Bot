@@ -9,10 +9,13 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as apigw from 'aws-cdk-lib/aws-apigateway';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
-import { DeployConfig } from './config/deploy-config';
+import { DeployConfig, DEFAULT_LIMITS } from './config/deploy-config';
+import { PythonDepsLayer } from './constructs/python-deps-layer';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export interface BackendStackProps extends cdk.StackProps {
@@ -153,6 +156,47 @@ export class BackendStack extends cdk.Stack {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
+    // ---------------------------------------------------------------
+    // REST API (B2): one Regional REST API; routes, authorizer and Lambdas are added further down.
+    // Created before the CSP because connect-src needs its origin (RestApi id only, no cycle with the site).
+    // ---------------------------------------------------------------
+
+    const requestsPerSecond = (this.config?.limits ?? DEFAULT_LIMITS).requestsPerSecond;
+
+    const apiAccessLogGroup = new logs.LogGroup(this, 'ApiAccessLogs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    const api = new apigw.RestApi(this, 'Api', {
+      restApiName: 'cei-life-sciences-api',
+      endpointConfiguration: { types: [apigw.EndpointType.REGIONAL] },
+      // ADR: cloudWatchRole on | Rationale: API access logging needs the account-level API Gateway CloudWatch role; CDK's context flag otherwise disables it
+      cloudWatchRole: true,
+      deployOptions: {
+        stageName: 'v1',
+        // ADR: ERROR-level execution logging without request/response bodies | Rationale: satisfies APIG6 and aids debugging without putting user chat data in logs (B7)
+        loggingLevel: apigw.MethodLoggingLevel.ERROR,
+        dataTraceEnabled: false,
+        accessLogDestination: new apigw.LogGroupLogDestination(apiAccessLogGroup),
+        accessLogFormat: apigw.AccessLogFormat.jsonWithStandardFields({
+          caller: false,
+          httpMethod: true,
+          ip: true,
+          protocol: true,
+          requestTime: true,
+          resourcePath: true,
+          responseLength: true,
+          status: true,
+          user: false,
+        }),
+        // ADR: stage-wide default throttle in addition to the UsagePlan | Rationale: B22/B78 account-wide 20 rps; a UsagePlan only throttles requests that carry an API key, which Cognito-authenticated calls do not; no per-route limits
+        throttlingRateLimit: requestsPerSecond,
+        throttlingBurstLimit: requestsPerSecond,
+      },
+    });
+    const apiOrigin = `https://${api.restApiId}.execute-api.${this.region}.${this.urlSuffix}`;
+
     // ADR: baseline CSP, computed without a real domain resource | Rationale: Cognito prefix-domain
     // hostnames are deterministic (prefix + ".auth." + region + ".amazoncognito.com"); the residual
     // Artifact-sandbox CSP interaction stays a TBD for F6/F21 (docs/cei-ui-protocol.md)
@@ -165,7 +209,7 @@ export class BackendStack extends cdk.Stack {
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
-      `connect-src 'self' https://${cognitoIdpHost} ${cognitoDomainUrl}`,
+      `connect-src 'self' https://${cognitoIdpHost} ${cognitoDomainUrl} ${apiOrigin}`,
       "frame-ancestors 'none'",
       "object-src 'none'",
       "base-uri 'self'",
@@ -271,6 +315,184 @@ export class BackendStack extends cdk.Stack {
     managedLoginBranding.node.addDependency(userPoolDomain);
 
     // ---------------------------------------------------------------
+    // Session stores (B12, B52, B58): DynamoDB, AWS-managed encryption, PITR, no TTL, no GSI
+    // ---------------------------------------------------------------
+
+    const chatMetadataTable = new dynamodb.Table(this, 'ChatMetadataStore', {
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      deletionProtection: true,
+      // ADR: RETAIN | Rationale: chat metadata is user data — a stack teardown must not silently delete it (B58: deleted only by the user)
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
+    const chatHistoryTable = new dynamodb.Table(this, 'ChatHistoryStore', {
+      partitionKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sequence_number', type: dynamodb.AttributeType.NUMBER },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      deletionProtection: true,
+      // ADR: RETAIN | Rationale: chat history is user data — a stack teardown must not silently delete it (B58: deleted only by the user)
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
+    // ---------------------------------------------------------------
+    // Session Lambdas (Python 3.14) sharing one dependency layer
+    // ---------------------------------------------------------------
+
+    const allowedOrigins = [siteUrl];
+    if (this.config?.allowLocalhostCallback) {
+      // ADR: localhost origin gated behind config.allowLocalhostCallback (B90) | Rationale: same local-dev switch as the Cognito callback URLs; never added unconditionally
+      allowedOrigins.push('http://localhost:5173');
+    }
+
+    const pythonDeps = new PythonDepsLayer(this, 'PythonDepsLayer');
+
+    const sessionLambdaEnv = {
+      CEI_AWS_REGION: this.region,
+      CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName,
+      CEI_CHAT_HISTORY_TABLE: chatHistoryTable.tableName,
+      ALLOWED_ORIGINS: allowedOrigins.join(','),
+    };
+
+    const createSessionFunction = (id: string, dir: string, handlerName: string) => {
+      const logGroup = new logs.LogGroup(this, `${id}Logs`, {
+        retention: logs.RetentionDays.ONE_MONTH,
+        removalPolicy: RemovalPolicy.DESTROY,
+      });
+      // ADR: hand-rolled role, no AWSLambdaBasicExecutionRole | Rationale: same as the pre-sign-up Lambda — avoids IAM4; grantWrite scopes logs to this exact log group
+      const role = new iam.Role(this, `${id}Role`, { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
+      logGroup.grantWrite(role);
+      const fn = new lambda.Function(this, `${id}Fn`, {
+        runtime: lambda.Runtime.PYTHON_3_14,
+        handler: handlerName,
+        code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', dir), {
+          exclude: ['tests', '__pycache__', '*.pyc'],
+        }),
+        layers: [pythonDeps.layer],
+        role,
+        logGroup,
+        timeout: Duration.seconds(10),
+        memorySize: 256,
+        environment: sessionLambdaEnv,
+      });
+      return { fn, role };
+    };
+
+    const sessionMetadata = createSessionFunction(
+      'SessionMetadataHandler',
+      'session-metadata-handler',
+      'metadata_handler.handler',
+    );
+    const sessionHistory = createSessionFunction(
+      'SessionHistoryHandler',
+      'session-history-handler',
+      'history_handler.handler',
+    );
+
+    // Least privilege: exactly the actions each handler calls (no DeleteItem until F19, no Scan, no GSI wildcard)
+    chatMetadataTable.grant(
+      sessionMetadata.role,
+      'dynamodb:PutItem',
+      'dynamodb:GetItem',
+      'dynamodb:Query',
+      'dynamodb:UpdateItem',
+    );
+    // B12: history is keyed by session_id only, so the history handler proves ownership with a metadata GetItem first
+    chatMetadataTable.grant(sessionHistory.role, 'dynamodb:GetItem');
+    chatHistoryTable.grant(sessionHistory.role, 'dynamodb:Query');
+
+    // ---------------------------------------------------------------
+    // API routes: Cognito authorizer on every method, error-envelope gateway responses (api.md)
+    // ---------------------------------------------------------------
+
+    const authorizer = new apigw.CognitoUserPoolsAuthorizer(this, 'ApiAuthorizer', {
+      cognitoUserPools: [userPool],
+    });
+    const requestValidator = api.addRequestValidator('ApiRequestValidator', {
+      validateRequestParameters: true,
+      validateRequestBody: true,
+    });
+    const methodOptions: apigw.MethodOptions = {
+      authorizer,
+      authorizationType: apigw.AuthorizationType.COGNITO,
+      // ADR: openid scope | Rationale: the SPA sends the Cognito access token (not the ID token); an authorizer validates access tokens only when the method lists scopes
+      authorizationScopes: ['openid'],
+      requestValidator,
+    };
+    const corsOptions: apigw.CorsOptions = {
+      allowOrigins: allowedOrigins,
+      allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+      allowHeaders: ['Authorization', 'Content-Type'],
+      maxAge: Duration.hours(1),
+    };
+
+    const metadataIntegration = new apigw.LambdaIntegration(sessionMetadata.fn);
+    const historyIntegration = new apigw.LambdaIntegration(sessionHistory.fn);
+
+    const sessionsResource = api.root.addResource('sessions', { defaultCorsPreflightOptions: corsOptions });
+    sessionsResource.addMethod('POST', metadataIntegration, methodOptions);
+    sessionsResource.addMethod('GET', metadataIntegration, methodOptions);
+    const sessionResource = sessionsResource.addResource('{sessionId}', { defaultCorsPreflightOptions: corsOptions });
+    sessionResource.addMethod('GET', metadataIntegration, methodOptions);
+    sessionResource.addMethod('PATCH', metadataIntegration, methodOptions);
+    const historyResource = sessionResource.addResource('history', { defaultCorsPreflightOptions: corsOptions });
+    historyResource.addMethod('GET', historyIntegration, methodOptions);
+
+    // Gateway-generated errors (no Lambda ran) use the same envelope as the Lambdas. The static CORS origin is the
+    // site; a localhost dev origin therefore sees these particular errors as CORS failures.
+    const envelope = (code: string, message: string, retriable: boolean) =>
+      `{"error":{"code":"${code}","message":"${message}","request_id":"$context.requestId","retriable":${retriable}}}`;
+    const gatewayResponses: Array<[string, apigw.ResponseType, string, string, string, boolean]> = [
+      ['Unauthorized', apigw.ResponseType.UNAUTHORIZED, '401', 'unauthorized', 'Authentication is required.', false],
+      ['AccessDenied', apigw.ResponseType.ACCESS_DENIED, '403', 'forbidden', 'Access is denied.', false],
+      ['Throttled', apigw.ResponseType.THROTTLED, '429', 'rate_limited', 'Too many requests. Try again shortly.', true],
+      ['Default4xx', apigw.ResponseType.DEFAULT_4XX, '', 'invalid_request', 'The request could not be processed.', false],
+      ['Default5xx', apigw.ResponseType.DEFAULT_5XX, '', 'internal_error', 'An internal error occurred.', false],
+    ];
+    for (const [name, type, statusCode, code, message, retriable] of gatewayResponses) {
+      api.addGatewayResponse(`${name}Response`, {
+        type,
+        ...(statusCode ? { statusCode } : {}),
+        responseHeaders: { 'Access-Control-Allow-Origin': `'${siteUrl}'` },
+        templates: { 'application/json': envelope(code, message, retriable) },
+      });
+    }
+
+    // ADR: UsagePlan carries the account-wide throttle (B22/B78) | Rationale: the decided control; the stage-wide default above is what actually enforces it for Cognito callers
+    const usagePlan = api.addUsagePlan('ApiUsagePlan', {
+      name: 'cei-account-wide',
+      throttle: { rateLimit: requestsPerSecond, burstLimit: requestsPerSecond },
+    });
+    usagePlan.addApiStage({ stage: api.deploymentStage });
+
+    // CORS preflight cannot carry credentials, so OPTIONS methods are the only unauthenticated ones
+    for (const child of api.node.findAll()) {
+      if (child instanceof apigw.CfnMethod && child.httpMethod === 'OPTIONS') {
+        child.requestValidatorId = requestValidator.requestValidatorId;
+        NagSuppressions.addResourceSuppressions(child, [
+          { id: 'AwsSolutions-APIG4', reason: 'ADR: CORS preflight OPTIONS without authorizer | Rationale: browsers never send credentials on a preflight request; the method is a MOCK integration returning only CORS headers | Alternative: authorizer on OPTIONS rejected — would make every cross-origin call fail' },
+          { id: 'AwsSolutions-COG4', reason: 'ADR: CORS preflight OPTIONS without Cognito authorizer | Rationale: browsers never send credentials on a preflight request; the method is a MOCK integration returning only CORS headers | Alternative: authorizer on OPTIONS rejected — would make every cross-origin call fail' },
+        ]);
+      }
+    }
+
+    NagSuppressions.addResourceSuppressions(
+      api.node.findChild('CloudWatchRole'),
+      [
+        {
+          id: 'AwsSolutions-IAM4',
+          reason: 'ADR: AmazonAPIGatewayPushToCloudWatchLogs managed policy on the API Gateway account logging role | Rationale: CDK-owned role for the account-level CloudWatch setting that API access logs require; AWS documents this policy for exactly this purpose | Alternative: hand-written logs policy rejected because the role can only be assumed by API Gateway and is not under per-API control',
+          appliesTo: ['Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'],
+        },
+      ],
+    );
+
+    // ---------------------------------------------------------------
     // BucketDeployment — SPA assets, then config.json (no-cache) in a second
     // deployment so its Cache-Control never applies to the hashed SPA assets
     // ---------------------------------------------------------------
@@ -282,6 +504,8 @@ export class BackendStack extends cdk.Stack {
       distributionPaths: ['/*'],
     });
 
+    const apiBaseUrl = `${apiOrigin}/${api.deploymentStage.stageName}`;
+
     const configDeployment = new s3deploy.BucketDeployment(this, 'RuntimeConfigDeployment', {
       sources: [
         s3deploy.Source.jsonData('config.json', {
@@ -289,6 +513,7 @@ export class BackendStack extends cdk.Stack {
           userPoolId: userPool.userPoolId,
           userPoolClientId: spaClient.userPoolClientId,
           cognitoDomain: cognitoDomainUrl,
+          apiBaseUrl,
         }),
       ],
       destinationBucket: siteBucket,
@@ -310,6 +535,7 @@ export class BackendStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'CognitoDomain', { value: cognitoDomainUrl });
     new cdk.CfnOutput(this, 'DistributionDomainName', { value: distribution.distributionDomainName });
     new cdk.CfnOutput(this, 'SiteUrl', { value: siteUrl });
+    new cdk.CfnOutput(this, 'ApiBaseUrl', { value: apiBaseUrl });
 
     // ---------------------------------------------------------------
     // cdk-nag suppressions (ADR format) — see F2 phase file / plan for the approved list
