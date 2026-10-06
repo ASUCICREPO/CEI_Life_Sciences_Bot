@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 from pathlib import Path
 from typing import Any, Mapping
@@ -189,6 +190,14 @@ def _summarize(outcome_result: dict[str, Any] | None) -> str:
     return text[:_DEPENDENCY_SUMMARY_CHARS]
 
 
+def _plain_detail(text: str | None, limit: int = 200) -> str:
+    """One plain-text line for the job status table (no Markdown marks)."""
+    plain = re.sub(r"[#*_`>|]+", " ", text or "")
+    plain = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", plain)
+    plain = " ".join(plain.split())
+    return plain if len(plain) <= limit else plain[: limit - 1].rstrip() + "…"
+
+
 async def dispatch(state: PipelineState, config: RunnableConfig) -> dict[str, Any]:
     """Launch sub-tasks on the appropriate agents (concurrent, sequential, or looped)."""
     plan_obj = state["plan"]
@@ -264,7 +273,7 @@ async def dispatch(state: PipelineState, config: RunnableConfig) -> dict[str, An
             trace.extend(outcome.trace)
             if job_id:
                 JOB_REGISTRY.update_step(
-                    job_id, sid, status.status.value, error=status.error, detail=(outcome.text or "")[:200]
+                    job_id, sid, status.status.value, error=status.error, detail=_plain_detail(outcome.text)
                 )
 
         ran.extend(ready_ids)

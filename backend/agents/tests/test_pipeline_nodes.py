@@ -345,3 +345,10 @@ def test_reject_plan_ends_run_without_dispatch(monkeypatch) -> None:
     ))
     assert final["plan_approved"] is False
     assert not dispatcher_calls
+
+
+def test_plain_detail_strips_markdown_and_caps_length() -> None:
+    assert nodes._plain_detail("# Title\n\n**Bold** [link](https://x.org) `code`") == "Title Bold link code"
+    long = nodes._plain_detail("word " * 100, limit=20)
+    assert len(long) == 20 and long.endswith("…")
+    assert nodes._plain_detail(None) == ""
