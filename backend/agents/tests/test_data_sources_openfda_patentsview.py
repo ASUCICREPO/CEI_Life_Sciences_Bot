@@ -104,3 +104,34 @@ def test_patentsview_direct_invoke_never_raises_on_http_error(monkeypatch) -> No
     assert result.results == []
     assert result.citations == []
     assert "error" in result.query_metadata
+
+
+def test_openfda_splits_or_terms_and_builds_one_clause_per_term(monkeypatch) -> None:
+    from shared.tools.data_sources.openfda import _search_terms
+
+    assert _search_terms('sotorasib OR adagrasib, "Amgen"; sotorasib') == ["sotorasib", "adagrasib", "Amgen"]
+    assert _search_terms("  ") == []
+
+    searches: list[str] = []
+
+    class _NotFound:
+        status_code = 404
+
+    def _fake_get(url, params=None, **_kwargs):  # noqa: ANN001
+        searches.append(params["search"])
+        return _NotFound()
+
+    monkeypatch.setattr("shared.tools.data_sources.openfda.requests.get", _fake_get)
+    result = OpenFDATool(direct_mode=True).invoke(query="sotorasib OR adagrasib")
+    assert result.results == []
+    assert all('"sotorasib"' in s and '"adagrasib"' in s for s in searches)
+    assert 'indications_and_usage:"sotorasib"' in searches[1]
+
+
+def test_openfda_empty_query_makes_no_call(monkeypatch) -> None:
+    def _fail(*_a, **_k):  # noqa: ANN002, ANN003
+        raise AssertionError("no HTTP call expected")
+
+    monkeypatch.setattr("shared.tools.data_sources.openfda.requests.get", _fail)
+    result = OpenFDATool(direct_mode=True).invoke(query='""')
+    assert result.results == [] and result.query_metadata["errors"] == ["empty query"]
