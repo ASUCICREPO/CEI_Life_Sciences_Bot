@@ -56,6 +56,9 @@ Implement the Pipeline Manager: it plans a multi-step task across Research/Draft
 - **Resolved by B83:** the `dispatch` mechanism is no longer an open question. Unlike Drafting's `research_subagent` (B71: in-process, does not call the Research runtime), Pipeline Manager's dispatch is the opposite pattern — it always calls the target specialist's own AgentCore Runtime (`InvokeAgentRuntime`), never in-process. Do not reuse Drafting's in-process pattern here.
 - Frontend wiring (task 8) cannot start until F2 has ported the founder-ai-dashboard into `frontend/`; if F2 has not landed by the time this phase's backend work is done, ship the backend pieces first and hold the frontend task.
 
+## MVP slice (B94, B95, B96, B98)
+Built before F13/F16 for the client demo, local only. In scope: all five nodes, plan approval as a real `interrupt()`, in-process dispatch behind a `Dispatcher` interface (sequential and concurrent waves from the dependency graph), a background `asyncio` task registered with `add_async_task`, an in-memory `JobRegistry`, `op: "job_status"` with `steps[]` and a CEI UI status surface, `pipeline_main.py` on port 8084, replay mode, and `/pipeline?job=<id>` polling in the Vite dashboard. Still left for the full phase: B83 runtime dispatch, F16 Job ID Store/Polling Lambda/watchdog, the CDK runtime construct.
+
 ## Handoff notes
 - F20 (Alarms) should *not* add a Pipeline-Manager-specific "stuck pipeline" alarm — B75 explicitly excludes agent-health alarms in favor of the watchdog (F16) and the dashboard (`/pipeline` itself).
 - F19 (data deletion) must be able to cancel and clean up an in-flight Pipeline Manager job as part of an account-delete cascade — coordinate the job's `session_id` linkage so F19 can find it via the Job ID Store.

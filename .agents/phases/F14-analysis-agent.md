@@ -55,6 +55,9 @@ Implement the Analysis Agent's real logic: gather evidence, analyze it, build co
 - Comparison framework design (`compare` node) is a **Proposal (not decided)** — agents.md does not specify one; flagged above.
 - HITL point design for Analysis was itself a "Proposal (not decided)" in `agents.md` §3 before B72; B72 has now decided the *point* (scope confirmation before analysis) but not its exact UI shape (multiple-choice vs. free text vs. a mixed ReviewGate) — this phase picks a `ReviewGate`-with-editable-fields shape as a reasonable default, not a decided one.
 
+## MVP slice (B94, B96, B97)
+Built before F6/F13 for the client demo, local only. In scope: all three analysis types with a fixed framework per type, graph `scope → confirm_scope → gather → analyze → compare → report`, the scope gate as a real `interrupt()` on the in-process `InMemorySaver` (resumed by `op: "resume"`), the new openFDA and PatentsView direct-mode sources, `build_analysis_surface` (CEI UI 1.1), `analysis_main.py` on port 8083, and `analysis/run.py` `run_analysis(...)` for the Pipeline Manager. Still left for the full phase: F6 streaming, F13's durable checkpointer and `/ui-actions`, F4 Gateway calls, F11 memory.
+
 ## Handoff notes
 - F17 (Pipeline Manager) will call the Analysis Agent as one of its dispatched sub-tasks — it needs `analysis_main.py`'s entrypoint contract (`{prompt, mode, user_id, session_id, analysis_type}` in, `ResponseDocument` + CEI UI out) to be stable before it can wire dispatch.
 - F16 (background jobs) will convert `analysis_main.py`'s synchronous entrypoint to the async-session pattern; keep the node logic itself free of any assumption about sync vs. async execution.

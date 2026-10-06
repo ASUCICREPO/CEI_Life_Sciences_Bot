@@ -26,10 +26,10 @@ This file is owned by the documentation agent. The phase files S1–S10 (spikes)
 | F11 | Long-term memory | AgentCore Memory long-term strategies (user preferences, semantic facts). | F5 | `data-model.md` §9, `agents.md` §6 | not started (owned by parallel agent) |
 | F12 | Web search + LS ops | Web Search connector, Life Sciences Operations Lambda. | F4 | `tools.md` §3–4, `auth-and-tool-scope.md` §3 | not started (owned by parallel agent) |
 | F13 | HITL | Real pause/resume in all agents, typed action endpoint in production. | F6, S4 | `agents.md` (HITL points), `api.md` (`/ui-actions`), `streaming-protocol.md` (`hitl_request`) | not started (owned by parallel agent) |
-| F14 | Analysis agent | Full Analysis agent implementation. | F6, F13 | `agents.md` §3 | not started (owned by parallel agent) |
+| F14 | Analysis agent | Full Analysis agent implementation. | F6, F13 | `agents.md` §3 | MVP slice in progress (B94) |
 | F15 | Tool agents | 1 runtime + 11 YAML profiles, NCBI Gateway targets. | F4, F6 | `agents.md` §5, `tools.md` §2 | not started (owned by parallel agent) |
 | F16 | Background jobs | Job ID Store, Polling Lambda, watchdog, cancel. | F5, S3 | `data-model.md` §3, `api.md` (Jobs) | not started (owned by parallel agent) |
-| F17 | Pipeline Manager | Full Pipeline Manager implementation, plan approval, `/pipeline` job view. | F13, F16 | `agents.md` §4, `architecture.md` §2.4 | not started (owned by parallel agent) |
+| F17 | Pipeline Manager | Full Pipeline Manager implementation, plan approval, `/pipeline` job view. | F13, F16 | `agents.md` §4, `architecture.md` §2.4 | MVP slice in progress (B94) |
 | F18 | User API keys | Settings page, Secrets Manager, key use in Gateway Lambdas. | F4 | `data-model.md` §8, `api.md` (`/settings/api-keys`) | not started (owned by parallel agent) |
 | F19 | Data deletion | Delete chat, delete account cascades. | F10, F11 | `data-model.md` (Deletion cascade), `api.md` (Account) | not started (owned by parallel agent) |
 | F20 | Alarms | CloudWatch alarms, SNS email, dashboards. | F5 | `security.md` (Observability), decision log B75 | not started (owned by parallel agent) |
