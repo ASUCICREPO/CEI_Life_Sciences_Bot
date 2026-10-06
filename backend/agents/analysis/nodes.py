@@ -107,34 +107,45 @@ def scope(state: AnalysisState) -> dict[str, Any]:
     loader = PromptLoader(agent_templates_dir=_ANALYSIS_TEMPLATES_DIR)
     system_prompt = loader.render("scope.j2", correction=correction)
 
-    model = get_model().with_structured_output(ScopeProposal, include_raw=True)
-    raw_result = model.invoke([
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"User request: {query}"},
-    ])
-    parsed: ScopeProposal = raw_result["parsed"]
-    in_tok, out_tok = extract_tokens(raw_result["raw"])
-
-    analysis_type = forced_type if forced_type is not None else parsed.analysis_type
+    parsed, raw, error = invoke_structured(
+        get_model(),
+        ScopeProposal,
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"User request: {query}"},
+        ],
+    )
+    in_tok, out_tok = extract_tokens(raw) if raw is not None else (0, 0)
     revision = state.get("scope_revision", 0) + 1
 
-    trace = TraceEntry(
-        stage="SCOPE",
-        detail=(
-            f"type={analysis_type.value} | competitors={parsed.competitors} | "
-            f"market={parsed.market} | jurisdiction={parsed.jurisdiction} | revision={revision}"
-        ),
-        input_tokens=in_tok,
-        output_tokens=out_tok,
-    )
+    if parsed is not None:
+        analysis_type = forced_type if forced_type is not None else parsed.analysis_type
+        competitors = parsed.competitors
+        market = parsed.market
+        jurisdiction = parsed.jurisdiction
+        focal_entity = parsed.focal_entity
+        detail = (
+            f"type={analysis_type.value} | competitors={competitors} | "
+            f"market={market} | jurisdiction={jurisdiction} | revision={revision}"
+        )
+    else:
+        # ADR: never crash on a parse failure | fall back to the caller's own scope (B94)
+        analysis_type = forced_type if forced_type is not None else AnalysisType.COMPETITOR
+        competitors = state.get("competitors", [])
+        market = state.get("market")
+        jurisdiction = state.get("jurisdiction")
+        focal_entity = state.get("focal_entity")
+        detail = f"fallback | revision={revision} | error={error}"
+
+    trace = TraceEntry(stage="SCOPE", detail=detail, input_tokens=in_tok, output_tokens=out_tok)
     logger.info({"event": "scope_complete", "analysis_type": analysis_type.value, "revision": revision})
     return {
         "query": query,
         "analysis_type": analysis_type,
-        "competitors": parsed.competitors,
-        "market": parsed.market,
-        "jurisdiction": parsed.jurisdiction,
-        "focal_entity": parsed.focal_entity,
+        "competitors": competitors,
+        "market": market,
+        "jurisdiction": jurisdiction,
+        "focal_entity": focal_entity,
         "scope_revision": revision,
         "scope_correction": None,
         "trace": [trace],
