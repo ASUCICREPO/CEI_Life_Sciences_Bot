@@ -54,6 +54,64 @@ class GetUserInputPrompt(BaseModel):
     placeholder: str = ""
 
 
+def build_scope_confirmation_surface(
+    *,
+    surface_id: str,
+    revision: int,
+    analysis_type: str,
+    competitors: list[str],
+    market: str | None,
+    jurisdiction: str | None,
+    focal_entity: str | None,
+) -> dict[str, object]:
+    """A ReviewGate + free-text edit field for the Analysis scope-confirmation HITL point (B94/F14)."""
+    scope_lines: list[str] = [f"Analysis type: {analysis_type}"]
+    if focal_entity:
+        scope_lines.append(f"Focal entity: {focal_entity}")
+    if competitors:
+        scope_lines.append(f"Competitors: {', '.join(competitors)}")
+    if market:
+        scope_lines.append(f"Market: {market}")
+    if jurisdiction:
+        scope_lines.append(f"Jurisdiction: {jurisdiction}")
+
+    plan_steps = [
+        PlanStep(step_id=f"scope-{index}", title=line)
+        for index, line in enumerate(scope_lines, start=1)
+    ]
+
+    surface = CEIUISurface(
+        surface_id=surface_id,
+        revision=revision,
+        root_id="scope-root",
+        components=[
+            ColumnComponent(id="scope-root", children=["scope-intro", "scope-review", "scope-edit"]),
+            TextComponent(
+                id="scope-intro",
+                content="Confirm the analysis scope before gathering evidence, or edit it below.",
+            ),
+            ReviewGateComponent(
+                id="scope-review",
+                interaction_id="analysis-scope-review",
+                plan=Plan(summary=f"Proposed {analysis_type} analysis scope", steps=plan_steps),
+                actions=[
+                    ActionDescriptor(action_id="approve-scope", label="Approve", intent="approve"),
+                    ActionDescriptor(action_id="reject-scope", label="Reject", intent="reject"),
+                ],
+            ),
+            TextFieldComponent(
+                id="scope-edit",
+                interaction_id="analysis-scope-edit",
+                label="Edit the scope (free text)",
+                placeholder="For example: add Pfizer, focus on EU market",
+                multiline=True,
+                action=ActionDescriptor(action_id="edit-scope", label="Submit edit", intent="submit"),
+            ),
+        ],
+    )
+    return surface.model_dump(mode="json")
+
+
 class InlineFunctionRegistry:
     def _ask_user_question(self, question: str, options: list[str]) -> dict[str, object]:
         surface = CEIUISurface(

@@ -1,0 +1,17 @@
+Build a fixed-framework legal and regulatory landscape summary from the findings below, for jurisdiction: {{ jurisdiction or '(unspecified)' }}.
+
+Use exactly these dimensions, in this order:
+1. Regulatory pathway and designations
+2. Approvals and labels
+3. Patent landscape and expiries
+4. Coverage and reimbursement
+5. Open risks
+
+For each dimension, give exactly one finding (a short paragraph). Cite source IDs in square brackets, for example [PMID:123].
+
+Respond ONLY with valid JSON matching this schema:
+{
+  "comparisons": [
+    {"dimension": "...", "findings": ["..."], "sources": ["..."]}
+  ]
+}

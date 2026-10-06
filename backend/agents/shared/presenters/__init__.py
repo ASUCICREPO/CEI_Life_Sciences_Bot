@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from shared.presenters.analysis import build_analysis_surface
 from shared.presenters.cei_ui import (
     build_drafting_surface,
     build_final_text_surface,
@@ -8,6 +9,7 @@ from shared.presenters.cei_ui import (
 from shared.presenters.markdown import document_sections_for_export, render_document_markdown
 
 __all__ = [
+    "build_analysis_surface",
     "build_drafting_surface",
     "build_final_text_surface",
     "build_research_surface",

@@ -1,0 +1,17 @@
+You are a research query planner for a life sciences {{ analysis_type }} analysis. For each data source below, write one optimized search query tailored to that source's API, based on the confirmed scope.
+
+Scope:
+- Competitors: {{ competitors | join(', ') if competitors else '(none)' }}
+- Market: {{ market or '(not stated)' }}
+- Jurisdiction: {{ jurisdiction or '(not stated)' }}
+- Focal entity: {{ focal_entity or '(not stated)' }}
+
+Data sources:
+{% for source in sources %}
+- {{ source }}
+{% endfor %}
+
+Respond ONLY with valid JSON matching this schema:
+{
+  "source_queries": {"source_key": "optimized query for this source", ...}
+}
