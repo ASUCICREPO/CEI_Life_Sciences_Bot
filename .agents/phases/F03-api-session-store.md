@@ -1,6 +1,6 @@
 # F03 — API + session store
 
-Status: not started | Depends on: F2 | Decisions: B2, B12, B22, B59, B78 | Specs: [`../specs/api.md`](../specs/api.md) (Sessions, Chat history routes; error envelope; pagination), [`../specs/data-model.md`](../specs/data-model.md) §1–2 (Session Metadata Store, Chat History Store), [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) §9/§11
+Status: in progress (deployed integration check remains) | Depends on: F2 | Decisions: B2, B12, B22, B59, B78 | Specs: [`../specs/api.md`](../specs/api.md) (Sessions, Chat history routes; error envelope; pagination), [`../specs/data-model.md`](../specs/data-model.md) §1–2 (Session Metadata Store, Chat History Store), [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) §9/§11
 
 ## Goal
 
@@ -24,15 +24,15 @@ Stand up the one Regional REST API with the Cognito authorizer and account-wide 
 
 ## Tasks
 
-- [ ] 1. Add the `RestApi` construct (Regional endpoint), the Cognito authorizer, and the account-wide 20 rps `UsagePlan` throttle (B78: no per-route throttle) to `backend-stack.ts`.
-- [ ] 2. Add the `ChatMetadataStore` table (`PK=user_id`, `SK=session_id`) and `ChatHistoryStore` table (`PK=session_id`, `SK=sequence_number`), AWS-managed encryption (B52), no TTL (B8/B58).
-- [ ] 3. Implement `get`, `update_title`, `increment_message_count`, `archive` in `shared/persistence/chat_metadata.py`; add the `mode` attribute (science/business, B55) and `model_id` attribute (B18) to `ChatMetadataRecord` if not already present.
-- [ ] 4. Write the shared error-envelope helper (`code`, `message`, `request_id`, `retriable`) and the cursor-pagination envelope helper (`items`, `next_cursor`, `has_more`), matching `api.md` exactly, including default `limit=20`/max `limit=100` (B78).
-- [ ] 5. Write `session-metadata-handler`: `POST /sessions` (create, request `{title, mode, model_id}`), `GET /sessions` (paginated list), `GET /sessions/{sessionId}` (single get), `PATCH /sessions/{sessionId}` (partial update of `title`/`mode`).
-- [ ] 6. Write `session-history-handler`: `GET /sessions/{sessionId}/history?limit=&cursor=` returning turns only, newest-page-first-then-chronological per B59, using `ChatHistoryStore.load_page`.
-- [ ] 7. Wire both Lambdas' IAM roles to only the tables they need (least privilege, per `security.md`'s IAM control).
-- [ ] 8. Add per-user isolation checks: every handler must derive `user_id` from the Cognito authorizer's claims (never from a request body/path parameter) before any table read/write, per B12.
-- [ ] 9. Add CDK assertion tests and cdk-nag suppressions (ADR format) for any new findings on the API/table constructs.
+- [x] 1. Add the `RestApi` construct (Regional endpoint), the Cognito authorizer, and the account-wide 20 rps `UsagePlan` throttle (B78: no per-route throttle) to `backend-stack.ts`.
+- [x] 2. Add the `ChatMetadataStore` table (`PK=user_id`, `SK=session_id`) and `ChatHistoryStore` table (`PK=session_id`, `SK=sequence_number`), AWS-managed encryption (B52), no TTL (B8/B58).
+- [x] 3. Implement `get`, `update_title`, `increment_message_count`, `archive` in `shared/persistence/chat_metadata.py`; add the `mode` attribute (science/business, B55) and `model_id` attribute (B18) to `ChatMetadataRecord` if not already present.
+- [x] 4. Write the shared error-envelope helper (`code`, `message`, `request_id`, `retriable`) and the cursor-pagination envelope helper (`items`, `next_cursor`, `has_more`), matching `api.md` exactly, including default `limit=20`/max `limit=100` (B78).
+- [x] 5. Write `session-metadata-handler`: `POST /sessions` (create, request `{title, mode, model_id}`), `GET /sessions` (paginated list), `GET /sessions/{sessionId}` (single get), `PATCH /sessions/{sessionId}` (partial update of `title`/`mode`).
+- [x] 6. Write `session-history-handler`: `GET /sessions/{sessionId}/history?limit=&cursor=` returning turns only, newest-page-first-then-chronological per B59, using `ChatHistoryStore.load_page`.
+- [x] 7. Wire both Lambdas' IAM roles to only the tables they need (least privilege, per `security.md`'s IAM control).
+- [x] 8. Add per-user isolation checks: every handler must derive `user_id` from the Cognito authorizer's claims (never from a request body/path parameter) before any table read/write, per B12.
+- [x] 9. Add CDK assertion tests and cdk-nag suppressions (ADR format) for any new findings on the API/table constructs.
 
 ## Acceptance criteria
 
