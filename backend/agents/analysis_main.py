@@ -16,6 +16,7 @@ from shared.presenters import build_analysis_surface
 from shared.response_text import final_ai_text
 from shared.runtime import (
     PendingInterrupts,
+    ReplayHub,
     RuntimeOp,
     action_response,
     awaiting_envelope,
@@ -37,6 +38,16 @@ _CHECKPOINT_LIMIT = 128
 _checkpointer = InMemorySaver()
 _thread_ids: "OrderedDict[str, bool]" = OrderedDict()
 _pending = PendingInterrupts()
+_replay = ReplayHub.for_agent("analysis")
+# Replay scenario key per thread: "<analysis_type>|<prompt>" (B94 replay mode).
+_thread_scenarios: "OrderedDict[str, str]" = OrderedDict()
+
+
+def _remember_scenario(thread_id: str, scenario: str) -> None:
+    _thread_scenarios[thread_id] = scenario
+    _thread_scenarios.move_to_end(thread_id)
+    while len(_thread_scenarios) > _CHECKPOINT_LIMIT:
+        _thread_scenarios.popitem(last=False)
 
 
 def _runtime_port() -> int:
@@ -157,6 +168,12 @@ async def invoke(payload, context):  # noqa: ANN001
 
     if op is RuntimeOp.RESUME:
         action = parse_action(payload)
+        scenario = _thread_scenarios.get(session_id, "")
+        if _replay.enabled:
+            replayed = _replay.on_resume(scenario, session_id=session_id, action=action, job_id=None)
+            if replayed is not None:
+                return replayed
+
         stale = check_resume(_pending, session_id, action)
         if stale is not None:
             return stale
@@ -174,12 +191,21 @@ async def invoke(payload, context):  # noqa: ANN001
             envelope = _completed_result(session_id, result)
 
         envelope["action_response"] = response
+        if _replay.mode.value == "record" and scenario:
+            _replay.record_resume(scenario, envelope)
         return envelope
 
     prompt = parse_prompt(payload)
     mode = parse_mode(payload)
     user_id: str = payload.get("user_id", "cli-user")
     analysis_type = payload.get("analysis_type")
+    scenario = f"{analysis_type or 'auto'}|{prompt}"
+    _remember_scenario(session_id, scenario)
+
+    if _replay.enabled:
+        replayed = _replay.on_run(scenario, session_id=session_id)
+        if replayed is not None:
+            return replayed
 
     _touch_thread(session_id)
     log.info(f"Analysis agent invoked: session={session_id}, mode={mode}, analysis_type={analysis_type}")
@@ -188,9 +214,12 @@ async def invoke(payload, context):  # noqa: ANN001
     surface = extract_interrupt_surface(result)
     if surface is not None:
         _pending.register(session_id, surface)
-        return awaiting_envelope(surface, "Confirm the analysis scope before proceeding.")
-
-    return _completed_result(session_id, result)
+        envelope = awaiting_envelope(surface, "Confirm the analysis scope before proceeding.")
+    else:
+        envelope = _completed_result(session_id, result)
+    if _replay.mode.value == "record":
+        _replay.record_run(scenario, envelope)
+    return envelope
 
 
 if __name__ == "__main__":
