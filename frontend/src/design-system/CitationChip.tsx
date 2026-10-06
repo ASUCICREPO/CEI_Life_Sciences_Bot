@@ -1,6 +1,6 @@
-import { ExternalLink, BookOpen, Database, FileText } from 'lucide-react';
+import { ExternalLink, BookOpen, Database, FileText, Scale } from 'lucide-react';
 
-export type SourceType = 'pubmed' | 'database' | 'trial' | 'patent' | 'preprint' | 'web';
+export type SourceType = 'pubmed' | 'database' | 'trial' | 'patent' | 'preprint' | 'web' | 'regulatory';
 
 interface CitationChipProps {
   id: string;
@@ -17,6 +17,7 @@ const sourceIcons: Record<SourceType, typeof BookOpen> = {
   patent: FileText,
   preprint: BookOpen,
   web: ExternalLink,
+  regulatory: Scale,
 };
 
 const sourceColors: Record<SourceType, string> = {
@@ -26,7 +27,22 @@ const sourceColors: Record<SourceType, string> = {
   patent: 'bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100',
   preprint: 'bg-orange-50 text-orange-800 border-orange-200 hover:bg-orange-100',
   web: 'bg-gray-50 text-gray-800 border-gray-200 hover:bg-gray-100',
+  regulatory: 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100',
 };
+
+// ADR: maps backend SourceType values (shared/schemas/citation.py) to the
+// CitationChip's display source type | the backend has more granular source
+// names than the chip has colors for.
+const BACKEND_SOURCE_TYPE_MAP: Record<string, SourceType> = {
+  openfda: 'regulatory',
+  patentsview: 'patent',
+  clinical_trials: 'trial',
+  pubmed: 'pubmed',
+};
+
+export function toChipSourceType(backendSourceType: string): SourceType {
+  return BACKEND_SOURCE_TYPE_MAP[backendSourceType] ?? 'database';
+}
 
 export function CitationChip({ id, label, sourceType, onClick, isActive }: CitationChipProps) {
   const Icon = sourceIcons[sourceType];
