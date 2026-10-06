@@ -7,12 +7,14 @@ import { taskConversations, defaultConversation, generateAnswer, starterPrompts 
 import type { TaskConversation, ChatMessage } from '../mocks/conversations';
 import { ViewMode } from '../design-system/tokens';
 import { ChatResponse } from '../components/ChatResponse';
+import { LiveAgentChat } from '../components/LiveAgentChat';
 import { NcbiToolCard } from '../components/NcbiToolCard';
 import { NcbiToolMenu } from '../components/NcbiToolMenu';
 import { detectNcbiTool, getNcbiTool } from '../mocks/ncbiTools';
 import type { NcbiToolId } from '../mocks/ncbiTools';
+import type { AnalysisType } from '../lib/agentClient';
 import {
-  FlaskConical, Target, Atom, Map, Eye, Package, Zap,
+  FlaskConical, Target, Atom, Map, Eye, Package, Zap, Scale, GitBranch,
   ArrowRight, Clock, ShieldAlert, Search, Send, User, Bot,
   ArrowLeft, Plus, Dna
 } from 'lucide-react';
@@ -24,17 +26,31 @@ const groupIcons: Record<string, typeof FlaskConical> = {
   'map-path-to-market': Map,
   'watch-landscape': Eye,
   'produce-deliverable': Package,
+  'landscape-analysis': Scale,
+  'run-a-pipeline': GitBranch,
   'cross-domain': Zap,
 };
+
+// ADR: live tasks call the local AgentCore runtimes | every other task keeps
+// its existing mock chat (taskConversations) unchanged.
+const liveAnalysisTaskIds: Record<string, AnalysisType> = {
+  'analysis-competitor': 'competitor',
+  'analysis-market': 'market',
+  'analysis-legal': 'legal_landscape',
+};
+const livePipelineTaskId = 'run-pipeline';
+const liveTaskIds = new Set([...Object.keys(liveAnalysisTaskIds), livePipelineTaskId]);
 
 const scienceTaskIds = new Set([
   'research-question', 'check-sequence', 'find-public-data', 'target-assessment',
   'variant-interpretation', 'structure-prediction', 'compound-discovery', 'scientific-documents',
+  ...liveTaskIds,
 ]);
 
 const businessTaskIds = new Set([
   'regulatory-planning', 'clinical-landscape', 'patent-fto', 'competitor-monitoring',
   'investor-materials', 'end-to-end-pipeline',
+  ...liveTaskIds,
 ]);
 
 export function TaskLauncherPage() {
@@ -160,6 +176,38 @@ export function TaskLauncherPage() {
     e.preventDefault();
     askQuestion(inputValue);
   };
+
+  // ─── ACTIVE TASK: Live agent (Analysis / Pipeline Manager) ──
+  if (activeTask && liveTaskIds.has(activeTask)) {
+    const analysisType = liveAnalysisTaskIds[activeTask];
+    const taskDef = mockTaskGroups.flatMap((group) => group.tasks).find((task) => task.id === activeTask);
+    const agentMode = mode === ViewMode.BUSINESS ? 'business' : 'science';
+    return (
+      <div className="h-full flex flex-col">
+        <div className="border-b border-border-subtle px-6 py-2.5 bg-surface-elevated flex items-center gap-3 flex-shrink-0">
+          <button
+            onClick={handleBack}
+            className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-cei-blue transition-colors"
+          >
+            <ArrowLeft size={14} />
+            Back to tasks
+          </button>
+        </div>
+        <div className="flex-1 overflow-hidden">
+          <LiveAgentChat
+            agent={analysisType ? 'analysis' : 'pipeline'}
+            mode={agentMode}
+            analysisType={analysisType}
+            threadKey={activeTask}
+            title={taskDef?.title ?? 'Live agent'}
+            description={taskDef?.description ?? ''}
+            examples={taskDef?.examples ?? []}
+            placeholder={analysisType ? 'Describe the competitor, market, or legal scope to analyze...' : 'Describe the multi-step request...'}
+          />
+        </div>
+      </div>
+    );
+  }
 
   // ─── ACTIVE TASK: Show inline chat ───────────────────────────
   if (activeTask) {

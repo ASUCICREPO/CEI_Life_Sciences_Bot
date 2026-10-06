@@ -230,6 +230,72 @@ export const mockTaskGroups: TaskGroup[] = [
     ],
   },
   {
+    id: 'landscape-analysis',
+    title: 'Landscape Analysis',
+    description: 'Run a connected competitor, market, or legal and regulatory analysis with a scope you confirm.',
+    sciencePriority: 8,
+    businessPriority: 8,
+    tasks: [
+      {
+        id: 'analysis-competitor',
+        title: 'Competitor landscape analysis',
+        description: 'Compare competitors on modality, stage, trial activity, approvals, and patent position. You confirm the scope before it runs.',
+        examples: [
+          'Compare the competitive landscape for KRAS G12C inhibitors.',
+          'Who are the main competitors targeting IL-23 in psoriasis?',
+        ],
+        useCaseRefs: [],
+        estimatedTime: '2 to 6 minutes',
+        requiresApproval: true,
+      },
+      {
+        id: 'analysis-market',
+        title: 'Market landscape analysis',
+        description: 'Assess patient population, standard of care, reimbursement, pipeline density, and market drivers. You confirm the scope before it runs.',
+        examples: [
+          'Size the market landscape for a first-line NSCLC companion diagnostic.',
+          'What does the market look like for cell therapies in multiple myeloma?',
+        ],
+        useCaseRefs: [],
+        estimatedTime: '2 to 6 minutes',
+        requiresApproval: true,
+      },
+      {
+        id: 'analysis-legal',
+        title: 'Legal and regulatory landscape analysis',
+        description: 'Map regulatory pathway, approvals and labels, patent landscape, and coverage risk by jurisdiction. You confirm the scope before it runs.',
+        examples: [
+          'What is the regulatory and patent landscape for CRISPR-based diagnostics in the US and EU?',
+          'Assess the legal landscape for our ADC platform.',
+        ],
+        useCaseRefs: [],
+        estimatedTime: '2 to 6 minutes',
+        requiresApproval: true,
+      },
+    ],
+  },
+  {
+    id: 'run-a-pipeline',
+    title: 'Run a Pipeline',
+    description: 'Describe a multi-step request and the Pipeline Manager plans and runs it across agents.',
+    sciencePriority: 9,
+    businessPriority: 9,
+    tasks: [
+      {
+        id: 'run-pipeline',
+        title: 'Run a multi-step pipeline',
+        description: 'Give one connected request. The Pipeline Manager proposes a plan, runs it (in sequence or concurrently), and reports live step status.',
+        examples: [
+          'Research TP53 R175H inhibitors, analyze the competitor landscape, then draft a VC pitch.',
+          'Assess the market for our diagnostic, then draft an investor update.',
+        ],
+        useCaseRefs: [],
+        estimatedTime: '5 to 20 minutes',
+        requiresApproval: true,
+      },
+    ],
+  },
+  {
     id: 'cross-domain',
     title: 'Answer a Big Question',
     description: 'Connect multiple types of research and analysis into one decision package.',

@@ -1,0 +1,208 @@
+import { useId, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Bot, Send, User } from 'lucide-react';
+import { CEIUISurface } from './cei-ui/cei-ui-surface';
+import { SafeMarkdown } from './cei-ui/markdown';
+import {
+  AgentClientError,
+  getOrCreateSessionId,
+  invokeAgent,
+  setJobSession,
+  type AgentEnvelope,
+  type AgentMode,
+  type AgentName,
+  type AnalysisType,
+} from '../lib/agentClient';
+import type { CEIUISurface as CEIUISurfaceType } from '../lib/cei-ui/schema';
+
+interface LiveMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text?: string;
+  surface?: CEIUISurfaceType;
+  uiError?: string;
+  answered?: boolean;
+  isError?: boolean;
+}
+
+interface LiveAgentChatProps {
+  agent: AgentName;
+  mode: AgentMode;
+  analysisType?: AnalysisType;
+  threadKey: string;
+  title: string;
+  description: string;
+  examples: string[];
+  placeholder: string;
+}
+
+// ADR: a dedicated live chat for Analysis and Pipeline tasks | the mock task
+// chat (ChatResponse/taskConversations) stays untouched; this component talks
+// to the real local AgentCore runtimes through agentClient.
+export function LiveAgentChat({ agent, mode, analysisType, threadKey, title, description, examples, placeholder }: LiveAgentChatProps) {
+  const navigate = useNavigate();
+  const sessionId = useMemo(() => getOrCreateSessionId(threadKey), [threadKey]);
+  const [messages, setMessages] = useState<LiveMessage[]>([]);
+  const [inputValue, setInputValue] = useState('');
+  const [isRunning, setIsRunning] = useState(false);
+  const formId = useId();
+
+  function appendFromEnvelope(envelope: AgentEnvelope, isError = false): string {
+    const id = `${agent}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setMessages((prev) => [...prev, {
+      id,
+      role: 'assistant',
+      text: envelope.text,
+      surface: envelope.ui,
+      uiError: envelope.ui_error,
+      isError,
+    }]);
+    if (envelope.job_id) {
+      setJobSession(envelope.job_id, sessionId);
+      navigate(`/pipeline?job=${encodeURIComponent(envelope.job_id)}`);
+    }
+    return id;
+  }
+
+  async function askQuestion(prompt: string) {
+    const trimmed = prompt.trim();
+    if (!trimmed || isRunning) return;
+    setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', text: trimmed }]);
+    setInputValue('');
+    setIsRunning(true);
+    try {
+      const envelope = await invokeAgent(agent, { prompt: trimmed, mode, user_id: 'local-demo', analysis_type: analysisType }, sessionId);
+      appendFromEnvelope(envelope);
+    } catch (error) {
+      const message = error instanceof AgentClientError ? error.message : 'The agent could not be reached. Confirm the local runtime is running.';
+      setMessages((prev) => [...prev, { id: `error-${Date.now()}`, role: 'assistant', text: message, isError: true }]);
+    } finally {
+      setIsRunning(false);
+    }
+  }
+
+  function handleAction(messageId: string, envelope: AgentEnvelope) {
+    // ADR: disable the answered gate, then append the resumed surface as a new
+    // assistant turn | keeps the HITL history visible instead of overwriting it.
+    setMessages((prev) => prev.map((message) => (message.id === messageId ? { ...message, answered: true } : message)));
+    appendFromEnvelope(envelope);
+  }
+
+  const handleSend = (event: React.FormEvent) => {
+    event.preventDefault();
+    void askQuestion(inputValue);
+  };
+
+  return (
+    <div className="h-full flex flex-col">
+      <div className="border-b border-border-subtle px-6 py-3 bg-surface-elevated flex-shrink-0">
+        <p className="text-sm font-semibold text-text-primary">{title}</p>
+        <p className="text-xs text-text-secondary mt-0.5">{description}</p>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+        {messages.length === 0 && (
+          <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
+            <div className="w-12 h-12 rounded-2xl bg-cei-blue/10 flex items-center justify-center mb-4">
+              <Bot size={24} className="text-cei-blue" />
+            </div>
+            <h2 className="text-base font-semibold text-text-primary">Describe what you need</h2>
+            <p className="text-sm text-text-secondary mt-1.5">{description}</p>
+            <div className="flex flex-wrap gap-2 justify-center mt-4">
+              {examples.map((example) => (
+                <button
+                  key={example}
+                  onClick={() => void askQuestion(example)}
+                  className="text-xs px-3 py-1.5 rounded-full border border-border-subtle text-text-secondary hover:border-cei-blue-light/40 hover:text-cei-blue transition-all"
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {messages.map((message) => (
+          <div key={message.id}>
+            {message.role === 'user' && (
+              <div className="flex items-start gap-3 max-w-2xl">
+                <div className="w-6 h-6 rounded-full bg-cei-blue/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <User size={12} className="text-cei-blue" />
+                </div>
+                <p className="text-sm text-text-primary leading-relaxed">{message.text}</p>
+              </div>
+            )}
+            {message.role === 'assistant' && (
+              <div className="flex items-start gap-3">
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${message.isError ? 'bg-evidence-weak' : 'bg-cei-blue'}`}>
+                  <Bot size={12} className="text-white" />
+                </div>
+                <div className="flex-1 min-w-0 max-w-3xl">
+                  {message.uiError && (
+                    <p className="text-xs text-evidence-moderate mb-1.5">{message.uiError} Showing the plain-text answer instead.</p>
+                  )}
+                  {message.surface ? (
+                    <CEIUISurface
+                      surface={message.surface}
+                      agent={agent}
+                      sessionId={sessionId}
+                      fallbackText={message.text}
+                      disabled={message.answered}
+                      onAction={(envelope) => handleAction(message.id, envelope)}
+                    />
+                  ) : (
+                    <SafeMarkdown content={message.text ?? ''} />
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {isRunning && (
+          <div className="flex items-start gap-3">
+            <div className="w-6 h-6 rounded-full bg-cei-blue flex items-center justify-center flex-shrink-0 mt-0.5">
+              <Bot size={12} className="text-white" />
+            </div>
+            <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-surface-panel">
+              <span className="w-1.5 h-1.5 rounded-full bg-cei-blue/60 animate-pulse" />
+              <span className="w-1.5 h-1.5 rounded-full bg-cei-blue/60 animate-pulse [animation-delay:150ms]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-cei-blue/60 animate-pulse [animation-delay:300ms]" />
+              <span className="text-xs text-text-tertiary ml-1">Working. This can take a few minutes...</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-border-subtle bg-surface-elevated px-6 py-4 flex-shrink-0">
+        <form id={formId} onSubmit={handleSend} className="max-w-2xl mx-auto">
+          <div className="relative">
+            <textarea
+              value={inputValue}
+              onChange={(event) => setInputValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  handleSend(event);
+                }
+              }}
+              rows={1}
+              disabled={isRunning}
+              placeholder={placeholder}
+              className="w-full resize-y pl-4 pr-12 py-3 rounded-xl border border-border-subtle bg-surface-panel text-sm placeholder:text-text-tertiary focus:border-cei-blue-light focus:ring-2 focus:ring-cei-blue-light/20 transition-all disabled:opacity-60"
+              aria-label={placeholder}
+            />
+            <button
+              type="submit"
+              disabled={!inputValue.trim() || isRunning}
+              className="absolute right-2 top-2.5 p-2 rounded-lg bg-cei-blue text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-cei-navy transition-colors"
+              aria-label="Send"
+            >
+              <Send size={14} />
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
