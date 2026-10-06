@@ -12,6 +12,10 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  build: {
+    // ADR: never inline fonts as data: URLs | Rationale: the CSP sets font-src 'self', which blocks data: fonts; Vite inlines assets under 4 KB by default and some Fontsource subsets are that small | Alternative: adding data: to font-src rejected — widens the CSP
+    assetsInlineLimit: (filePath) => (/\.(woff2?|ttf|otf)$/.test(filePath) ? false : undefined),
+  },
   server: {
     proxy: {
       '/ncbi-blast': {
