@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:cei-ui": "node --experimental-strip-types scripts/check-cei-ui-contract.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
@@ -17,9 +18,12 @@
     "oidc-client-ts": "^3.5.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.2",
     "recharts": "^3.10.1",
-    "tailwindcss": "^4.3.3"
+    "remark-gfm": "^4.0.1",
+    "tailwindcss": "^4.3.3",
+    "zod": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
