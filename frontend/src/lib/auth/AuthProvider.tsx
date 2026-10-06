@@ -15,14 +15,24 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// ADR: a fixed local user for VITE_LOCAL_DEMO | only ever constructed when
+// import.meta.env.DEV is true, so this object is absent from the production
+// bundle once dead branches below are eliminated.
+function createLocalDemoUser(): User {
+  return { profile: { email: 'cei-local-demo-auth-bypass@cei.internal', sub: 'cei-local-demo-auth-bypass' } } as unknown as User;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [userManager, setUserManager] = useState<UserManager | null>(null);
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(
+    import.meta.env.DEV && import.meta.env.VITE_LOCAL_DEMO === 'true' ? createLocalDemoUser() : null,
+  );
+  const [isLoading, setIsLoading] = useState(!(import.meta.env.DEV && import.meta.env.VITE_LOCAL_DEMO === 'true'));
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
+    if (import.meta.env.DEV && import.meta.env.VITE_LOCAL_DEMO === 'true') return;
     let cancelled = false;
 
     loadRuntimeConfig()

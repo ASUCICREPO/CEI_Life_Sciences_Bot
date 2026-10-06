@@ -5,12 +5,16 @@ import { useAuth } from './AuthProvider';
 
 export function RequireAuth({ children }: { children?: ReactNode }) {
   const { user, isLoading, signIn } = useAuth();
+  const isLocalDemo = import.meta.env.DEV && import.meta.env.VITE_LOCAL_DEMO === 'true';
 
   useEffect(() => {
+    if (isLocalDemo) return;
     if (!isLoading && !user) {
       void signIn(window.location.pathname);
     }
-  }, [isLoading, user, signIn]);
+  }, [isLocalDemo, isLoading, user, signIn]);
+
+  if (isLocalDemo) return <>{children ?? <Outlet />}</>;
 
   if (isLoading || !user) {
     return (
