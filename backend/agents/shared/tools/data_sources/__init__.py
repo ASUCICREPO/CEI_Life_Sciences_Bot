@@ -10,6 +10,8 @@ from shared.tools.data_sources.icd10 import ICD10Tool
 from shared.tools.data_sources.medrxiv import MedRxivTool
 from shared.tools.data_sources.npi_registry import NPIRegistryTool
 from shared.tools.data_sources.open_targets import OpenTargetsTool
+from shared.tools.data_sources.openfda import OpenFDATool
+from shared.tools.data_sources.patentsview import PatentsViewTool
 from shared.tools.data_sources.pubchem import PubChemTool
 from shared.tools.data_sources.pubmed import PubMedTool
 
@@ -24,6 +26,8 @@ ALL_DATA_SOURCE_TOOLS: list[DataSourceTool] = [
     ICD10Tool(direct_mode=config.direct_mode),
     NPIRegistryTool(direct_mode=config.direct_mode),
     PubChemTool(direct_mode=config.direct_mode),
+    OpenFDATool(direct_mode=config.direct_mode),
+    PatentsViewTool(direct_mode=config.direct_mode),
 ]
 
 

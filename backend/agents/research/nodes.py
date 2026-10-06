@@ -33,6 +33,8 @@ _SOURCE_DESCRIPTIONS: dict[SourceType, str] = {
     SourceType.ICD10: "ICD-10 — disease and condition classification codes",
     SourceType.NPI_REGISTRY: "NPI Registry — US healthcare provider directory",
     SourceType.PUBCHEM: "PubChem — chemical structures, properties, bioactivity data",
+    SourceType.OPENFDA: "openFDA — drug approvals, drug labels, device 510(k) clearances",
+    SourceType.PATENTSVIEW: "USPTO PatentsView — patent search by assignee, keyword, and CPC",
 }
 
 _TRIAGE_SYSTEM = """\

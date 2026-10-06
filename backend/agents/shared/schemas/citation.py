@@ -17,6 +17,8 @@ class SourceType(StrEnum):
     ICD10 = "icd10"
     NPI_REGISTRY = "npi_registry"
     PUBCHEM = "pubchem"
+    OPENFDA = "openfda"
+    PATENTSVIEW = "patentsview"
 
 
 class Citation(BaseModel):
