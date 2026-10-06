@@ -11,6 +11,14 @@ Data sources:
 - {{ source }}
 {% endfor %}
 
+Query format per source (use the source key exactly as listed):
+- openfda: only drug generic names, brand names, or sponsor company names, joined with " OR " (for example "sotorasib OR adagrasib OR Amgen"). Never a topic sentence.
+- patentsview: a short keyword phrase (2-5 words) or one assignee company name.
+- clinical_trials: condition and intervention keywords (for example "KRAS G12C AND non-small cell lung cancer").
+- pubmed: a PubMed boolean query with synonyms.
+- cms_coverage, icd10: the condition or procedure name only.
+- other sources: a short target, molecule, or condition phrase.
+
 Respond ONLY with valid JSON matching this schema:
 {
   "source_queries": {"source_key": "optimized query for this source", ...}
