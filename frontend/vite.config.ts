@@ -30,6 +30,36 @@ export default defineConfig({
         secure: true,
         rewrite: (path) => path.replace(/^\/ncbi-eutils/, '/entrez/eutils'),
       },
+      // ADR: proxy local AgentCore runtimes by name | op-based /invocations
+      // contract (B94-B98); long timeout covers run/resume tool calls.
+      '/api/agents/research': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/agents\/research/, '/invocations'),
+        timeout: 600_000,
+        proxyTimeout: 600_000,
+      },
+      '/api/agents/drafting': {
+        target: 'http://localhost:8081',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/agents\/drafting/, '/invocations'),
+        timeout: 600_000,
+        proxyTimeout: 600_000,
+      },
+      '/api/agents/analysis': {
+        target: 'http://localhost:8083',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/agents\/analysis/, '/invocations'),
+        timeout: 600_000,
+        proxyTimeout: 600_000,
+      },
+      '/api/agents/pipeline': {
+        target: 'http://localhost:8084',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/agents\/pipeline/, '/invocations'),
+        timeout: 600_000,
+        proxyTimeout: 600_000,
+      },
     },
   },
 })
