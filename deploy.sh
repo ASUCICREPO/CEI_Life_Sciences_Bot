@@ -609,6 +609,12 @@ cat > "$policy_file" <<EOF
       ]
     },
     {
+      "Sid": "DescribeStacks",
+      "Effect": "Allow",
+      "Action": "cloudformation:DescribeStacks",
+      "Resource": "*"
+    },
+    {
       "Sid": "BedrockModelAvailabilityCheck",
       "Effect": "Allow",
       "Action": ["bedrock:GetFoundationModelAvailability", "bedrock:GetInferenceProfile"],
@@ -626,6 +632,7 @@ cat > "$policy_file" <<EOF
   ]
 }
 EOF
+# ADR: cloudformation:DescribeStacks on Resource "*" in the base policy | Rationale: B93 — buildspec.yml checks CDKToolkit in every bootstrap Region on every build, after the cei-deploy-bootstrap policy may have been removed; a failed check is read as "not bootstrapped" and starts a cdk bootstrap that is then denied. Read-only | Alternative: CDKToolkit-only ARNs rejected by the user (2026-10-06) in favour of "*"
 # ADR: bedrock:Get* actions above use Resource "*" | Rationale: these two actions have no resource-level ARN format in the Bedrock API — a specific resource ARN is rejected
 
 if aws iam get-role --role-name "$ROLE_NAME" >/dev/null 2>&1; then
