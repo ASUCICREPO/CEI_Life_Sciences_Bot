@@ -48,7 +48,7 @@ phases:
       - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
       - cd "$CODEBUILD_SRC_DIR/backend" && npm test
       # FIXME: remove after S2 validation (B92)
-      # ADR: spike context flags added only when set | Rationale: B92 — empty CEI_SPIKES means a normal deploy, unchanged | Alternative: always pass empty -c values (rejected: an empty ceiSpikes key is still a set context key)
+      # ADR: spike context flags added only when set | Rationale: B92 â€” empty CEI_SPIKES means a normal deploy, unchanged | Alternative: always pass empty -c values (rejected: an empty ceiSpikes key is still a set context key)
       - |
         cd "$CODEBUILD_SRC_DIR/backend"
         SPIKE_ARGS=""

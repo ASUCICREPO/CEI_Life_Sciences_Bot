@@ -120,7 +120,7 @@ export class ToolScopeSpikeStack extends cdk.Stack {
 
     const clientSecret = new secretsmanager.Secret(this, 'SpikeM2MSecret', {
       description: 'S2 spike: Cognito M2M app client secret',
-      // ADR: client secret via the L1 ClientSecret attribute | Rationale: L2 userPoolClientSecret adds an AwsCustomResource (describeUserPoolClient) with a CDK-owned AWSLambdaBasicExecutionRole role (IAM4) | Alternative: suppressing that singleton rejected — avoidable
+      // ADR: client secret via the L1 ClientSecret attribute | Rationale: L2 userPoolClientSecret adds an AwsCustomResource (describeUserPoolClient) with a CDK-owned AWSLambdaBasicExecutionRole role (IAM4) | Alternative: suppressing that singleton rejected â€” avoidable
       secretStringValue: cdk.SecretValue.resourceAttribute((m2mClient.node.defaultChild as cognito.CfnUserPoolClient).attrClientSecret),
       removalPolicy: RemovalPolicy.DESTROY,
     });

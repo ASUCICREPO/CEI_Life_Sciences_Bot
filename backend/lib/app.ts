@@ -22,14 +22,14 @@ export function buildStacks(app: cdk.App, config: DeployConfig | undefined, fron
   const built = buildCoreStacks(app, config, frontendAssetPath);
 
   // FIXME: remove after S2 validation (B92)
-  // ADR: spike stack only when `-c ceiSpikes` lists it | Rationale: B92 — a normal deploy must never create spike resources; deploy.sh --spike sets the flag | Alternative: always synthesizing it rejected — would deploy a throwaway Gateway with every release
+  // ADR: spike stack only when `-c ceiSpikes` lists it | Rationale: B92 â€” a normal deploy must never create spike resources; deploy.sh --spike sets the flag | Alternative: always synthesizing it rejected â€” would deploy a throwaway Gateway with every release
   const spikes = String(app.node.tryGetContext('ceiSpikes') ?? '')
     .split(',')
     .map((id) => id.trim())
     .filter(Boolean);
   if (spikes.includes('tool-scope')) {
     built.toolScopeSpike = new ToolScopeSpikeStack(app, 'ToolScopeSpikeStack', {
-      // ADR: Region from deploy config | Rationale: B45 — same env rule as BackendStack; env-agnostic when no config exists yet
+      // ADR: Region from deploy config | Rationale: B45 â€” same env rule as BackendStack; env-agnostic when no config exists yet
       env: config ? { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region } : undefined,
       policyMode: app.node.tryGetContext('ceiSpikePolicyMode') || undefined,
     });
