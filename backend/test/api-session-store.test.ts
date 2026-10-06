@@ -198,6 +198,16 @@ describe('BackendStack REST API + session store', () => {
     expect(deployments.some((d) => JSON.stringify(d.Properties.SourceMarkers ?? []).includes('execute-api'))).toBe(true);
   });
 
+  it('never prunes config.json from the site bucket', () => {
+    // Regression: a frontend-only change re-ran only the pruning SPA deployment, which deleted config.json
+    const deployments = Object.values(template.findResources('Custom::CDKBucketDeployment')) as any[];
+    const pruning = deployments.filter((d) => d.Properties.Prune !== false);
+    expect(pruning.length).toBeGreaterThan(0);
+    for (const d of pruning) {
+      expect(d.Properties.Exclude).toContain('config.json');
+    }
+  });
+
   it('allows only the site origin for CORS without the localhost flag', () => {
     const json = JSON.stringify(template.toJSON());
     expect(json).not.toContain('http://localhost:5173');

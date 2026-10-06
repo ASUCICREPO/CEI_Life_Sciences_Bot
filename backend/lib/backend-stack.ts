@@ -501,6 +501,8 @@ export class BackendStack extends cdk.Stack {
     const siteDeployment = new s3deploy.BucketDeployment(this, 'SiteAssetsDeployment', {
       sources: [s3deploy.Source.asset(props.frontendAssetPath)],
       destinationBucket: siteBucket,
+      // ADR: exclude config.json | Rationale: this deployment prunes, and config.json is not in frontend/dist — a frontend-only change re-runs only this deployment, which deleted config.json while RuntimeConfigDeployment (unchanged) did not re-run; excluded keys are neither uploaded nor pruned | Alternative: prune: false rejected — stale hashed assets would pile up in the bucket
+      exclude: ['config.json'],
       distribution,
       distributionPaths: ['/*'],
     });
@@ -521,6 +523,8 @@ export class BackendStack extends cdk.Stack {
       // ADR: prune: false | Rationale: this deployment only ships config.json — pruning would delete every SPA asset the previous BucketDeployment just wrote
       prune: false,
       cacheControl: [s3deploy.CacheControl.noCache()],
+      // ADR: explicit contentType | Rationale: config.json must be served as JSON; this also changed this deployment's properties so it re-ran once and restored the config.json that SiteAssetsDeployment had pruned
+      contentType: 'application/json',
       distribution,
       distributionPaths: ['/config.json'],
     });
