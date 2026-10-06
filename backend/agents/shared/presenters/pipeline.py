@@ -34,25 +34,58 @@ logger = logging.getLogger(__name__)
 _ROOT_RESERVE = 1
 
 
+def _namespace(components: Sequence[object], prefix: str) -> tuple[list[object], dict[str, str]]:
+    """Prefix every component id (and its ``children`` references) so that two document
+    renders — the overall summary and each step — never collide on ids like ``s0-card``."""
+    id_map = {component.id: f"{prefix}{component.id}" for component in components}
+    renamed: list[object] = []
+    for component in components:
+        updates: dict[str, Any] = {"id": id_map[component.id]}
+        children = getattr(component, "children", None)
+        if children:
+            updates["children"] = [id_map.get(child_id, child_id) for child_id in children]
+        renamed.append(component.model_copy(update=updates))
+    return renamed, id_map
+
+
+def _document_components(
+    document: ResponseDocument, prefix: str, *, extra_reserved: int
+) -> tuple[list[object], list[str]]:
+    """Build one document's header + sections under ``prefix``. Returns (components, children ids)."""
+    header: list[object] = [MarkdownComponent(id=f"{prefix}summary-text", content=document.summary)]
+    if document.key_metrics:
+        header.append(
+            StatGridComponent(
+                id=f"{prefix}summary-metrics",
+                metrics=[_metric_to_stat(metric) for metric in document.key_metrics],
+            )
+        )
+    section_components, section_card_ids = _build_document_sections(
+        document, set(), {}, reserved=len(header) + extra_reserved
+    )
+    renamed_sections, id_map = _namespace(section_components, prefix)
+    renamed_card_ids = [id_map[card_id] for card_id in section_card_ids]
+    confidence = _build_confidence_callout(document).model_copy(update={"id": f"{prefix}confidence-callout"})
+    components = [*header, *renamed_sections, confidence]
+    children = [component.id for component in header] + renamed_card_ids + [confidence.id]
+    return components, children
+
+
 def _step_components(step_index: int, outcome: Mapping[str, Any], remaining_budget: int) -> tuple[list[object], str]:
     document = outcome.get("document")
     text = str(outcome.get("text") or "")
+    prefix = f"step{step_index}-"
 
     if isinstance(document, ResponseDocument):
         try:
-            header = [MarkdownComponent(id=f"step{step_index}-summary", content=document.summary)]
-            section_components, section_card_ids = _build_document_sections(
-                document, set(), {}, reserved=len(header) + 1
-            )
-            total = [*header, *section_components]
-            if len(total) + 1 <= remaining_budget:
-                children = [header[0].id, *section_card_ids]
-                column = ColumnComponent(id=f"step{step_index}-col", children=children)
-                return [*total, column], column.id
+            components, children = _document_components(document, prefix, extra_reserved=1)
+            if len(components) + 1 <= remaining_budget:
+                column = ColumnComponent(id=f"{prefix}col", children=children)
+                return [*components, column], column.id
         except ValidationError:
             logger.warning({"event": "pipeline_step_document_fallback", "step_index": step_index})
 
-    markdown = MarkdownComponent(id=f"step{step_index}-markdown", content=text or "(no output)")
+    markdown = MarkdownComponent(id=f"{prefix}markdown", content=text or "(no output)")
     return [markdown], markdown.id
 
 
@@ -68,23 +101,9 @@ def build_pipeline_surface(
 
     if document is not None:
         try:
-            header: list[object] = [MarkdownComponent(id="summary-text", content=document.summary)]
-            if document.key_metrics:
-                header.append(
-                    StatGridComponent(
-                        id="summary-metrics",
-                        metrics=[_metric_to_stat(metric) for metric in document.key_metrics],
-                    )
-                )
-            section_components, section_card_ids = _build_document_sections(
-                document, set(), {}, reserved=len(header) + 2
-            )
-            confidence = _build_confidence_callout(document)
-            summary_children = [component.id for component in header] + section_card_ids + [confidence.id]
-            summary_col = ColumnComponent(id="summary-col", children=summary_children)
-            components.extend(header)
-            components.extend(section_components)
-            components.append(confidence)
+            doc_components, doc_children = _document_components(document, "main-", extra_reserved=2)
+            summary_col = ColumnComponent(id="summary-col", children=doc_children)
+            components.extend(doc_components)
             components.append(summary_col)
             summary_child_id = summary_col.id
         except ValidationError:
