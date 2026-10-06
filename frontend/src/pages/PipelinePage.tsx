@@ -1,9 +1,110 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { TaskProgress, ConfidenceBadge, CitationChip, ReviewGate, ExportCard } from '../design-system';
+import type { TaskStep } from '../design-system';
+import { CEIUISurface } from '../components/cei-ui/cei-ui-surface';
+import { SafeMarkdown } from '../components/cei-ui/markdown';
+import { AgentClientError, getJob, getJobSession, type JobEnvelope } from '../lib/agentClient';
 import { useApp } from '../context/AppContext';
-import { CheckCircle2, Play, Pause, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, Play, Pause, AlertTriangle, Loader2 } from 'lucide-react';
+
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'partial', 'failed', 'cancelled']);
+const POLL_INTERVAL_MS = 2_000;
+
+// ADR: live job polling only when ?job= is present | the sample pipeline view
+// below is unchanged for every other visit to /pipeline.
+function LivePipelineView({ jobId }: { jobId: string }) {
+  const sessionId = useMemo(() => getJobSession(jobId), [jobId]);
+  const [job, setJob] = useState<JobEnvelope | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setError('No session was recorded for this job. Start the pipeline again from the task launcher.');
+      return;
+    }
+    const activeSessionId = sessionId;
+    let cancelled = false;
+    let timer: number | undefined;
+
+    async function poll() {
+      try {
+        const result = await getJob(jobId, activeSessionId);
+        if (cancelled) return;
+        setJob(result);
+        setError(null);
+        if (!TERMINAL_JOB_STATUSES.has(result.status)) {
+          timer = window.setTimeout(poll, POLL_INTERVAL_MS);
+        }
+      } catch (pollError) {
+        if (cancelled) return;
+        setError(pollError instanceof AgentClientError ? pollError.message : 'Could not reach the job status service.');
+        timer = window.setTimeout(poll, POLL_INTERVAL_MS);
+      }
+    }
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [jobId, sessionId]);
+
+  const steps: TaskStep[] = (job?.steps ?? []).map((step) => ({
+    id: step.step_id,
+    label: `${step.description} (${step.agent})`,
+    status: step.status,
+    detail: step.error ?? step.detail ?? undefined,
+  }));
+
+  return (
+    <div className="max-w-5xl mx-auto px-6 py-8">
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-text-primary">Pipeline run</h1>
+        <p className="text-sm text-text-secondary mt-1">
+          Job <span className="font-mono">{jobId}</span>
+          {job && <span> — {job.status.replace('_', ' ')}{typeof job.progress_pct === 'number' ? ` (${Math.round(job.progress_pct)}%)` : ''}</span>}
+        </p>
+      </div>
+
+      {error && (
+        <div className="mb-4 flex items-start gap-2.5 px-4 py-3 rounded-lg bg-evidence-weak-bg border border-evidence-weak/20">
+          <AlertTriangle size={16} className="text-evidence-weak mt-0.5 flex-shrink-0" />
+          <p className="text-sm text-evidence-weak">{error}</p>
+        </div>
+      )}
+
+      {!job && !error && (
+        <div className="flex items-center gap-2 text-sm text-text-secondary">
+          <Loader2 size={16} className="animate-spin text-cei-blue" aria-hidden="true" />
+          Loading job status...
+        </div>
+      )}
+
+      {job && (
+        <>
+          {steps.length > 0 && <TaskProgress steps={steps} title="Pipeline progress" />}
+          <div className="mt-6">
+            {job.ui ? (
+              <CEIUISurface surface={job.ui} agent="pipeline" sessionId={sessionId ?? ''} fallbackText={job.text} disabled />
+            ) : (
+              <SafeMarkdown content={job.text} />
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function PipelinePage() {
+  const [searchParams] = useSearchParams();
+  const jobId = searchParams.get('job');
+  if (jobId) return <LivePipelineView jobId={jobId} />;
+  return <SamplePipelineView />;
+}
+
+function SamplePipelineView() {
   const { setEvidencePanelOpen, setActiveSourceId } = useApp();
   const [approved, setApproved] = useState(false);
 
