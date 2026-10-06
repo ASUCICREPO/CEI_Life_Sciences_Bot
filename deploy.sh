@@ -278,6 +278,14 @@ else
   esac
 fi
 
+# FIXME: remove after S2 validation (B92)
+# ADR: optional prompt, blank = normal deploy | Rationale: B92 — a spike stack must never deploy unless asked for, so the default is empty and --non-interactive keeps it empty
+prompt SPIKE "$SPIKE_FLAG" "Spike stacks to deploy (comma-separated, blank for none; known: tool-scope)" "" false
+SPIKE_POLICY_MODE=""
+case ",$SPIKE," in
+  *,tool-scope,*) prompt SPIKE_POLICY_MODE "$SPIKE_POLICY_MODE_FLAG" "tool-scope spike policy mode (LOG_ONLY or ENFORCE)" "LOG_ONLY" true ;;
+esac
+
 # GITHUB_PAT was already read from stdin above (--github-pat-stdin) if that flag was set.
 if [ "$GITHUB_PAT_STDIN" != "true" ] && [ "$NON_INTERACTIVE" != "true" ]; then
   IS_PRIVATE=""
@@ -312,8 +320,8 @@ redact_url() {
 [[ "$MAX_BACKGROUND" =~ ^[0-9]+$ ]] && [ "$MAX_BACKGROUND" -gt 0 ] || fail "--max-background must be a positive integer."
 
 # FIXME: remove after S2 validation (B92)
-[[ -z "$SPIKE_FLAG" || "$SPIKE_FLAG" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || fail "--spike must be a comma-separated list of ids (for example tool-scope)."
-[[ -z "$SPIKE_POLICY_MODE_FLAG" || "$SPIKE_POLICY_MODE_FLAG" == "LOG_ONLY" || "$SPIKE_POLICY_MODE_FLAG" == "ENFORCE" ]] || fail "--spike-policy-mode must be LOG_ONLY or ENFORCE."
+[[ -z "$SPIKE" || "$SPIKE" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || fail "--spike must be a comma-separated list of ids (for example tool-scope)."
+[[ -z "$SPIKE_POLICY_MODE" || "$SPIKE_POLICY_MODE" == "LOG_ONLY" || "$SPIKE_POLICY_MODE" == "ENFORCE" ]] || fail "--spike-policy-mode must be LOG_ONLY or ENFORCE."
 
 IFS=',' read -ra DOMAIN_ARR <<< "$EMAIL_DOMAINS"
 for d in "${DOMAIN_ARR[@]}"; do
@@ -365,6 +373,7 @@ Deployment configuration
   Max real-time runs/user: $MAX_REALTIME
   Max background runs:     $MAX_BACKGROUND
   Allow localhost callback: $ALLOW_LOCALHOST_CALLBACK
+  Spike stacks:            ${SPIKE:-(none)}${SPIKE_POLICY_MODE:+ (policy mode: $SPIKE_POLICY_MODE)}
   GitHub PAT provided:     $( [ -n "$GITHUB_PAT" ] && echo yes || echo no )
   AWS account:             $ACCOUNT_ID
   Dry run:                 $DRY_RUN
@@ -824,10 +833,10 @@ fi
 # ---------------------------------------------------------------------------
 echo "Starting CodeBuild deployment at $SOURCE_VERSION..."
 # FIXME: remove after S2 validation (B92)
-# ADR: spike settings travel as start-build overrides, not project config | Rationale: B92 � the CodeBuild project stays identical for normal deploys; empty values mean a normal deploy | Alternative: write them into cei.deploy.json (rejected: would persist across runs)
-SPIKE_OVERRIDES="[{\"name\":\"CEI_SPIKES\",\"value\":\"$SPIKE_FLAG\",\"type\":\"PLAINTEXT\"},{\"name\":\"CEI_SPIKE_POLICY_MODE\",\"value\":\"$SPIKE_POLICY_MODE_FLAG\",\"type\":\"PLAINTEXT\"}]"
-if [ -n "$SPIKE_FLAG" ]; then
-  echo "Spike deploy requested: $SPIKE_FLAG (policy mode: ${SPIKE_POLICY_MODE_FLAG:-LOG_ONLY})"
+# ADR: spike settings travel as start-build overrides, not project config | Rationale: B92 — the CodeBuild project stays identical for normal deploys; empty values mean a normal deploy | Alternative: write them into cei.deploy.json (rejected: would persist across runs)
+SPIKE_OVERRIDES="[{\"name\":\"CEI_SPIKES\",\"value\":\"$SPIKE\",\"type\":\"PLAINTEXT\"},{\"name\":\"CEI_SPIKE_POLICY_MODE\",\"value\":\"$SPIKE_POLICY_MODE\",\"type\":\"PLAINTEXT\"}]"
+if [ -n "$SPIKE" ]; then
+  echo "Spike deploy requested: $SPIKE (policy mode: ${SPIKE_POLICY_MODE:-LOG_ONLY})"
 fi
 BUILD_ID="$(aws codebuild start-build --project-name "$PROJECT_NAME" --source-version "$SOURCE_VERSION" --region "$REGION" --environment-variables-override "$SPIKE_OVERRIDES" --query 'build.id' --output text)"
 CONSOLE_URL="https://$REGION.console.aws.amazon.com/codesuite/codebuild/projects/$PROJECT_NAME/build/$BUILD_ID/log?region=$REGION"
