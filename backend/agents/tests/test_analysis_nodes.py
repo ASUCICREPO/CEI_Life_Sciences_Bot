@@ -398,3 +398,12 @@ def test_report_injects_matrix_when_missing_and_grounds(monkeypatch) -> None:
     kinds = {block.kind for section in doc.sections for block in section.blocks}
     assert "comparison" in kinds or "table" in kinds
     assert any(t.stage == "REPORT" for t in result["trace"])
+
+
+def test_scope_dedupes_repeated_competitors() -> None:
+    from analysis.nodes import _dedupe
+
+    assert _dedupe(["Elrexfio (elranatamab)", "Tecvayli", "elrexfio", " ", "Elrexfio (elranatamab)"]) == [
+        "Elrexfio (elranatamab)",
+        "Tecvayli",
+    ]

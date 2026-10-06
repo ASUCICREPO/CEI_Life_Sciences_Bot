@@ -98,6 +98,18 @@ _FIXED_DIMENSIONS: dict[AnalysisType, list[str]] = {
 }
 
 
+def _dedupe(names: list[str]) -> list[str]:
+    """Keep the first spelling of each name; the model sometimes repeats a product."""
+    seen: set[str] = set()
+    unique: list[str] = []
+    for name in names:
+        key = name.split("(")[0].strip().casefold()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(name.strip())
+    return unique
+
+
 def scope(state: AnalysisState) -> dict[str, Any]:
     """Extract (or re-propose, after a user correction) the analysis scope."""
     query = state.get("query") or last_human_message(state)
@@ -120,7 +132,7 @@ def scope(state: AnalysisState) -> dict[str, Any]:
 
     if parsed is not None:
         analysis_type = forced_type if forced_type is not None else parsed.analysis_type
-        competitors = parsed.competitors
+        competitors = _dedupe(parsed.competitors)
         market = parsed.market
         jurisdiction = parsed.jurisdiction
         focal_entity = parsed.focal_entity
