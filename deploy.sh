@@ -72,6 +72,11 @@ Options:
   --max-background <n>          Max concurrent background runs/user (default: 1)
   --allow-localhost-callback     Add http://localhost:5173 as an extra Cognito
                                  SPA callback/logout URL (B90, local dev only)
+  --spike <id>                  Also deploy a throwaway spike stack (B92). Comma-
+                                 separated. Known id: tool-scope (S2). Normal
+                                 deploys leave this unset.
+  --spike-policy-mode <mode>    Policy engine mode for the tool-scope spike:
+                                 LOG_ONLY (default) or ENFORCE
   --github-pat-stdin            Read a GitHub personal access token from stdin
                                  (for private repos, non-interactive use)
   --non-interactive              Never prompt; fail if a required value is missing
@@ -128,6 +133,9 @@ RPS_FLAG=""
 MAX_REALTIME_FLAG=""
 MAX_BACKGROUND_FLAG=""
 ALLOW_LOCALHOST_CALLBACK_FLAG=""
+# FIXME: remove after S2 validation (B92)
+SPIKE_FLAG=""
+SPIKE_POLICY_MODE_FLAG=""
 GITHUB_PAT_STDIN="false"
 NON_INTERACTIVE="false"
 ASSUME_YES="false"
@@ -147,6 +155,9 @@ while [ $# -gt 0 ]; do
     --max-realtime) MAX_REALTIME_FLAG="${2:-}"; shift 2 ;;
     --max-background) MAX_BACKGROUND_FLAG="${2:-}"; shift 2 ;;
     --allow-localhost-callback) ALLOW_LOCALHOST_CALLBACK_FLAG="true"; shift 1 ;;
+    # FIXME: remove after S2 validation (B92)
+    --spike) SPIKE_FLAG="${2:-}"; shift 2 ;;
+    --spike-policy-mode) SPIKE_POLICY_MODE_FLAG="${2:-}"; shift 2 ;;
     --github-pat-stdin) GITHUB_PAT_STDIN="true"; shift 1 ;;
     --non-interactive) NON_INTERACTIVE="true"; shift 1 ;;
     --yes) ASSUME_YES="true"; shift 1 ;;
@@ -299,6 +310,10 @@ redact_url() {
 [[ "$RPS" =~ ^[0-9]+$ ]] && [ "$RPS" -gt 0 ] || fail "--rps must be a positive integer."
 [[ "$MAX_REALTIME" =~ ^[0-9]+$ ]] && [ "$MAX_REALTIME" -gt 0 ] || fail "--max-realtime must be a positive integer."
 [[ "$MAX_BACKGROUND" =~ ^[0-9]+$ ]] && [ "$MAX_BACKGROUND" -gt 0 ] || fail "--max-background must be a positive integer."
+
+# FIXME: remove after S2 validation (B92)
+[[ -z "$SPIKE_FLAG" || "$SPIKE_FLAG" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || fail "--spike must be a comma-separated list of ids (for example tool-scope)."
+[[ -z "$SPIKE_POLICY_MODE_FLAG" || "$SPIKE_POLICY_MODE_FLAG" == "LOG_ONLY" || "$SPIKE_POLICY_MODE_FLAG" == "ENFORCE" ]] || fail "--spike-policy-mode must be LOG_ONLY or ENFORCE."
 
 IFS=',' read -ra DOMAIN_ARR <<< "$EMAIL_DOMAINS"
 for d in "${DOMAIN_ARR[@]}"; do
@@ -808,7 +823,13 @@ fi
 # Step 9 â€” start the build (pinned to $SOURCE_VERSION) and poll to completion
 # ---------------------------------------------------------------------------
 echo "Starting CodeBuild deployment at $SOURCE_VERSION..."
-BUILD_ID="$(aws codebuild start-build --project-name "$PROJECT_NAME" --source-version "$SOURCE_VERSION" --region "$REGION" --query 'build.id' --output text)"
+# FIXME: remove after S2 validation (B92)
+# ADR: spike settings travel as start-build overrides, not project config | Rationale: B92 — the CodeBuild project stays identical for normal deploys; empty values mean a normal deploy | Alternative: write them into cei.deploy.json (rejected: would persist across runs)
+SPIKE_OVERRIDES="[{\"name\":\"CEI_SPIKES\",\"value\":\"$SPIKE_FLAG\",\"type\":\"PLAINTEXT\"},{\"name\":\"CEI_SPIKE_POLICY_MODE\",\"value\":\"$SPIKE_POLICY_MODE_FLAG\",\"type\":\"PLAINTEXT\"}]"
+if [ -n "$SPIKE_FLAG" ]; then
+  echo "Spike deploy requested: $SPIKE_FLAG (policy mode: ${SPIKE_POLICY_MODE_FLAG:-LOG_ONLY})"
+fi
+BUILD_ID="$(aws codebuild start-build --project-name "$PROJECT_NAME" --source-version "$SOURCE_VERSION" --region "$REGION" --environment-variables-override "$SPIKE_OVERRIDES" --query 'build.id' --output text)"
 CONSOLE_URL="https://$REGION.console.aws.amazon.com/codesuite/codebuild/projects/$PROJECT_NAME/build/$BUILD_ID/log?region=$REGION"
 echo "Build started: $BUILD_ID"
 echo "Console log: $CONSOLE_URL"

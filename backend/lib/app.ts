@@ -2,11 +2,15 @@ import * as cdk from 'aws-cdk-lib';
 import { BackendStack } from './backend-stack';
 import { EdgeWafStack } from './edge-waf-stack';
 import { DeployConfig } from './config/deploy-config';
+// FIXME: remove after S2 validation (B92)
+import { ToolScopeSpikeStack } from './spikes/tool-scope-spike-stack';
 
 export interface BuiltStacks {
   /** Only present when `config` is supplied â€” the CLOUDFRONT-scope WAF stack (always us-east-1, B88). */
   edgeWaf?: EdgeWafStack;
   backend: BackendStack;
+  /** FIXME: remove after S2 validation (B92). Only present when `-c ceiSpikes=tool-scope` is set. */
+  toolScopeSpike?: ToolScopeSpikeStack;
 }
 
 /**
@@ -15,6 +19,26 @@ export interface BuiltStacks {
  * app entry point uses, instead of re-deriving it in test code.
  */
 export function buildStacks(app: cdk.App, config: DeployConfig | undefined, frontendAssetPath: string): BuiltStacks {
+  const built = buildCoreStacks(app, config, frontendAssetPath);
+
+  // FIXME: remove after S2 validation (B92)
+  // ADR: spike stack only when `-c ceiSpikes` lists it | Rationale: B92 — a normal deploy must never create spike resources; deploy.sh --spike sets the flag | Alternative: always synthesizing it rejected — would deploy a throwaway Gateway with every release
+  const spikes = String(app.node.tryGetContext('ceiSpikes') ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (spikes.includes('tool-scope')) {
+    built.toolScopeSpike = new ToolScopeSpikeStack(app, 'ToolScopeSpikeStack', {
+      // ADR: Region from deploy config | Rationale: B45 — same env rule as BackendStack; env-agnostic when no config exists yet
+      env: config ? { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region } : undefined,
+      policyMode: app.node.tryGetContext('ceiSpikePolicyMode') || undefined,
+    });
+  }
+
+  return built;
+}
+
+function buildCoreStacks(app: cdk.App, config: DeployConfig | undefined, frontendAssetPath: string): BuiltStacks {
   if (config) {
     // ADR: Region from deploy config | Rationale: B45 â€” Region is configurable via CDK context/env, never hardcoded
     const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region };
