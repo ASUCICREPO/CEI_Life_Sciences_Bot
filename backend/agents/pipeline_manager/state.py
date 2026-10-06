@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from shared.schemas.response_blocks import ResponseDocument
 from shared.state import BaseAgentState
 
 
@@ -22,6 +23,9 @@ class PipelineStep(BaseModel):
     agent: str
     description: str
     dependencies: list[str] = []
+    analysis_type: str | None = None
+    scope: dict[str, Any] | None = None
+    document_type: str | None = None
 
 
 class PipelinePlan(BaseModel):
@@ -45,3 +49,5 @@ class PipelineState(BaseAgentState):
     steps: list[StepStatus]
     synthesis: str
     retry_count: int
+    # ADR: added for the MVP presenter | synthesize needs a structured document, not just prose (B94)
+    response_document: ResponseDocument | None

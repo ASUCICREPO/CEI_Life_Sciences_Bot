@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["research", "drafting", "shared"]
+packages = ["research", "drafting", "analysis", "pipeline_manager", "shared"]
 
 [tool.uv]
 dev-dependencies = [

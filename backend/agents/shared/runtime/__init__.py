@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from shared.runtime.jobs import JOB_REGISTRY, JobRecord, JobRegistry, JobStatus, JobStep
+from shared.runtime.replay import ReplayHub, ReplayMode, scenario_key
 from shared.runtime.ops import (
     EnvelopeStatus,
     PendingInterrupts,
@@ -25,6 +26,8 @@ __all__ = [
     "JobStatus",
     "JobStep",
     "PendingInterrupts",
+    "ReplayHub",
+    "ReplayMode",
     "RuntimeOp",
     "action_response",
     "awaiting_envelope",
@@ -36,4 +39,5 @@ __all__ = [
     "parse_op",
     "parse_prompt",
     "resume_value",
+    "scenario_key",
 ]
