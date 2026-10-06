@@ -168,7 +168,11 @@ async def invoke(payload, context):  # noqa: ANN001
         record = JOB_REGISTRY.get(job_id)
         if record is None or record.session_id != session_id:
             return {"status": "error", "message": "Job not found."}
-        return JOB_REGISTRY.snapshot(job_id)
+        snapshot = JOB_REGISTRY.snapshot(job_id)
+        if _replay.mode.value == "record":
+            # Each distinct poll snapshot is recorded, so replay shows the live step progress.
+            _replay.record_job_status(_thread_prompts.get(session_id, ""), snapshot)
+        return snapshot
 
     if op is RuntimeOp.RESUME:
         action = parse_action(payload)

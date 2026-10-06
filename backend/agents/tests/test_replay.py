@@ -96,3 +96,32 @@ def test_off_mode_never_records_or_plays(monkeypatch, tmp_path) -> None:
     hub.record_run("x", {"status": "completed"})
     assert list(tmp_path.glob("*.json")) == []
     assert hub.on_run("x", session_id="s1") is None
+
+
+def test_play_without_live_job_id_maps_new_job_and_repeats(monkeypatch, tmp_path) -> None:
+    recorder = _hub(monkeypatch, tmp_path, "record")
+    prompt = "Run the demo pipeline"
+    recorder.record_run(prompt, {"text": "plan", "status": "awaiting_input"})
+    recorder.record_resume(prompt, {"job_id": "job-recorded", "status": "running"})
+    recorder.record_job_status(prompt, {"job_id": "job-recorded", "revision": 2, "status": "running"})
+    recorder.record_job_status(prompt, {"job_id": "job-recorded", "revision": 5, "status": "completed"})
+
+    player = _hub(monkeypatch, tmp_path, "play")
+    for _ in range(2):  # the same scenario must play again for a second demo
+        assert player.on_run(prompt, session_id="live")["text"] == "plan"
+        resumed = player.on_resume(prompt, session_id="live", action=None, job_id=None)
+        assert resumed is not None
+        assert resumed["job_id"].startswith("job-replay-")
+        status = player.on_job_status(resumed["job_id"], session_id="live")
+        assert status is not None and status["job_id"] == resumed["job_id"]
+
+
+def test_record_run_replaces_old_recording(monkeypatch, tmp_path) -> None:
+    recorder = _hub(monkeypatch, tmp_path, "record")
+    recorder.record_run("p", {"text": "first"})
+    recorder.record_resume("p", {"text": "first-resume"})
+    recorder.record_run("p", {"text": "second"})
+
+    player = _hub(monkeypatch, tmp_path, "play")
+    assert player.on_run("p", session_id="s")["text"] == "second"
+    assert player.on_resume("p", session_id="s", action=None, job_id=None) is None

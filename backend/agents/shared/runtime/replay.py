@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Mapping
@@ -127,8 +128,9 @@ class ReplayHub:
         if self.mode is not ReplayMode.RECORD:
             return
         key = scenario_key(self.agent, prompt)
-        data = self._load(key) or copy.deepcopy(_EMPTY_RECORDING)
-        data["envelopes"].setdefault("run", []).append(dict(envelope))
+        # A new run starts a new recording, so re-recording a scenario replaces it.
+        data = copy.deepcopy(_EMPTY_RECORDING)
+        data["envelopes"]["run"] = [dict(envelope)]
         self._save(key, data)
         self._clock_start[key] = time.monotonic()
 
@@ -178,11 +180,11 @@ class ReplayHub:
         if not data:
             return None
         run_list = data.get("envelopes", {}).get("run", [])
-        cursor = self._cursors.setdefault(key, {"run": 0, "resume": 0})
-        if cursor["run"] >= len(run_list):
+        if not run_list:
             return None
-        envelope = copy.deepcopy(run_list[cursor["run"]])
-        cursor["run"] += 1
+        # Every run starts the scenario again, so a demo can be played many times.
+        self._cursors[key] = {"run": 1, "resume": 0}
+        envelope = copy.deepcopy(run_list[0])
         self._clock_start[key] = time.monotonic()
         return self._rewrite_envelope(envelope, job_id=None, action=None)
 
@@ -201,6 +203,8 @@ class ReplayHub:
             return None
         envelope = copy.deepcopy(resume_list[cursor["resume"]])
         cursor["resume"] += 1
+        if "job_id" in envelope and not job_id:
+            job_id = f"job-replay-{uuid.uuid4().hex[:12]}"
         rewritten = self._rewrite_envelope(envelope, job_id=job_id, action=action)
         if job_id and "job_id" in rewritten:
             self._job_scenarios[job_id] = key
