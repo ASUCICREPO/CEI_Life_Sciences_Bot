@@ -47,4 +47,11 @@ phases:
         done
       - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
       - cd "$CODEBUILD_SRC_DIR/backend" && npm test
-      - cd "$CODEBUILD_SRC_DIR/backend" && npx cdk deploy --all --require-approval never -c ceiConfigFile=cei.deploy.json
+      # FIXME: remove after S2 validation (B92)
+      # ADR: spike context flags added only when set | Rationale: B92 — empty CEI_SPIKES means a normal deploy, unchanged | Alternative: always pass empty -c values (rejected: an empty ceiSpikes key is still a set context key)
+      - |
+        cd "$CODEBUILD_SRC_DIR/backend"
+        SPIKE_ARGS=""
+        if [ -n "${CEI_SPIKES:-}" ]; then SPIKE_ARGS="$SPIKE_ARGS -c ceiSpikes=$CEI_SPIKES"; fi
+        if [ -n "${CEI_SPIKE_POLICY_MODE:-}" ]; then SPIKE_ARGS="$SPIKE_ARGS -c ceiSpikePolicyMode=$CEI_SPIKE_POLICY_MODE"; fi
+        npx cdk deploy --all --require-approval never -c ceiConfigFile=cei.deploy.json $SPIKE_ARGS
