@@ -158,9 +158,18 @@ class _FakeDispatcher:
         return self._outcomes[step.step_id]
 
 
-def test_dispatch_runs_sequential_steps_one_wave_at_a_time(monkeypatch) -> None:
+def test_dispatch_runs_sequential_waves_in_order_with_dependency_output(monkeypatch) -> None:
     outcomes = {"a": StepOutcome(status="completed", text="A done"), "b": StepOutcome(status="completed", text="B done")}
-    fake = _FakeDispatcher(outcomes)
+    events: list = []
+    seen_deps: dict = {}
+    fake = _FakeDispatcher(outcomes, events)
+    original_run = fake.run
+
+    async def _recording_run(step, **kwargs):
+        seen_deps[step.step_id] = dict(kwargs["dependency_outputs"])
+        return await original_run(step, **kwargs)
+
+    fake.run = _recording_run
     monkeypatch.setattr(nodes, "_dispatcher", fake)
 
     plan_obj = _plan_two_sequential()
@@ -169,8 +178,24 @@ def test_dispatch_runs_sequential_steps_one_wave_at_a_time(monkeypatch) -> None:
 
     result = asyncio.run(nodes.dispatch(state, {"configurable": {}}))
     statuses = {s.step_id: s.status for s in result["steps"]}
-    assert statuses["a"] == StepStatusValue.COMPLETED
-    assert statuses["b"] == StepStatusValue.IDLE  # b's dependency wasn't satisfied until this wave started
+    # One dispatch runs every ready wave: should_continue goes to synthesize when nothing is RUNNING/FAILED.
+    assert statuses == {"a": StepStatusValue.COMPLETED, "b": StepStatusValue.COMPLETED}
+    assert events == [("start", "a"), ("end", "a"), ("start", "b"), ("end", "b")]
+    assert seen_deps["a"] == {}
+    assert "A done" in seen_deps["b"]["a"]
+
+
+def test_dispatch_stops_after_failed_wave_for_retry(monkeypatch) -> None:
+    outcomes = {"a": StepOutcome(status="failed", error="boom"), "b": StepOutcome(status="completed", text="B")}
+    fake = _FakeDispatcher(outcomes)
+    monkeypatch.setattr(nodes, "_dispatcher", fake)
+
+    plan_obj = _plan_two_sequential()
+    steps = [StepStatus(step_id="a", agent="research"), StepStatus(step_id="b", agent="drafting")]
+    result = asyncio.run(nodes.dispatch(_state(plan=plan_obj, steps=steps), {"configurable": {}}))
+    statuses = {s.step_id: s.status for s in result["steps"]}
+    assert statuses == {"a": StepStatusValue.FAILED, "b": StepStatusValue.IDLE}
+    assert nodes.should_continue({**_state(plan=plan_obj, steps=result["steps"]), "retry_count": result["retry_count"]}) == "dispatch"
 
 
 def test_dispatch_runs_concurrent_steps_in_parallel(monkeypatch) -> None:

@@ -211,61 +211,72 @@ async def dispatch(state: PipelineState, config: RunnableConfig) -> dict[str, An
             for dep in step.dependencies
         )
 
-    ready_ids = [
-        sid
-        for sid, status in status_by_id.items()
-        if status.status == StepStatusValue.IDLE and _deps_satisfied(steps_by_id[sid])
-    ]
-    if is_retry:
-        ready_ids.extend(failed_ids)
+    def _ready_idle() -> list[str]:
+        return [
+            sid
+            for sid, status in status_by_id.items()
+            if status.status == StepStatusValue.IDLE and _deps_satisfied(steps_by_id[sid])
+        ]
 
-    if not ready_ids:
-        return {"retry_count": retry_count}
-
-    dependency_text: dict[str, str] = {
-        sid: _summarize(status.result)
-        for sid, status in status_by_id.items()
-        if status.status in (StepStatusValue.COMPLETED, StepStatusValue.PARTIAL)
-    }
-
-    for sid in ready_ids:
-        status_by_id[sid].status = StepStatusValue.RUNNING
-        if job_id:
-            JOB_REGISTRY.update_step(job_id, sid, "running")
-
-    async def _run_one(sid: str) -> StepOutcome:
+    async def _run_one(sid: str, dependency_text: dict[str, str]) -> StepOutcome:
         step = steps_by_id[sid]
         dep_outputs = {dep: dependency_text[dep] for dep in step.dependencies if dep in dependency_text}
         return await _dispatcher.run(
             step, session_id=session_id, mode=mode, user_id=user_id, dependency_outputs=dep_outputs
         )
 
-    results = await asyncio.gather(*(_run_one(sid) for sid in ready_ids), return_exceptions=True)
-
+    # ADR: run wave after wave inside one dispatch | should_continue (unchanged) routes to
+    # synthesize as soon as nothing is RUNNING or FAILED, so idle dependent steps would never run.
     trace: list[TraceEntry] = []
-    for sid, result in zip(ready_ids, results):
-        if isinstance(result, BaseException):
-            outcome = StepOutcome(status="failed", error=repr(result))
-        else:
-            outcome = result
-        status = status_by_id[sid]
-        if outcome.status == "completed":
-            status.status = StepStatusValue.COMPLETED
-            status.error = None
-        elif retry_count >= MAX_RETRIES:
-            status.status = StepStatusValue.PARTIAL
-            status.error = outcome.error or "step failed after retries"
-        else:
-            status.status = StepStatusValue.FAILED
-            status.error = outcome.error or "step failed"
-        status.result = {"text": outcome.text, "document": outcome.document}
-        trace.extend(outcome.trace)
-        if job_id:
-            JOB_REGISTRY.update_step(
-                job_id, sid, status.status.value, error=status.error, detail=(outcome.text or "")[:200]
-            )
+    ran: list[str] = []
+    ready_ids = _ready_idle() + (failed_ids if is_retry else [])
+    while ready_ids:
+        dependency_text: dict[str, str] = {
+            sid: _summarize(status.result)
+            for sid, status in status_by_id.items()
+            if status.status in (StepStatusValue.COMPLETED, StepStatusValue.PARTIAL)
+        }
+        for sid in ready_ids:
+            status_by_id[sid].status = StepStatusValue.RUNNING
+            if job_id:
+                JOB_REGISTRY.update_step(job_id, sid, "running")
 
-    logger.info({"event": "dispatch_complete", "ran": ready_ids, "retry_count": retry_count})
+        results = await asyncio.gather(*(_run_one(sid, dependency_text) for sid in ready_ids), return_exceptions=True)
+
+        wave_failed = False
+        for sid, result in zip(ready_ids, results):
+            if isinstance(result, BaseException):
+                outcome = StepOutcome(status="failed", error=repr(result))
+            else:
+                outcome = result
+            status = status_by_id[sid]
+            if outcome.status == "completed":
+                status.status = StepStatusValue.COMPLETED
+                status.error = None
+            elif retry_count >= MAX_RETRIES:
+                status.status = StepStatusValue.PARTIAL
+                status.error = outcome.error or "step failed after retries"
+            else:
+                status.status = StepStatusValue.FAILED
+                status.error = outcome.error or "step failed"
+                wave_failed = True
+            status.result = {"text": outcome.text, "document": outcome.document}
+            trace.extend(outcome.trace)
+            if job_id:
+                JOB_REGISTRY.update_step(
+                    job_id, sid, status.status.value, error=status.error, detail=(outcome.text or "")[:200]
+                )
+
+        ran.extend(ready_ids)
+        logger.info({"event": "dispatch_wave_complete", "ran": ready_ids, "retry_count": retry_count})
+        if wave_failed:
+            break  # should_continue routes back here to retry the failed steps
+        ready_ids = _ready_idle()
+
+    if not ran:
+        return {"retry_count": retry_count}
+
+    logger.info({"event": "dispatch_complete", "ran": ran, "retry_count": retry_count})
     return {"steps": list(status_by_id.values()), "retry_count": retry_count, "trace": trace}
 
 
