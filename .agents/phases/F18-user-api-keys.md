@@ -1,5 +1,5 @@
 # F18 — User API keys
-Status: not started | Depends on: F4 | Decisions: B18, B20, B76, B78 | Specs: ../specs/data-model.md, ../specs/api.md, ../specs/auth-and-tool-scope.md
+Status: not started | Depends on: F4 | Decisions: B18, B20, B76, B78, B94 | Specs: ../specs/data-model.md, ../specs/api.md, ../specs/auth-and-tool-scope.md
 
 ## Goal
 Let a user add their own, optional API key for a data source (for example NCBI) to get a higher rate limit, and see which sources they have configured — through a real Settings page and Secrets Manager, not a mock.
@@ -10,7 +10,7 @@ Let a user add their own, optional API key for a data source (for example NCBI) 
 - `GET`/`PUT /settings` (`default_model_id`, `default_mode`, `configured_sources` — values only, per `api.md`).
 - `PUT`/`DELETE /settings/api-keys/{sourceId}` — write/remove a user's key; the key value is never returned by any route, including this one's own response (B20, `api.md`).
 - Secrets Manager secret naming `cei/user-keys/{user_id}/{source_id}` (B78 — this was a proposal in `data-model.md`; B78 fixes it).
-- Gateway Lambda read pattern: read the user's `sub` from the forwarded token, look up `cei/user-keys/{sub}/{source_id}`, fall back to the free/unauthenticated path if no key exists (already how all 10 sources work today) — this phase's job is the *user-facing* half (settings + secret CRUD); the *Lambda-side* read is implemented once inside each F4-built Gateway Lambda, referencing this phase's naming convention.
+- Gateway Lambda read pattern (**B94: this phase must decide how the user id reaches the Lambda** — the Gateway does not forward the token to Lambda targets; recommended: a Gateway request interceptor that passes the verified `sub` on, wired into `user_id_resolver` in `backend/lambdas/shared/data_source_runtime.py`): read the user's `sub` from the forwarded token, look up `cei/user-keys/{sub}/{source_id}`, fall back to the free/unauthenticated path if no key exists (already how all 10 sources work today) — this phase's job is the *user-facing* half (settings + secret CRUD); the *Lambda-side* read is implemented once inside each F4-built Gateway Lambda, referencing this phase's naming convention.
 - Settings page port: wire the founder-ai-dashboard `SettingsPage.tsx`'s "Data source connections" list to the real settings API, replacing `src/mocks/tools.ts`'s static `configuredToolSourceIds`.
 
 **Out**
