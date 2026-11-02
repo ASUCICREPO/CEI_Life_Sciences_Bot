@@ -106,10 +106,10 @@ describe('BackendStack', () => {
       template.hasResourceProperties('AWS::Cognito::UserPool', {
         LambdaConfig: Match.objectLike({ PreSignUp: Match.anyValue() }),
       });
-      // ADR: not resourceCountIs(1) | Rationale: BucketDeployment adds its own CDK-owned singleton Lambda handler alongside the pre-sign-up trigger
+      // ADR: count by the trigger's env var, not by handler name | Rationale: F4 adds more `handler.handler` Lambdas (pre-token trigger, sources, token refresh); BucketDeployment adds a CDK-owned one too
       template.resourcePropertiesCountIs(
         'AWS::Lambda::Function',
-        Match.objectLike({ Handler: 'handler.handler' }),
+        Match.objectLike({ Environment: { Variables: Match.objectLike({ ALLOWED_EMAIL_DOMAINS: Match.anyValue() }) } }),
         1,
       );
     });

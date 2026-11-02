@@ -13,6 +13,21 @@ from shared.tools.data_sources.open_targets import OpenTargetsTool
 from shared.tools.data_sources.pubchem import PubChemTool
 from shared.tools.data_sources.pubmed import PubMedTool
 
+# F4: Gateway target id (also the `cei-tools/src.<id>` scope suffix) -> tool class. The single source of
+# truth for scripts/gen_tool_schemas.py and the data-source Lambda tests.
+TOOLS_BY_SOURCE_ID: dict[str, type[DataSourceTool]] = {
+    "pubmed": PubMedTool,
+    "clinicaltrials": ClinicalTrialsTool,
+    "biorxiv": BioRxivTool,
+    "medrxiv": MedRxivTool,
+    "chembl": ChEMBLTool,
+    "opentargets": OpenTargetsTool,
+    "cmscoverage": CMSCoverageTool,
+    "icd10": ICD10Tool,
+    "npi": NPIRegistryTool,
+    "pubchem": PubChemTool,
+}
+
 ALL_DATA_SOURCE_TOOLS: list[DataSourceTool] = [
     PubMedTool(direct_mode=config.direct_mode),
     ClinicalTrialsTool(direct_mode=config.direct_mode),

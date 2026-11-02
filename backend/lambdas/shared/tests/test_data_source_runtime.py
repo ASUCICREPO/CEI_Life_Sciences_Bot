@@ -116,6 +116,14 @@ def test_every_handler_wraps_its_tool(source_id, class_name, key_source):
     assert closure["key_source_id"] == (key_source or source_id)
 
 
+def test_handlers_match_the_source_registry():
+    from shared.tools.data_sources import TOOLS_BY_SOURCE_ID
+
+    assert {sid for sid, _, _ in SOURCES} == set(TOOLS_BY_SOURCE_ID)
+    for sid, _, _ in SOURCES:
+        assert type(handler_closure(sid)["tool"]) is TOOLS_BY_SOURCE_ID[sid]
+
+
 def test_only_pubmed_takes_a_user_key():
     keyed = [sid for sid, _, _ in SOURCES if handler_closure(sid)["tool"].supports_api_key]
     assert keyed == ["pubmed"]

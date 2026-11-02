@@ -62,7 +62,10 @@ describe('BackendStack REST API + session store', () => {
     template.resourceCountIs('AWS::ApiGateway::Authorizer', 1);
     template.hasResourceProperties('AWS::ApiGateway::Authorizer', { Type: 'COGNITO_USER_POOLS' });
     const methods = Object.values(template.findResources('AWS::ApiGateway::Method')).map((m: any) => m.Properties);
-    const real = methods.filter((m) => m.HttpMethod !== 'OPTIONS');
+    // F4/B67: POST /internal/token-refresh is the one machine route, AWS_IAM instead of Cognito (tool-gateway.test.ts)
+    const iamMethods = methods.filter((m) => m.AuthorizationType === 'AWS_IAM');
+    expect(iamMethods.map((m) => m.HttpMethod)).toEqual(['POST']);
+    const real = methods.filter((m) => m.HttpMethod !== 'OPTIONS' && m.AuthorizationType !== 'AWS_IAM');
     expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'PATCH', 'POST']);
     for (const method of real) {
       expect(method.AuthorizationType).toBe('COGNITO_USER_POOLS');
@@ -79,7 +82,10 @@ describe('BackendStack REST API + session store', () => {
   it('has no DELETE route and no streaming route yet', () => {
     const methods = Object.values(template.findResources('AWS::ApiGateway::Method')).map((m: any) => m.Properties.HttpMethod);
     expect(methods).not.toContain('DELETE');
-    template.resourceCountIs('AWS::ApiGateway::Resource', 3);
+    // /sessions, /{sessionId}, /history (F3) + /internal, /token-refresh (F4); still no /chat/stream (F5)
+    template.resourceCountIs('AWS::ApiGateway::Resource', 5);
+    const paths = Object.values(template.findResources('AWS::ApiGateway::Resource')).map((r: any) => r.Properties.PathPart);
+    expect(paths.sort()).toEqual(['history', 'internal', 'sessions', 'token-refresh', '{sessionId}']);
   });
 
   it('applies the 20 rps account-wide throttle through a UsagePlan and the stage default', () => {
