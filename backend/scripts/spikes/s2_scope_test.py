@@ -43,7 +43,9 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.exceptions import ClientError
 
-MCP_PROTOCOL_VERSION = "2025-11-25"
+# ADR: 2025-03-26 | Rationale: the deployed AgentCore Gateway rejected 2025-11-25 with JSON-RPC -32600
+# "Unsupported protocol version" (supported: ["2025-03-26"]) on 2026-10-28, which made every call look denied
+MCP_PROTOCOL_VERSION = "2025-03-26"
 TOOL = "echo"
 
 RESULTS: list[dict[str, Any]] = []

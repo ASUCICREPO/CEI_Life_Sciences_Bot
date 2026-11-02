@@ -1,0 +1,380 @@
+{
+  "timestamp": "2026-11-02T16:54:01.561285+00:00",
+  "stack": "ToolScopeSpikeStack",
+  "region": "us-east-2",
+  "mode": "ENFORCE",
+  "caller": "arn:aws:iam::257137551728:user/sreeram",
+  "results": [
+    {
+      "task": "2",
+      "check": "runner role reads the M2M secret",
+      "expected": "allowed",
+      "observed": "allowed",
+      "status": "PASS"
+    },
+    {
+      "task": "2",
+      "check": "runtime role reads the M2M secret",
+      "expected": "AccessDenied",
+      "observed": "AccessDeniedException",
+      "status": "PASS"
+    },
+    {
+      "task": "2",
+      "check": "caller identity (CloudShell user) reads the M2M secret",
+      "expected": "AccessDenied",
+      "observed": "AccessDeniedException",
+      "status": "PASS"
+    },
+    {
+      "task": "1",
+      "check": "token 'a_only' carries exactly its requested scopes",
+      "expected": "['cei-tools-spike/target-a']",
+      "observed": "['cei-tools-spike/target-a']",
+      "status": "PASS"
+    },
+    {
+      "task": "1",
+      "check": "token 'b_only' carries exactly its requested scopes",
+      "expected": "['cei-tools-spike/target-b']",
+      "observed": "['cei-tools-spike/target-b']",
+      "status": "PASS"
+    },
+    {
+      "task": "1",
+      "check": "token 'a_shared' carries exactly its requested scopes",
+      "expected": "['cei-tools-spike/shared', 'cei-tools-spike/target-a']",
+      "observed": "['cei-tools-spike/shared', 'cei-tools-spike/target-a']",
+      "status": "PASS"
+    },
+    {
+      "task": "1",
+      "check": "token 'none' carries exactly its requested scopes",
+      "expected": "['cei-tools-spike/probe']",
+      "observed": "['cei-tools-spike/probe']",
+      "status": "PASS"
+    },
+    {
+      "task": "1",
+      "check": "token 'all' carries exactly its requested scopes",
+      "expected": "['cei-tools-spike/shared', 'cei-tools-spike/target-a', 'cei-tools-spike/target-b']",
+      "observed": "['cei-tools-spike/shared', 'cei-tools-spike/target-a', 'cei-tools-spike/target-b']",
+      "status": "PASS"
+    },
+    {
+      "task": "1",
+      "check": "no scope name is a substring of another (B69)",
+      "expected": "[]",
+      "observed": "[]",
+      "status": "PASS"
+    },
+    {
+      "task": "4",
+      "check": "token with no relevant scope can initialize",
+      "expected": "HTTP 200 + result",
+      "observed": "HTTP 200",
+      "status": "PASS"
+    },
+    {
+      "task": "6",
+      "check": "[a_only] calls A",
+      "expected": "allowed",
+      "observed": "DENIED",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[a_only] calls B",
+      "expected": "DENIED",
+      "observed": "DENIED",
+      "status": "PASS"
+    },
+    {
+      "task": "7",
+      "check": "[a_only] calls shared",
+      "expected": "allowed",
+      "observed": "DENIED",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[a_only] tools/list shows only its tools",
+      "expected": "['SpikeTargetA___echo', 'SpikeTargetShared___echo']",
+      "observed": "[]",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[b_only] calls A",
+      "expected": "DENIED",
+      "observed": "DENIED",
+      "status": "PASS"
+    },
+    {
+      "task": "6",
+      "check": "[b_only] calls B",
+      "expected": "allowed",
+      "observed": "DENIED",
+      "status": "FAIL"
+    },
+    {
+      "task": "7",
+      "check": "[b_only] calls shared",
+      "expected": "allowed",
+      "observed": "DENIED",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[b_only] tools/list shows only its tools",
+      "expected": "['SpikeTargetB___echo', 'SpikeTargetShared___echo']",
+      "observed": "[]",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[a_shared] calls A",
+      "expected": "allowed",
+      "observed": "DENIED",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[a_shared] calls B",
+      "expected": "DENIED",
+      "observed": "DENIED",
+      "status": "PASS"
+    },
+    {
+      "task": "7",
+      "check": "[a_shared] calls shared",
+      "expected": "allowed",
+      "observed": "DENIED",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[a_shared] tools/list shows only its tools",
+      "expected": "['SpikeTargetA___echo', 'SpikeTargetShared___echo']",
+      "observed": "[]",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[none] calls A",
+      "expected": "DENIED",
+      "observed": "DENIED",
+      "status": "PASS"
+    },
+    {
+      "task": "6",
+      "check": "[none] calls B",
+      "expected": "DENIED",
+      "observed": "DENIED",
+      "status": "PASS"
+    },
+    {
+      "task": "7",
+      "check": "[none] calls shared",
+      "expected": "allowed",
+      "observed": "DENIED",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[none] tools/list shows only its tools",
+      "expected": "['SpikeTargetShared___echo']",
+      "observed": "[]",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[all] calls A",
+      "expected": "allowed",
+      "observed": "DENIED",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[all] calls B",
+      "expected": "allowed",
+      "observed": "DENIED",
+      "status": "FAIL"
+    },
+    {
+      "task": "7",
+      "check": "[all] calls shared",
+      "expected": "allowed",
+      "observed": "DENIED",
+      "status": "FAIL"
+    },
+    {
+      "task": "6",
+      "check": "[all] tools/list shows only its tools",
+      "expected": "['SpikeTargetA___echo', 'SpikeTargetB___echo', 'SpikeTargetShared___echo']",
+      "observed": "[]",
+      "status": "FAIL"
+    },
+    {
+      "task": "8",
+      "check": "denied call surfaces an error to the node (shape in JSON: deny_shape)",
+      "expected": "error raised",
+      "observed": "GatewayCallError http=400 rpc={'code': -32600, 'message': 'Unsupported protocol version: 2025-11-25', 'data': {'supported': ['2025-03-26'], 'requested': '2025-11-25'}}",
+      "status": "PASS"
+    },
+    {
+      "task": "9",
+      "check": "runtime role calls refresh stub (SigV4)",
+      "expected": "HTTP 200",
+      "observed": "HTTP 200",
+      "status": "PASS"
+    },
+    {
+      "task": "9",
+      "check": "refreshed token has the same scopes",
+      "expected": "['cei-tools-spike/shared', 'cei-tools-spike/target-a']",
+      "observed": "['cei-tools-spike/shared', 'cei-tools-spike/target-a']",
+      "status": "PASS"
+    },
+    {
+      "task": "9",
+      "check": "refreshed token is a new token",
+      "expected": "different",
+      "observed": "different",
+      "status": "PASS"
+    },
+    {
+      "task": "9",
+      "check": "refreshed token calls target A at the Gateway",
+      "expected": "allowed",
+      "observed": "denied",
+      "status": "FAIL"
+    },
+    {
+      "task": "9",
+      "check": "refreshed token is still denied target B",
+      "expected": "DENIED",
+      "observed": "DENIED",
+      "status": "PASS"
+    },
+    {
+      "task": "9",
+      "check": "refresh refused for an inactive run",
+      "expected": "HTTP 409",
+      "observed": "HTTP 409",
+      "status": "PASS"
+    },
+    {
+      "task": "9",
+      "check": "unsigned call to the refresh URL is rejected",
+      "expected": "HTTP 403",
+      "observed": "HTTP 403",
+      "status": "PASS"
+    },
+    {
+      "task": "9",
+      "check": "expired token is rejected by the Gateway",
+      "expected": "HTTP 401",
+      "observed": "HTTP 403",
+      "status": "FAIL"
+    },
+    {
+      "task": "9",
+      "check": "refresh after expiry yields a working token",
+      "expected": "allowed",
+      "observed": "denied",
+      "status": "FAIL"
+    },
+    {
+      "task": "5",
+      "check": "Gateway logs contain policy deny decisions",
+      "expected": "deny decisions logged (info)",
+      "observed": "0 matching of 48 events",
+      "status": "WARN"
+    }
+  ],
+  "raw": {
+    "secret_deny_runtime": "User: arn:aws:sts::257137551728:assumed-role/cei-spike-runtime-257137551728/s2-runtime is not authorized to perform: secretsmanager:GetSecretValue on resource: arn:aws:secretsmanager:us-east-2:257137551728:secret:SpikeM2MSecretD53DB7DA-vgRpsDrMJqQP-zR8Djp with an explicit deny in a resource-based policy",
+    "secret_deny_caller": "User: arn:aws:iam::257137551728:user/sreeram is not authorized to perform: secretsmanager:GetSecretValue on resource: arn:aws:secretsmanager:us-east-2:257137551728:secret:SpikeM2MSecretD53DB7DA-vgRpsDrMJqQP-zR8Djp with an explicit deny in a resource-based policy",
+    "token_claims": {
+      "a_only": {
+        "scope": "cei-tools-spike/target-a",
+        "exp": 1793638355,
+        "client_id": "30cmjj1idiqbq65dhudi4gp2s5"
+      },
+      "b_only": {
+        "scope": "cei-tools-spike/target-b",
+        "exp": 1793638355,
+        "client_id": "30cmjj1idiqbq65dhudi4gp2s5"
+      },
+      "a_shared": {
+        "scope": "cei-tools-spike/shared cei-tools-spike/target-a",
+        "exp": 1793638355,
+        "client_id": "30cmjj1idiqbq65dhudi4gp2s5"
+      },
+      "none": {
+        "scope": "cei-tools-spike/probe",
+        "exp": 1793638355,
+        "client_id": "30cmjj1idiqbq65dhudi4gp2s5"
+      },
+      "all": {
+        "scope": "cei-tools-spike/shared cei-tools-spike/target-b cei-tools-spike/target-a",
+        "exp": 1793638356,
+        "client_id": "30cmjj1idiqbq65dhudi4gp2s5"
+      }
+    },
+    "initialize": {
+      "status": 200,
+      "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{\"tools\":{\"listChanged\":false},\"prompts\":{\"listChanged\":false},\"resources\":{\"listChanged\":false},\"extensions\":{\"io.modelcontextprotocol/tasks\":{}}},\"serverInfo\":{\"version\":\"1.0.0\",\"name\":\"cei-tools-spike\"}}}"
+    },
+    "tools_list_a_only": "{\"jsonrpc\":\"2.0\",\"id\":5,\"error\":{\"code\":-32600,\"message\":\"Unsupported protocol version: 2025-11-25\",\"data\":{\"supported\":[\"2025-03-26\"],\"requested\":\"2025-11-25\"}}}",
+    "tools_list_b_only": "{\"jsonrpc\":\"2.0\",\"id\":9,\"error\":{\"code\":-32600,\"message\":\"Unsupported protocol version: 2025-11-25\",\"data\":{\"requested\":\"2025-11-25\",\"supported\":[\"2025-03-26\"]}}}",
+    "tools_list_a_shared": "{\"jsonrpc\":\"2.0\",\"id\":13,\"error\":{\"code\":-32600,\"message\":\"Unsupported protocol version: 2025-11-25\",\"data\":{\"supported\":[\"2025-03-26\"],\"requested\":\"2025-11-25\"}}}",
+    "tools_list_none": "{\"jsonrpc\":\"2.0\",\"id\":17,\"error\":{\"code\":-32600,\"message\":\"Unsupported protocol version: 2025-11-25\",\"data\":{\"supported\":[\"2025-03-26\"],\"requested\":\"2025-11-25\"}}}",
+    "tools_list_all": "{\"jsonrpc\":\"2.0\",\"id\":21,\"error\":{\"code\":-32600,\"message\":\"Unsupported protocol version: 2025-11-25\",\"data\":{\"supported\":[\"2025-03-26\"],\"requested\":\"2025-11-25\"}}}",
+    "deny_shape": {
+      "exception_type": "GatewayCallError",
+      "message": "tools/call SpikeTargetB___echo failed (HTTP 400)",
+      "http_status": 400,
+      "jsonrpc_error": {
+        "code": -32600,
+        "message": "Unsupported protocol version: 2025-11-25",
+        "data": {
+          "supported": [
+            "2025-03-26"
+          ],
+          "requested": "2025-11-25"
+        }
+      },
+      "is_error_result": false,
+      "raw_body": "{\"jsonrpc\":\"2.0\",\"id\":22,\"error\":{\"code\":-32600,\"message\":\"Unsupported protocol version: 2025-11-25\",\"data\":{\"supported\":[\"2025-03-26\"],\"requested\":\"2025-11-25\"}}}"
+    },
+    "gateway_log_sample": [
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638056326,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=1, jsonrpc=2.0, method=initialize, params={clientInfo={name=s2-scope-test, version=0}, protocolVersion=2025-11-25, capabilities={}}}\",\"id\":\"1\"},\"account_id\":\"257137551728\",\"request_id\":\"537b6879-70a4-48cc-bcf6-4b66d428e28c\",\"trace_id\":\"6ae8bea81f03e4a95f46da581a65dd9c\",\"span_id\":\"113888d45e7771ff\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"537b6879-70a4-48cc-bcf6-4b66d428e28c\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638056326057737,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8bea81f03e4a95f46da581a65dd9c\",\"spanId\":\"113888d45e7771ff\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638056329,\"body\":{\"isError\":false,\"log\":\"Received request for initialize method\",\"id\":\"1\"},\"account_id\":\"257137551728\",\"request_id\":\"537b6879-70a4-48cc-bcf6-4b66d428e28c\",\"trace_id\":\"6ae8bea81f03e4a95f46da581a65dd9c\",\"span_id\":\"113888d45e7771ff\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"537b6879-70a4-48cc-bcf6-4b66d428e28c\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638056329616147,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8bea81f03e4a95f46da581a65dd9c\",\"spanId\":\"113888d45e7771ff\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638056331,\"body\":{\"isError\":false,\"responseBody\":\"{jsonrpc=2.0, id=1, result={protocolVersion=2025-03-26, capabilities={tools={listChanged=false}, prompts={listChanged=false}, resources={listChanged=false}, extensions={io.modelcontextprotocol/tasks={}}}, serverInfo={version=1.0.0, name=cei-tools-spike}}}\",\"log\":\"Successfully processed request\",\"id\":\"1\"},\"account_id\":\"257137551728\",\"request_id\":\"537b6879-70a4-48cc-bcf6-4b66d428e28c\",\"trace_id\":\"6ae8bea81f03e4a95f46da581a65dd9c\",\"span_id\":\"113888d45e7771ff\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"537b6879-70a4-48cc-bcf6-4b66d428e28c\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638056331116755,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8bea81f03e4a95f46da581a65dd9c\",\"spanId\":\"113888d45e7771ff\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638056557,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=2, jsonrpc=2.0, method=tools/call, params={name=SpikeTargetA___echo, arguments={message=hello}}}\",\"id\":\"2\"},\"account_id\":\"257137551728\",\"request_id\":\"95cb1063-92ab-469d-825d-bcb4eea2fb73\",\"trace_id\":\"6ae8bea87f3d7a9b5fe9f5f36586af41\",\"span_id\":\"f479882f56e7060a\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"95cb1063-92ab-469d-825d-bcb4eea2fb73\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638056557862705,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8bea87f3d7a9b5fe9f5f36586af41\",\"spanId\":\"f479882f56e7060a\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638056560,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"2\"},\"account_id\":\"257137551728\",\"request_id\":\"95cb1063-92ab-469d-825d-bcb4eea2fb73\",\"trace_id\":\"6ae8bea87f3d7a9b5fe9f5f36586af41\",\"span_id\":\"f479882f56e7060a\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"95cb1063-92ab-469d-825d-bcb4eea2fb73\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638056560505681,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8bea87f3d7a9b5fe9f5f36586af41\",\"spanId\":\"f479882f56e7060a\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638056796,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=3, jsonrpc=2.0, method=tools/call, params={name=SpikeTargetB___echo, arguments={message=hello}}}\",\"id\":\"3\"},\"account_id\":\"257137551728\",\"request_id\":\"731656f2-35ec-4751-a1bb-d4715275ef22\",\"trace_id\":\"6ae8bea86cfd293d336925146284c8f0\",\"span_id\":\"40d87db323009f42\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"731656f2-35ec-4751-a1bb-d4715275ef22\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638056796698110,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8bea86cfd293d336925146284c8f0\",\"spanId\":\"40d87db323009f42\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638056801,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"3\"},\"account_id\":\"257137551728\",\"request_id\":\"731656f2-35ec-4751-a1bb-d4715275ef22\",\"trace_id\":\"6ae8bea86cfd293d336925146284c8f0\",\"span_id\":\"40d87db323009f42\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"731656f2-35ec-4751-a1bb-d4715275ef22\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638056801026100,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8bea86cfd293d336925146284c8f0\",\"spanId\":\"40d87db323009f42\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638057021,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=4, jsonrpc=2.0, method=tools/call, params={name=SpikeTargetShared___echo, arguments={message=hello}}}\",\"id\":\"4\"},\"account_id\":\"257137551728\",\"request_id\":\"2ea448e6-d7c9-4ee7-9e1b-c5e373505367\",\"trace_id\":\"6ae8bea87fd2268f74dbb6254278e017\",\"span_id\":\"2af2068bd6c6d64b\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"2ea448e6-d7c9-4ee7-9e1b-c5e373505367\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638057021526865,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8bea87fd2268f74dbb6254278e017\",\"spanId\":\"2af2068bd6c6d64b\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638057024,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"4\"},\"account_id\":\"257137551728\",\"request_id\":\"2ea448e6-d7c9-4ee7-9e1b-c5e373505367\",\"trace_id\":\"6ae8bea87fd2268f74dbb6254278e017\",\"span_id\":\"2af2068bd6c6d64b\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"2ea448e6-d7c9-4ee7-9e1b-c5e373505367\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638057024889156,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8bea87fd2268f74dbb6254278e017\",\"spanId\":\"2af2068bd6c6d64b\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638057243,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=5, jsonrpc=2.0, method=tools/list, params={}}\",\"id\":\"5\"},\"account_id\":\"257137551728\",\"request_id\":\"ff8c900d-4797-4b16-8d14-db58704652f6\",\"trace_id\":\"6ae8bea93e18f552101871420584e761\",\"span_id\":\"354766f8dcff3ea9\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"ff8c900d-4797-4b16-8d14-db58704652f6\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638057243655805,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8bea93e18f552101871420584e761\",\"spanId\":\"354766f8dcff3ea9\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638057247,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"5\"},\"account_id\":\"257137551728\",\"request_id\":\"ff8c900d-4797-4b16-8d14-db58704652f6\",\"trace_id\":\"6ae8bea93e18f552101871420584e761\",\"span_id\":\"354766f8dcff3ea9\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"ff8c900d-4797-4b16-8d14-db58704652f6\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638057247211795,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8bea93e18f552101871420584e761\",\"spanId\":\"354766f8dcff3ea9\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638057475,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=6, jsonrpc=2.0, method=tools/call, params={name=SpikeTargetA___echo, arguments={message=hello}}}\",\"id\":\"6\"},\"account_id\":\"257137551728\",\"request_id\":\"05dfdf25-cdcb-4823-91f8-4ccd608b87f6\",\"trace_id\":\"6ae8bea96fd747e04f9fa1e031d0bf4a\",\"span_id\":\"832374dc967e2ce9\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"05dfdf25-cdcb-4823-91f8-4ccd608b87f6\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638057475643051,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8bea96fd747e04f9fa1e031d0bf4a\",\"spanId\":\"832374dc967e2ce9\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638057478,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"6\"},\"account_id\":\"257137551728\",\"request_id\":\"05dfdf25-cdcb-4823-91f8-4ccd608b87f6\",\"trace_id\":\"6ae8bea96fd747e04f9fa1e031d0bf4a\",\"span_id\":\"832374dc967e2ce9\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"05dfdf25-cdcb-4823-91f8-4ccd608b87f6\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638057478862205,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8bea96fd747e04f9fa1e031d0bf4a\",\"spanId\":\"832374dc967e2ce9\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638057702,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=7, jsonrpc=2.0, method=tools/call, params={name=SpikeTargetB___echo, arguments={message=hello}}}\",\"id\":\"7\"},\"account_id\":\"257137551728\",\"request_id\":\"7a270b7b-8283-4cb8-b877-f405bb8709aa\",\"trace_id\":\"6ae8bea920117e4506e43bbc05cd11a2\",\"span_id\":\"c5bd950185d86788\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"7a270b7b-8283-4cb8-b877-f405bb8709aa\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638057702344974,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8bea920117e4506e43bbc05cd11a2\",\"spanId\":\"c5bd950185d86788\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638057706,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"7\"},\"account_id\":\"257137551728\",\"request_id\":\"7a270b7b-8283-4cb8-b877-f405bb8709aa\",\"trace_id\":\"6ae8bea920117e4506e43bbc05cd11a2\",\"span_id\":\"c5bd950185d86788\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"7a270b7b-8283-4cb8-b877-f405bb8709aa\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638057706251565,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8bea920117e4506e43bbc05cd11a2\",\"spanId\":\"c5bd950185d86788\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638057944,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=8, jsonrpc=2.0, method=tools/call, params={name=SpikeTargetShared___echo, arguments={message=hello}}}\",\"id\":\"8\"},\"account_id\":\"257137551728\",\"request_id\":\"7c24db2b-6530-4c49-a132-b19830b7e531\",\"trace_id\":\"6ae8bea95ee59248780183db5d117e39\",\"span_id\":\"73515a4a668c88b5\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"7c24db2b-6530-4c49-a132-b19830b7e531\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638057944079197,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8bea95ee59248780183db5d117e39\",\"spanId\":\"73515a4a668c88b5\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638057947,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"8\"},\"account_id\":\"257137551728\",\"request_id\":\"7c24db2b-6530-4c49-a132-b19830b7e531\",\"trace_id\":\"6ae8bea95ee59248780183db5d117e39\",\"span_id\":\"73515a4a668c88b5\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"7c24db2b-6530-4c49-a132-b19830b7e531\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638057947178334,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8bea95ee59248780183db5d117e39\",\"spanId\":\"73515a4a668c88b5\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638058178,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=9, jsonrpc=2.0, method=tools/list, params={}}\",\"id\":\"9\"},\"account_id\":\"257137551728\",\"request_id\":\"73efdb4e-a842-4bb7-8ae8-7747486ef499\",\"trace_id\":\"6ae8beaa29dac84536f0bad752726ab2\",\"span_id\":\"f866b19c3d7e9675\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"73efdb4e-a842-4bb7-8ae8-7747486ef499\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638058178591790,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8beaa29dac84536f0bad752726ab2\",\"spanId\":\"f866b19c3d7e9675\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638058181,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"9\"},\"account_id\":\"257137551728\",\"request_id\":\"73efdb4e-a842-4bb7-8ae8-7747486ef499\",\"trace_id\":\"6ae8beaa29dac84536f0bad752726ab2\",\"span_id\":\"f866b19c3d7e9675\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"73efdb4e-a842-4bb7-8ae8-7747486ef499\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638058181298067,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8beaa29dac84536f0bad752726ab2\",\"spanId\":\"f866b19c3d7e9675\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638058410,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=10, jsonrpc=2.0, method=tools/call, params={name=SpikeTargetA___echo, arguments={message=hello}}}\",\"id\":\"10\"},\"account_id\":\"257137551728\",\"request_id\":\"b22c7a9e-55b3-4f84-aea1-2742b3b5d8e8\",\"trace_id\":\"6ae8beaa157f4f0c75e82b5553bc1206\",\"span_id\":\"ad64ac973f1838e5\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"b22c7a9e-55b3-4f84-aea1-2742b3b5d8e8\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638058410545047,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8beaa157f4f0c75e82b5553bc1206\",\"spanId\":\"ad64ac973f1838e5\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638058413,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"10\"},\"account_id\":\"257137551728\",\"request_id\":\"b22c7a9e-55b3-4f84-aea1-2742b3b5d8e8\",\"trace_id\":\"6ae8beaa157f4f0c75e82b5553bc1206\",\"span_id\":\"ad64ac973f1838e5\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"b22c7a9e-55b3-4f84-aea1-2742b3b5d8e8\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638058413824782,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8beaa157f4f0c75e82b5553bc1206\",\"spanId\":\"ad64ac973f1838e5\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638058872,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=12, jsonrpc=2.0, method=tools/call, params={name=SpikeTargetShared___echo, arguments={message=hello}}}\",\"id\":\"12\"},\"account_id\":\"257137551728\",\"request_id\":\"282b9a69-f7f3-455e-aeb9-02531e2ebc6a\",\"trace_id\":\"6ae8beaa1d2a3c981591491734b9c97c\",\"span_id\":\"1a3e373e08be1e4d\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"282b9a69-f7f3-455e-aeb9-02531e2ebc6a\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638058872628082,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8beaa1d2a3c981591491734b9c97c\",\"spanId\":\"1a3e373e08be1e4d\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638058874,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"12\"},\"account_id\":\"257137551728\",\"request_id\":\"282b9a69-f7f3-455e-aeb9-02531e2ebc6a\",\"trace_id\":\"6ae8beaa1d2a3c981591491734b9c97c\",\"span_id\":\"1a3e373e08be1e4d\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"282b9a69-f7f3-455e-aeb9-02531e2ebc6a\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638058874803810,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8beaa1d2a3c981591491734b9c97c\",\"spanId\":\"1a3e373e08be1e4d\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638059098,\"body\":{\"isError\":false,\"log\":\"Started processing request\",\"requestBody\":\"{id=13, jsonrpc=2.0, method=tools/list, params={}}\",\"id\":\"13\"},\"account_id\":\"257137551728\",\"request_id\":\"2620750d-9bc7-4169-ab6b-67fc23de8c20\",\"trace_id\":\"6ae8beab07ec22327b2820352bd76d49\",\"span_id\":\"2e299d9b2592968c\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"2620750d-9bc7-4169-ab6b-67fc23de8c20\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638059098455738,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6ae8beab07ec22327b2820352bd76d49\",\"spanId\":\"2e299d9b2592968c\"}",
+      "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"event_timestamp\":1793638059101,\"body\":{\"isError\":true,\"log\":\"Unsupported protocol version: 2025-11-25\",\"id\":\"13\"},\"account_id\":\"257137551728\",\"request_id\":\"2620750d-9bc7-4169-ab6b-67fc23de8c20\",\"trace_id\":\"6ae8beab07ec22327b2820352bd76d49\",\"span_id\":\"2e299d9b2592968c\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-spike-bc8ksghjc0\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-spike-bc8ksghjc0\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"2620750d-9bc7-4169-ab6b-67fc23de8c20\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793638059101444594,\"severityNumber\":17,\"severityText\":\"ERROR\",\"traceId\":\"6ae8beab07ec22327b2820352bd76d49\",\"spanId\":\"2e299d9b2592968c\"}"
+    ]
+  }
+}
