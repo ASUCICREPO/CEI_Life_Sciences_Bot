@@ -4,11 +4,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
 from pydantic import BaseModel, Field
 
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, DataSourceTool
+from shared.tools import retrying_http as http
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +30,10 @@ class ChEMBLTool(DataSourceTool):
     def _build_payload(self, query: str, target_type: str = "", max_results: int = 10) -> dict[str, Any]:
         return {"query": query, "target_type": target_type, "max_results": max_results}
 
-    def _direct_invoke(self, query: str, target_type: str = "", max_results: int = 10, **_: Any) -> DataSourceResult:
+    def fetch(self, query: str, target_type: str = "", max_results: int = 10, **_: Any) -> DataSourceResult:
         retrieved_at = datetime.now(timezone.utc)
         try:
-            resp = requests.get(
+            resp = http.get(
                 f"{_API}/molecule/search",
                 params={"q": query, "limit": max_results, "format": "json"},
                 headers=_HEADERS,
@@ -78,5 +78,5 @@ class ChEMBLTool(DataSourceTool):
                 query_metadata={"query": query, "total": len(results)},
             )
         except Exception as exc:
-            logger.error({"event": "chembl_direct_invoke_error", "error": str(exc)})
+            logger.error({"event": "chembl_fetch_error", "error": str(exc)})
             return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": str(exc)})

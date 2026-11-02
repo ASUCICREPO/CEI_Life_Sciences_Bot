@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
-import requests
 from pydantic import BaseModel, Field
 
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, DataSourceTool
+from shared.tools import retrying_http as http
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,12 @@ class PubChemTool(DataSourceTool):
     def _build_payload(self, query: str, search_type: str = "name", max_results: int = 10) -> dict[str, Any]:
         return {"query": query, "search_type": search_type, "max_results": max_results}
 
-    def _direct_invoke(self, query: str, search_type: str = "name", max_results: int = 10, **_: Any) -> DataSourceResult:
+    def fetch(self, query: str, search_type: str = "name", max_results: int = 10, **_: Any) -> DataSourceResult:
         retrieved_at = datetime.now(timezone.utc)
         try:
             # Step 1: get CIDs
-            cids_resp = requests.get(
-                f"{_PUG}/compound/name/{requests.utils.quote(query)}/cids/JSON",
+            cids_resp = http.get(
+                f"{_PUG}/compound/name/{quote(query)}/cids/JSON",
                 headers=_HEADERS,
                 timeout=_TIMEOUT,
             )
@@ -54,7 +55,7 @@ class PubChemTool(DataSourceTool):
 
             # Step 2: fetch properties for all CIDs
             cid_str = ",".join(str(c) for c in cids)
-            props_resp = requests.get(
+            props_resp = http.get(
                 f"{_PUG}/compound/cid/{cid_str}/property/IUPACName,MolecularFormula,MolecularWeight,IsomericSMILES,InChIKey/JSON",
                 headers=_HEADERS,
                 timeout=_TIMEOUT,
@@ -101,5 +102,5 @@ class PubChemTool(DataSourceTool):
                 query_metadata={"query": query, "total": len(results)},
             )
         except Exception as exc:
-            logger.error({"event": "pubchem_direct_invoke_error", "error": str(exc)})
+            logger.error({"event": "pubchem_fetch_error", "error": str(exc)})
             return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": str(exc)})

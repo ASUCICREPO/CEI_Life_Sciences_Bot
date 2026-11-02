@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: ACTIVE (F1, F2 and F3 done; wave 2 — S2 — in progress). Source of truth for every decision referenced below is `.agents/decision-log.md`. This file gives the map; each phase's detail lives in `.agents/phases/<ID>-*.md`.
+Status: ACTIVE (F1, F2 and F3 done; wave 2 — S2 and F4 — in progress). Source of truth for every decision referenced below is `.agents/decision-log.md`. This file gives the map; each phase's detail lives in `.agents/phases/<ID>-*.md`.
 
 This file is owned by the documentation agent. The phase files S1–S10 (spikes) and F01–F10 are also owned by the documentation agent. Phase files F11–F21 are written in parallel by another agent using the same template; they are listed here for completeness but this file does not certify their content.
 
@@ -16,7 +16,7 @@ This file is owned by the documentation agent. The phase files S1–S10 (spikes)
 | F1 | Deploy foundation | Stand up `deploy.sh`, CodeBuild, and the CDK skeleton so every later phase has somewhere to deploy to. | — | `architecture.md` (deploy foundation row), `security.md` (IaC hygiene) | done |
 | F2 | Hosting + auth | Serve the `founder-ai-dashboard` SPA from S3/CloudFront/WAF with Cognito self sign-up and login. | F1 | `architecture.md` §1 (S3/CloudFront/WAF/Cognito rows), `auth-and-tool-scope.md` §1–2, `security.md` (network/edge) | done |
 | F3 | API + session store | Stand up the one Regional REST API, the Cognito authorizer, throttling, and the Session Metadata + Chat History tables with list/history routes. | F2 | `api.md` (Sessions, Chat history), `data-model.md` §1–2, `auth-and-tool-scope.md` §9/§11 | done |
-| F4 | Data tools | Stand up the AgentCore Gateway, the 10 source Lambdas as targets, Cognito scopes, and Cedar Policy in `ENFORCE`. | F1, S2 | `tools.md` §1, `auth-and-tool-scope.md` (full) | not started |
+| F4 | Data tools | Stand up the AgentCore Gateway, the 10 source Lambdas as targets, Cognito scopes, and Cedar Policy in `ENFORCE`. | F1, S2 | `tools.md` §1, `auth-and-tool-scope.md` (full) | in progress |
 | F5 | Research agent live | Deploy the Research runtime to AgentCore, wire the deterministic Session Router, and stream real answers over `/chat/stream`. | F3, F4, S1 | `agents.md` §1, `architecture.md` §2.1, `api.md` (`/chat/stream`), `streaming-protocol.md` (base) | not started |
 | F6 | Streaming UI | Ship CEI UI 1.2 progressive SSE end to end: renderer, thinking block/trace, grounding pending state, trace storage. | F5 | `streaming-protocol.md` (full), `data-model.md` §2 (trace), `tools.md` §6 | not started |
 | F7 | Drafting + export | Deploy the Drafting runtime and ship PDF/DOCX/MD/CSV/LaTeX/TXT export with the review-acknowledgment gate. | F6 | `agents.md` §2, `tools.md` §8, `api.md` (`/exports`), `data-model.md` §7 | not started |
