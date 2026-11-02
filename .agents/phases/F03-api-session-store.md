@@ -1,6 +1,6 @@
 # F03 — API + session store
 
-Status: in progress (deployed integration check remains) | Depends on: F2 | Decisions: B2, B12, B22, B59, B78 | Specs: [`../specs/api.md`](../specs/api.md) (Sessions, Chat history routes; error envelope; pagination), [`../specs/data-model.md`](../specs/data-model.md) §1–2 (Session Metadata Store, Chat History Store), [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) §9/§11
+Status: done (deployed integration check passed 32/32 via `backend/scripts/f3_integration_test.py`, run by the user on 2026-10-28; expired-token 401 not exercised, garbage-token 401 was) | Depends on: F2 | Decisions: B2, B12, B22, B59, B78 | Specs: [`../specs/api.md`](../specs/api.md) (Sessions, Chat history routes; error envelope; pagination), [`../specs/data-model.md`](../specs/data-model.md) §1–2 (Session Metadata Store, Chat History Store), [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) §9/§11
 
 ## Goal
 
