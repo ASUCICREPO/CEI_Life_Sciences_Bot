@@ -307,6 +307,18 @@ The implemented agent response is completed JSON with optional `ui`. The local a
 
 Production authentication, Session Runner routing, persistence, replay protection, and graph resume remain planned work. Final production SSE delivery and progressive surface patches are also deferred.
 
+## Planned: CEI UI 1.2 progressive streaming
+
+**Status: Planned — not built.** This section does not change anything above. The 1.1 contract in this document — the component allowlist, structural limits, artifact security model, grounding rules, and action contract — stays exactly as written and applies unchanged to 1.2.
+
+CEI UI 1.2 adds a transport-level addition only: progressive SSE patch events, so the client can build the answer while the agent is still working instead of receiving one completed surface at the end. Servers will emit `version: "1.2"` on new streams; clients and stored history will continue to accept `"1.0"`, `"1.1"`, and `"1.2"`. A fully replayed 1.2 stream produces the same `CEIUISurface` object that 1.1 produces today — only the `version` string differs.
+
+The planned event catalog includes `surface_begin`, `component_add`, `text_delta`, `component_update`, `grounding_update`, `trace_event`, `progress`, `usage`, `hitl_request`, `job_handoff`, `heartbeat`, `surface_end`, and `error`. These events also populate the collapsible "thinking block" (rendered from `trace_event`) and the live token/cost counter (`usage`) called for elsewhere in this project's design.
+
+`job_handoff` is decided once, from the plan step's own duration estimate, before the run streams any part of the answer — a run never switches to a background job mid-stream after content has already started. This same event catalog and transport also carries a separate single-source "tool agent" chat route; nothing here is specific to the main chat route.
+
+Full event shapes, ordering rules, reconnect behavior, and worked examples: `.agents/specs/streaming-protocol.md`.
+
 ## Examples
 
 The first two examples below are `version: "1.0"` surfaces. They remain valid under 1.1 clients and validators, demonstrating the backward-compatibility rule in "Version Rules". The third example is a `version: "1.1"` surface using the new components.
