@@ -75,3 +75,4 @@ backend/cei.deploy.json
 # Frontend production build + local runtime config (F2, B1/B66) — built/generated, not committed
 frontend/dist/
 frontend/public/config.json
+.playwright-mcp/
