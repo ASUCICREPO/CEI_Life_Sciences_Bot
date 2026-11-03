@@ -352,8 +352,9 @@ export class ToolGateway extends Construct {
         {
           id: 'AwsSolutions-IAM5',
           reason: 'ADR: gateway/* in the Gateway role | Rationale: S2 — the role is a required Gateway property, so the Gateway ARN cannot be referenced without a circular dependency | Alternative: a fixed name rejected — the service appends a random suffix',
-          // region/account are tokens in an env-agnostic synth and literals with a deploy config
-          appliesTo: [{ regex: '/^Resource::arn:<AWS::Partition>:bedrock-agentcore:[^:]+:[^:]+:gateway\\/\\*$/' }],
+          // partition/region/account are tokens without cdk.json context (Jest) and literals under the CDK CLI,
+          // whose cdk.json feature flags resolve them when the stack env is known — match both
+          appliesTo: [{ regex: '/^Resource::arn:(<AWS::Partition>|aws[a-z-]*):bedrock-agentcore:[^:]+:[^:]+:gateway\\/\\*$/' }],
         },
       ],
       true,

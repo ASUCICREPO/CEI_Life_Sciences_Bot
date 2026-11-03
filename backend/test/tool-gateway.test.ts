@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
@@ -197,6 +198,21 @@ describe('ToolGateway (F4)', () => {
       expect(fn.Environment.Variables.ALLOWED_CALLER_ROLE_ARNS).toBe('');
       expect(fn.Environment.Variables.ALLOWED_SCOPES.split(',')).toHaveLength(EXPECTED_SCOPES.length);
     });
+  });
+
+  it('passes cdk-nag with the cdk.json feature flags the CDK CLI applies (they turn ARN tokens into literals)', () => {
+    // Regression: a suppression regex that only matched `<AWS::Partition>` passed here without context
+    // but failed the real `cdk deploy` in CodeBuild, where cdk.json resolves the partition to `aws`.
+    const context = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'cdk.json'), 'utf-8')).context;
+    const app = new cdk.App({ context });
+    const stack = new BackendStack(app, 'TestStack', {
+      env: { region: 'us-east-2', account: '123456789012' },
+      frontendAssetPath: FIXTURE_ASSET_PATH,
+      config: testConfig({ region: 'us-east-2' }),
+      webAclArn: 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123',
+    });
+    const errors = Annotations.fromStack(stack).findError('*', Match.stringLikeRegexp('AwsSolutions-.*'));
+    expect(errors).toHaveLength(0);
   });
 
   it('passes cdk-nag with ADR-format suppressions only', () => {
