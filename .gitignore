@@ -77,3 +77,4 @@ frontend/dist/
 frontend/public/config.json
 .playwright-mcp/
 .cloudforge/
+.codex/
