@@ -123,7 +123,35 @@ describe('BackendStack REST API + session store', () => {
     template.hasResourceProperties('AWS::ApiGateway::GatewayResponse', { ResponseType: 'THROTTLED', StatusCode: '429' });
   });
 
-  it('creates both tables with the specified keys, encryption, PITR and no TTL or GSI', () => {
+  it('gateway error responses carry CORS headers so the browser can read the envelope', () => {
+    for (const type of ['UNAUTHORIZED', 'ACCESS_DENIED', 'THROTTLED', 'DEFAULT_4XX', 'DEFAULT_5XX']) {
+      template.hasResourceProperties('AWS::ApiGateway::GatewayResponse', {
+        ResponseType: type,
+        ResponseParameters: Match.objectLike({
+          'gatewayresponse.header.Access-Control-Allow-Origin': Match.anyValue(),
+          'gatewayresponse.header.Access-Control-Allow-Headers': "'Authorization,Content-Type,Accept'",
+          'gatewayresponse.header.Vary': "'Origin'",
+        }),
+      });
+    }
+  });
+
+  it('CORS preflight allows the headers the SPA sends (Authorization, Content-Type, Accept)', () => {
+    template.hasResourceProperties('AWS::ApiGateway::Method', {
+      HttpMethod: 'OPTIONS',
+      Integration: Match.objectLike({
+        IntegrationResponses: Match.arrayWith([
+          Match.objectLike({
+            ResponseParameters: Match.objectLike({
+              'method.response.header.Access-Control-Allow-Headers': Match.stringLikeRegexp('Authorization,Content-Type,Accept'),
+            }),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('creates both tables with the specified keys, encryption, PITR and no TTL', () => {
     const tables = template.findResources('AWS::DynamoDB::Table');
     expect(Object.keys(tables)).toHaveLength(2);
     template.hasResourceProperties('AWS::DynamoDB::Table', {
@@ -145,8 +173,21 @@ describe('BackendStack REST API + session store', () => {
       expect(table.Properties.SSESpecification).toEqual({ SSEEnabled: true });
       expect(table.Properties.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
       expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
-      expect(table.Properties.GlobalSecondaryIndexes).toBeUndefined();
       expect(table.DeletionPolicy).toBe('Retain');
+    }
+  });
+
+  it('gives only ChatMetadataStore the by_created / by_updated GSIs (projection ALL)', () => {
+    const tables = Object.values(template.findResources('AWS::DynamoDB::Table')) as any[];
+    const metadata = tables.find((t) => t.Properties.KeySchema[0].AttributeName === 'user_id');
+    const history = tables.find((t) => t.Properties.KeySchema[0].AttributeName === 'session_id');
+    expect(history.Properties.GlobalSecondaryIndexes).toBeUndefined();
+    const gsis = metadata.Properties.GlobalSecondaryIndexes;
+    expect(gsis.map((g: any) => g.IndexName).sort()).toEqual(['by_created', 'by_updated']);
+    for (const g of gsis) {
+      expect(g.KeySchema[0]).toEqual({ AttributeName: 'user_id', KeyType: 'HASH' });
+      expect(g.KeySchema[1].AttributeName).toBe(g.IndexName === 'by_created' ? 'created_at' : 'updated_at');
+      expect(g.Projection).toEqual({ ProjectionType: 'ALL' });
     }
   });
 
@@ -177,15 +218,21 @@ describe('BackendStack REST API + session store', () => {
   it('grants each handler only the table actions it needs', () => {
     const metadataStatements = policyActionsFor(template, 'SessionMetadataHandlerRole');
     const metadataActions = metadataStatements.flatMap((s) => s.actions).filter((a) => a.startsWith('dynamodb:'));
-    expect(metadataActions.sort()).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem']);
+    expect([...new Set(metadataActions)].sort()).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem']);
 
     const historyStatements = policyActionsFor(template, 'SessionHistoryHandlerRole');
     const dynamo = historyStatements.filter((s) => s.actions.some((a) => a.startsWith('dynamodb:')));
     expect(dynamo.map((s) => s.actions.join(',')).sort()).toEqual(['dynamodb:GetItem', 'dynamodb:Query']);
 
     for (const statement of [...metadataStatements, ...historyStatements]) {
-      expect(JSON.stringify(statement.resource)).not.toContain('"*"');
-      expect(JSON.stringify(statement.resource)).not.toContain('/index/');
+      const resource = JSON.stringify(statement.resource);
+      expect(resource).not.toContain('"*"');
+      expect(resource).not.toContain('/index/*');
+      if (resource.includes('/index/')) {
+        // only the metadata handler may Query, and only the two named GSIs
+        expect(statement.actions).toEqual(['dynamodb:Query']);
+        expect(historyStatements).not.toContain(statement);
+      }
       expect(statement.actions).not.toContain('dynamodb:DeleteItem');
       expect(statement.actions).not.toContain('dynamodb:Scan');
     }

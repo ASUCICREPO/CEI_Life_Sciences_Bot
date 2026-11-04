@@ -106,10 +106,13 @@ describe('BackendStack', () => {
       template.hasResourceProperties('AWS::Cognito::UserPool', {
         LambdaConfig: Match.objectLike({ PreSignUp: Match.anyValue() }),
       });
-      // ADR: not resourceCountIs(1) | Rationale: BucketDeployment adds its own CDK-owned singleton Lambda handler alongside the pre-sign-up trigger
+      // ADR: not resourceCountIs(1) | Rationale: BucketDeployment adds its own CDK-owned singleton Lambda handler, and the agent proxy also uses handler.handler
       template.resourcePropertiesCountIs(
         'AWS::Lambda::Function',
-        Match.objectLike({ Handler: 'handler.handler' }),
+        Match.objectLike({
+          Handler: 'handler.handler',
+          Environment: { Variables: Match.objectLike({ ALLOWED_EMAIL_DOMAINS: Match.anyValue() }) },
+        }),
         1,
       );
     });
@@ -255,9 +258,122 @@ describe('BackendStack', () => {
         'CognitoDomain',
         'DistributionDomainName',
         'SiteUrl',
+        'ApiBaseUrl',
+        'AgentProxyUrl',
+        'ResearchRuntimeArn',
+        'DraftingRuntimeArn',
+        'AnalysisRuntimeArn',
+        'PipelineRuntimeArn',
       ]) {
         expect(Object.keys(template.findOutputs(outputName))).toHaveLength(1);
       }
+    });
+
+    it('ships the four agent proxy URLs in config.json, not raw AgentCore URLs', () => {
+      const app = new cdk.App();
+      const template = Template.fromStack(testStack(app, 'TestStack', { config: testConfig() }));
+      const deployments = Object.values(template.findResources('Custom::CDKBucketDeployment'));
+      const configDeployment = deployments.find((d) => JSON.stringify(d).includes('application/json'));
+      expect(configDeployment).toBeDefined();
+      const serialized = JSON.stringify(configDeployment);
+      const proxyUrlLogicalId = Object.keys(template.findResources('AWS::Lambda::Url'))[0];
+      expect(proxyUrlLogicalId).toBeDefined();
+      expect(serialized).toContain(proxyUrlLogicalId);
+      for (const agent of ['research', 'drafting', 'analysis', 'pipeline']) {
+        expect(serialized).toContain(agent);
+      }
+      expect(serialized).not.toContain('/invocations?qualifier=DEFAULT');
+    });
+
+    it('fronts the runtimes with a CORS-restricted agent proxy function URL', () => {
+      const app = new cdk.App();
+      const template = Template.fromStack(testStack(app, 'TestStack', { config: testConfig() }));
+      const urls = Object.values(template.findResources('AWS::Lambda::Url'));
+      expect(urls).toHaveLength(1);
+      const props = urls[0].Properties;
+      expect(props.AuthType).toBe('NONE');
+      expect(props.InvokeMode).toBe('BUFFERED');
+      expect(props.Cors.AllowMethods).toEqual(['POST']);
+      expect(props.Cors.AllowCredentials).toBe(false);
+      expect(props.Cors.AllowHeaders).toEqual(
+        expect.arrayContaining(['authorization', 'content-type', 'x-amzn-bedrock-agentcore-runtime-session-id']),
+      );
+      const origins = JSON.stringify(props.Cors.AllowOrigins);
+      expect(origins).not.toContain('*');
+      expect(origins).not.toContain('localhost');
+      expect(origins).toContain('DomainName');
+
+      // The proxy Lambda gets the four AgentCore invocation URLs and a timeout above the SPA's 10-minute wait
+      const fn = Object.values(template.findResources('AWS::Lambda::Function')).find(
+        (f) => f.Properties?.Environment?.Variables?.AGENT_URLS !== undefined,
+      );
+      expect(fn).toBeDefined();
+      expect(fn!.Properties.Timeout).toBe(900);
+      expect(JSON.stringify(fn!.Properties.Environment.Variables.AGENT_URLS).match(/invocations\?qualifier=DEFAULT/g)).toHaveLength(4);
+    });
+
+    it('allows the agent proxy (region-scoped Lambda URL host) in the CSP connect-src, not AgentCore', () => {
+      const app = new cdk.App();
+      const template = Template.fromStack(testStack(app, 'TestStack', { config: testConfig() }));
+      const policies = Object.values(template.findResources('AWS::CloudFront::ResponseHeadersPolicy'));
+      const csp = JSON.stringify(policies);
+      expect(csp).toMatch(/connect-src [^;]*https:\/\/\*\.lambda-url\.us-east-1\.on\.aws/);
+      expect(csp).not.toContain('bedrock-agentcore');
+    });
+  });
+
+  describe('Session stores', () => {
+    const tables = () => {
+      const app = new cdk.App();
+      const template = Template.fromStack(testStack(app, 'TestStack'));
+      const all = Object.values(template.findResources('AWS::DynamoDB::Table'));
+      const byPk = (pk: string) =>
+        all.find((t) => t.Properties.KeySchema.some((k: any) => k.KeyType === 'HASH' && k.AttributeName === pk))!;
+      return { template, all, metadata: byPk('user_id'), history: byPk('session_id') };
+    };
+
+    it('defines by_created and by_updated GSIs on ChatMetadataStore with projection ALL', () => {
+      const { metadata } = tables();
+      const gsis = metadata.Properties.GlobalSecondaryIndexes;
+      expect(gsis).toHaveLength(2);
+      for (const [name, sk] of [['by_created', 'created_at'], ['by_updated', 'updated_at']]) {
+        const gsi = gsis.find((g: any) => g.IndexName === name);
+        expect(gsi.KeySchema).toEqual([
+          { AttributeName: 'user_id', KeyType: 'HASH' },
+          { AttributeName: sk, KeyType: 'RANGE' },
+        ]);
+        expect(gsi.Projection).toEqual({ ProjectionType: 'ALL' });
+      }
+    });
+
+    it('keys ChatHistoryStore by session_id + numeric sequence_number', () => {
+      const { history } = tables();
+      expect(history.Properties.KeySchema).toEqual([
+        { AttributeName: 'session_id', KeyType: 'HASH' },
+        { AttributeName: 'sequence_number', KeyType: 'RANGE' },
+      ]);
+      expect(history.Properties.AttributeDefinitions).toEqual(
+        expect.arrayContaining([{ AttributeName: 'sequence_number', AttributeType: 'N' }]),
+      );
+    });
+
+    it('enables PITR, retains, and sets no TTL on both tables', () => {
+      const { all } = tables();
+      expect(all).toHaveLength(2);
+      for (const t of all) {
+        expect(t.Properties.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+        expect(t.Properties.BillingMode).toBe('PAY_PER_REQUEST');
+        expect(t.Properties.TimeToLiveSpecification).toBeUndefined();
+        expect(t.DeletionPolicy).toBe('Retain');
+      }
+    });
+
+    it('grants the metadata GSIs by exact name, never index/*', () => {
+      const { template } = tables();
+      const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
+      expect(policies).toContain('/index/by_created');
+      expect(policies).toContain('/index/by_updated');
+      expect(policies).not.toContain('/index/*');
     });
   });
 });

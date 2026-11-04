@@ -16,6 +16,7 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { DeployConfig, DEFAULT_LIMITS } from './config/deploy-config';
 import { PythonDepsLayer } from './constructs/python-deps-layer';
+import { AgentRuntimes } from './constructs/agent-runtimes';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export interface BackendStackProps extends cdk.StackProps {
@@ -53,11 +54,8 @@ export class BackendStack extends cdk.Stack {
       networkConfiguration: agentcore.CodeInterpreterNetworkConfiguration.usingPublicNetwork(),
     });
 
-    // When SessionRunnerLambda and the specialist AgentCore runtimes are added to this stack, call:
-    //   codeInterpreter.grantUse(sessionRunnerLambda.role!);
-    //   codeInterpreter.grantUse(agentRuntimeRole);
-    // These grant: StartCodeInterpreterSession, InvokeCodeInterpreter, StopCodeInterpreterSession
-    // Pass CEI_CODE_INTERPRETER_ID as an environment variable to those resources.
+    // The specialist runtimes get grantUse + CEI_CODE_INTERPRETER_ID in AgentRuntimes (below). When
+    // SessionRunnerLambda is added, call codeInterpreter.grantUse(sessionRunnerLambda.role!) as well.
 
     new cdk.CfnOutput(this, 'CodeInterpreterId', {
       value: codeInterpreter.codeInterpreterId,
@@ -156,6 +154,19 @@ export class BackendStack extends cdk.Stack {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
+    // ADR: AttachmentsBucket lives in BackendStack next to AgentRuntimes | Rationale: same-stack Ref/GetAtt only — no
+    // cross-stack export, so no stack cycle and no export lock on the name; CloudFormation generates the name and the
+    // runtimes receive it as CEI_ATTACHMENTS_BUCKET. No event notifications here (bucket -> Lambda -> bucket would cycle)
+    const attachmentsBucket = new s3.Bucket(this, 'AttachmentsBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      serverAccessLogsBucket: logsBucket,
+      serverAccessLogsPrefix: 'attachments-access-logs/',
+      // ADR: RETAIN | Rationale: attachments are user data — a stack teardown must not delete them
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
     // ---------------------------------------------------------------
     // REST API (B2): one Regional REST API; routes, authorizer and Lambdas are added further down.
     // Created before the CSP because connect-src needs its origin (RestApi id only, no cycle with the site).
@@ -204,13 +215,18 @@ export class BackendStack extends cdk.Stack {
     const cognitoDomainHost = `${cognitoDomainPrefix}.auth.${this.region}.amazoncognito.com`;
     const cognitoDomainUrl = `https://${cognitoDomainHost}`;
     const cognitoIdpHost = `cognito-idp.${this.region}.amazonaws.com`;
+    // ADR: region-scoped Lambda function URL wildcard for the agent proxy | Rationale: the SPA calls the agents
+    // through the AgentProxy function URL (config.json agentUrls); its exact host is a deploy-time attribute of
+    // AWS::Lambda::Url, and that resource's CORS origin is this distribution, so naming the exact host here would
+    // create a Distribution -> ResponseHeadersPolicy -> Url -> Distribution cycle | Alternative: exact host rejected (cycle)
+    const agentProxyOriginPattern = `https://*.lambda-url.${this.region}.on.aws`;
     const contentSecurityPolicy = [
       "default-src 'self'",
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
       "font-src 'self'",
       "img-src 'self' data:",
-      `connect-src 'self' https://${cognitoIdpHost} ${cognitoDomainUrl} ${apiOrigin}`,
+      `connect-src 'self' https://${cognitoIdpHost} ${cognitoDomainUrl} ${apiOrigin} ${agentProxyOriginPattern}`,
       "frame-ancestors 'none'",
       "object-src 'none'",
       "base-uri 'self'",
@@ -316,7 +332,9 @@ export class BackendStack extends cdk.Stack {
     managedLoginBranding.node.addDependency(userPoolDomain);
 
     // ---------------------------------------------------------------
-    // Session stores (B12, B52, B58): DynamoDB, AWS-managed encryption, PITR, no TTL, no GSI
+    // Session stores (B12, B52, B58): DynamoDB, AWS-managed encryption, PITR, no TTL (kept forever)
+    // ChatMetadataStore carries two sort-key GSIs (by_created / by_updated) so the history list can be
+    // ordered by either timestamp; both stay partitioned by user_id so a query can never cross users
     // ---------------------------------------------------------------
 
     const chatMetadataTable = new dynamodb.Table(this, 'ChatMetadataStore', {
@@ -329,6 +347,28 @@ export class BackendStack extends cdk.Stack {
       // ADR: RETAIN | Rationale: chat metadata is user data — a stack teardown must not silently delete it (B58: deleted only by the user)
       removalPolicy: RemovalPolicy.RETAIN,
     });
+
+    // ADR: two GSIs keyed (user_id, created_at|updated_at), projection ALL | Rationale: the history list sorts
+    // by either timestamp (user toggle) and ALL avoids a follow-up GetItem per row; timestamps are UTC ISO-8601
+    // with a 'Z' suffix so lexicographic order == time order | Alternative: sorting in the Lambda rejected —
+    // breaks pagination. NOTE: DynamoDB creates at most one GSI per table update; if this table is already
+    // deployed without them, deploy by_created first and by_updated in a second deploy.
+    const CHAT_METADATA_INDEXES = ['by_created', 'by_updated'] as const;
+    chatMetadataTable.addGlobalSecondaryIndex({
+      indexName: 'by_created',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'created_at', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+    chatMetadataTable.addGlobalSecondaryIndex({
+      indexName: 'by_updated',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'updated_at', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+    const chatMetadataIndexArns = CHAT_METADATA_INDEXES.map(
+      (name) => `${chatMetadataTable.tableArn}/index/${name}`,
+    );
 
     const chatHistoryTable = new dynamodb.Table(this, 'ChatHistoryStore', {
       partitionKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
@@ -396,16 +436,94 @@ export class BackendStack extends cdk.Stack {
     );
 
     // Least privilege: exactly the actions each handler calls (no DeleteItem until F19, no Scan, no GSI wildcard)
-    chatMetadataTable.grant(
-      sessionMetadata.role,
-      'dynamodb:PutItem',
-      'dynamodb:GetItem',
-      'dynamodb:Query',
-      'dynamodb:UpdateItem',
+    // ADR: explicit PolicyStatements on the metadata table | Rationale: Table.grant() appends `<table>/index/*`
+    // once a table has GSIs (cdk-nag IAM5); naming the two indexes keeps the grant exact
+    sessionMetadata.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:PutItem', 'dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:UpdateItem'],
+        resources: [chatMetadataTable.tableArn],
+      }),
+    );
+    sessionMetadata.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({ actions: ['dynamodb:Query'], resources: chatMetadataIndexArns }),
     );
     // B12: history is keyed by session_id only, so the history handler proves ownership with a metadata GetItem first
-    chatMetadataTable.grant(sessionHistory.role, 'dynamodb:GetItem');
+    sessionHistory.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }),
+    );
     chatHistoryTable.grant(sessionHistory.role, 'dynamodb:Query');
+
+    // ---------------------------------------------------------------
+    // AgentCore runtimes (plan 3b4d4f64 decision 9): Cognito JWT inbound authorizer + Authorization header
+    // forwarded + CEI_COGNITO_* settings so identity.py re-verifies the access token; no auth-bypass env var.
+    // agentcore.json stays local-development-only (docs/architectureDeepDive.md).
+    // ---------------------------------------------------------------
+
+    const agentRuntimes = new AgentRuntimes(this, 'AgentRuntimes', {
+      userPool,
+      spaClient,
+      chatMetadataTable,
+      chatMetadataIndexArns,
+      chatHistoryTable,
+      codeInterpreter,
+      attachmentsBucket,
+      // Same origin set as the sessions API CORS; the containers answer CORS only if a browser ever reaches them
+      // directly (the SPA goes through the agent proxy below)
+      allowedOrigins,
+    });
+
+    // ---------------------------------------------------------------
+    // Agent proxy: Lambda function URL in front of the AgentCore runtimes
+    // ---------------------------------------------------------------
+
+    // ADR: browser -> Lambda function URL -> AgentCore, not browser -> AgentCore | Rationale: AgentCore documents no
+    // CORS support and a preflight never carries the Authorization header its JWT authorizer needs; function URL
+    // CORS is documented and answered by the Lambda service. The proxy forwards the caller's own bearer token, so
+    // AgentCore's Cognito authorizer + identity.py still authenticate every call | Alternatives: API Gateway
+    // HTTP_PROXY+STREAM rejected (proxy responses cannot get CORS headers added); CloudFront behaviour rejected
+    // (60 s origin response timeout vs. multi-minute agent runs, and the SPA 403/404 -> index.html rewrite)
+    const agentProxyLogGroup = new logs.LogGroup(this, 'AgentProxyLogs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    // ADR: hand-rolled role with logs only | Rationale: AgentCore authorizes the forwarded user token, so the proxy needs no AWS permission on the runtimes
+    const agentProxyRole = new iam.Role(this, 'AgentProxyRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+    });
+    agentProxyLogGroup.grantWrite(agentProxyRole);
+    const agentProxyFn = new lambda.Function(this, 'AgentProxyFn', {
+      runtime: lambda.Runtime.PYTHON_3_14,
+      handler: 'handler.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', 'agent-proxy'), {
+        exclude: ['tests', '__pycache__', '*.pyc', '.pytest_cache'],
+      }),
+      role: agentProxyRole,
+      logGroup: agentProxyLogGroup,
+      // ADR: 15-minute timeout | Rationale: agent runs are synchronous and the SPA waits up to 10 minutes (RUN_TIMEOUT_MS)
+      timeout: Duration.minutes(15),
+      memorySize: 256,
+      environment: {
+        AGENT_URLS: this.toJsonString(agentRuntimes.invocationUrls),
+        UPSTREAM_TIMEOUT_SECONDS: '870',
+      },
+    });
+    const agentProxyUrl = agentProxyFn.addFunctionUrl({
+      // ADR: authType NONE | Rationale: the caller authenticates with a Cognito bearer token that AgentCore verifies;
+      // AWS_IAM would need SigV4-signed browser requests | Alternative: AWS_IAM rejected (no IAM credentials in the SPA)
+      authType: lambda.FunctionUrlAuthType.NONE,
+      invokeMode: lambda.InvokeMode.BUFFERED,
+      cors: {
+        allowedOrigins,
+        allowedMethods: [lambda.HttpMethod.POST],
+        allowedHeaders: ['authorization', 'content-type', 'accept', 'x-amzn-bedrock-agentcore-runtime-session-id'],
+        allowCredentials: false,
+        maxAge: Duration.hours(1),
+      },
+    });
+    const agentNames = ['research', 'drafting', 'analysis', 'pipeline'] as const;
+    const agentProxyUrls = Object.fromEntries(
+      agentNames.map((name) => [name, cdk.Fn.join('', [agentProxyUrl.url, name])]),
+    ) as Record<(typeof agentNames)[number], string>;
 
     // ---------------------------------------------------------------
     // API routes: Cognito authorizer on every method, error-envelope gateway responses (api.md)
@@ -428,7 +546,7 @@ export class BackendStack extends cdk.Stack {
     const corsOptions: apigw.CorsOptions = {
       allowOrigins: allowedOrigins,
       allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
-      allowHeaders: ['Authorization', 'Content-Type'],
+      allowHeaders: ['Authorization', 'Content-Type', 'Accept', 'X-Amz-Date', 'X-Amz-Security-Token'],
       maxAge: Duration.hours(1),
     };
 
@@ -459,7 +577,12 @@ export class BackendStack extends cdk.Stack {
       api.addGatewayResponse(`${name}Response`, {
         type,
         ...(statusCode ? { statusCode } : {}),
-        responseHeaders: { 'Access-Control-Allow-Origin': `'${siteUrl}'` },
+        responseHeaders: {
+          'Access-Control-Allow-Origin': `'${siteUrl}'`,
+          'Access-Control-Allow-Headers': "'Authorization,Content-Type,Accept'",
+          'Access-Control-Allow-Methods': "'GET,POST,PATCH,OPTIONS'",
+          Vary: "'Origin'",
+        },
         templates: { 'application/json': envelope(code, message, retriable) },
       });
     }
@@ -517,6 +640,8 @@ export class BackendStack extends cdk.Stack {
           userPoolClientId: spaClient.userPoolClientId,
           cognitoDomain: cognitoDomainUrl,
           apiBaseUrl,
+          // Agent proxy function URL per agent (the proxy forwards to the AgentCore invocation URL)
+          agentUrls: agentProxyUrls,
         }),
       ],
       destinationBucket: siteBucket,
@@ -541,6 +666,15 @@ export class BackendStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DistributionDomainName', { value: distribution.distributionDomainName });
     new cdk.CfnOutput(this, 'SiteUrl', { value: siteUrl });
     new cdk.CfnOutput(this, 'ApiBaseUrl', { value: apiBaseUrl });
+    new cdk.CfnOutput(this, 'AgentProxyUrl', {
+      value: agentProxyUrl.url,
+      description: 'Agent proxy function URL; the SPA POSTs to <url><agent> (research | drafting | analysis | pipeline)',
+    });
+    // No exportName: a stack export would lock the generated bucket name; copy this into backend/agents/.env for local dev
+    new cdk.CfnOutput(this, 'AttachmentsBucketName', {
+      value: attachmentsBucket.bucketName,
+      description: 'CDK-created attachments bucket (set CEI_ATTACHMENTS_BUCKET to this for local agent runs)',
+    });
 
     // ---------------------------------------------------------------
     // cdk-nag suppressions (ADR format) — see F2 phase file / plan for the approved list

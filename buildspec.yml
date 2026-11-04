@@ -16,6 +16,8 @@ phases:
       - cd "$CODEBUILD_SRC_DIR/backend" && npm ci
       # ADR: frontend build dependencies installed here too (F2, B1/B66) | Rationale: BackendStack's BucketDeployment needs a built frontend/dist before `cdk deploy`
       - cd "$CODEBUILD_SRC_DIR/frontend" && npm ci
+      # ADR: uv on the build host | Rationale: AgentRuntimes bundles the agent CodeZip locally from backend/agents/uv.lock (aarch64 wheels); without uv CDK falls back to Docker bundling
+      - python3 -m pip install --quiet uv
   pre_build:
     commands:
       - echo "$CEI_DEPLOY_CONFIG" | base64 -d > "$CODEBUILD_SRC_DIR/backend/cei.deploy.json"
@@ -23,6 +25,7 @@ phases:
       - cd "$CODEBUILD_SRC_DIR/backend" && npx ts-node scripts/preflight.ts --config cei.deploy.json --write
   build:
     commands:
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm test
       - cd "$CODEBUILD_SRC_DIR/frontend" && npm run build
       # ADR: cdk bootstrap runs here, after the frontend build | Rationale: `cdk synth` (which
       # bootstrap also triggers) throws if frontend/dist is missing; bootstrap must also run before
