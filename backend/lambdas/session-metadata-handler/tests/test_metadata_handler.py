@@ -33,6 +33,20 @@ def tables(monkeypatch):
             AttributeDefinitions=[
                 {"AttributeName": "user_id", "AttributeType": "S"},
                 {"AttributeName": "session_id", "AttributeType": "S"},
+                {"AttributeName": "created_at", "AttributeType": "S"},
+                {"AttributeName": "updated_at", "AttributeType": "S"},
+            ],
+            # mirrors backend/lib/backend-stack.ts (ChatMetadataStore GSIs)
+            GlobalSecondaryIndexes=[
+                {
+                    "IndexName": name,
+                    "KeySchema": [
+                        {"AttributeName": "user_id", "KeyType": "HASH"},
+                        {"AttributeName": sk, "KeyType": "RANGE"},
+                    ],
+                    "Projection": {"ProjectionType": "ALL"},
+                }
+                for name, sk in (("by_created", "created_at"), ("by_updated", "updated_at"))
             ],
             BillingMode="PAY_PER_REQUEST",
         )
@@ -65,16 +79,53 @@ def create(sub="user-a", title="Chat", mode="science", **extra):
 def test_create_then_list_and_get():
     created = create(model_id="us.anthropic.claude-sonnet-4-5-20250929-v1:0")
     assert created["status"] == "active" and created["mode"] == "science"
-    assert set(created) == {"session_id", "title", "mode", "status", "created_at"}
+    assert set(created) == {"session_id", "title", "title_source", "mode", "status", "created_at"}
+    assert len(created["session_id"]) >= 33  # valid AgentCore runtimeSessionId
 
     status, listed, _ = call("GET", "/sessions")
     assert status == 200
     assert [i["session_id"] for i in listed["items"]] == [created["session_id"]]
     assert listed["next_cursor"] is None and listed["has_more"] is False
     assert "user_id" not in listed["items"][0]
+    # turn context is returned alongside model_id; a POST-created session has none yet
+    assert listed["items"][0]["document_type"] is None and listed["items"][0]["analysis_type"] is None
 
     status, one, _ = call("GET", "/sessions/{sessionId}", path={"sessionId": created["session_id"]})
     assert status == 200 and one["title"] == "Chat" and one["model_id"].startswith("us.anthropic")
+    assert one["document_type"] is None and one["analysis_type"] is None
+
+
+def test_list_and_get_return_stored_turn_context():
+    boto3.resource("dynamodb", region_name="us-east-1").Table("ChatMetadataStore").put_item(
+        Item={
+            "user_id": "user-a",
+            "session_id": "s" * 33,
+            "title": "Draft",
+            "status": "active",
+            "message_count": 0,
+            "agent_type": "drafting",
+            "document_type": "grant",
+            "analysis_type": "competitor",
+            "created_at": "2026-01-01T00:00:00.000000Z",
+            "updated_at": "2026-01-01T00:00:00.000000Z",
+        }
+    )
+    _, listed, _ = call("GET", "/sessions")
+    status, one, _ = call("GET", "/sessions/{sessionId}", path={"sessionId": "s" * 33})
+    assert status == 200
+    for body in (listed["items"][0], one):
+        assert body["agent_type"] == "drafting"
+        assert body["document_type"] == "grant"
+        assert body["analysis_type"] == "competitor"
+        assert "user_id" not in body
+
+
+def test_clients_cannot_set_turn_context():
+    status, _, _ = call("POST", "/sessions", body={"title": "t", "mode": "science", "document_type": "x"})
+    assert status == 400
+    sid = create()["session_id"]
+    status, _, _ = call("PATCH", "/sessions/{sessionId}", path={"sessionId": sid}, body={"analysis_type": "x"})
+    assert status == 400
 
 
 def test_patch_updates_title_and_mode():
@@ -83,8 +134,44 @@ def test_patch_updates_title_and_mode():
         "PATCH", "/sessions/{sessionId}", path={"sessionId": sid}, body={"title": " New ", "mode": "business"}
     )
     assert status == 200 and body["title"] == "New" and body["mode"] == "business"
+    assert body["title_source"] == "user"
     _, again, _ = call("GET", "/sessions/{sessionId}", path={"sessionId": sid})
     assert again["title"] == "New" and again["mode"] == "business"
+
+
+def test_patch_mode_only_keeps_title_source():
+    sid = create()["session_id"]
+    _, body, _ = call("PATCH", "/sessions/{sessionId}", path={"sessionId": sid}, body={"mode": "business"})
+    assert body["title_source"] == "prompt"
+
+
+def test_list_sorts_by_updated_by_default_or_created_on_request():
+    first = create(title="first")["session_id"]
+    second = create(title="second")["session_id"]
+    # touching `first` makes it the most recently updated
+    call("PATCH", "/sessions/{sessionId}", path={"sessionId": first}, body={"mode": "business"})
+    _, by_updated, _ = call("GET", "/sessions")
+    assert [i["session_id"] for i in by_updated["items"]] == [first, second]
+    _, explicit, _ = call("GET", "/sessions", query={"sort": "updated"})
+    assert explicit["items"] == by_updated["items"]
+    _, by_created, _ = call("GET", "/sessions", query={"sort": "created"})
+    assert [i["session_id"] for i in by_created["items"]] == [second, first]
+    assert {"title", "title_source"} <= set(by_created["items"][0])
+
+
+def test_invalid_sort_is_rejected():
+    status, body, _ = call("GET", "/sessions", query={"sort": "title"})
+    assert status == 400 and body["error"]["code"] == "invalid_request"
+
+
+def test_cursor_from_other_sort_order_is_rejected():
+    for i in range(2):
+        create(title=f"c{i}")
+    _, page, _ = call("GET", "/sessions", query={"limit": "1", "sort": "created"})
+    status, body, _ = call("GET", "/sessions", query={"limit": "1", "sort": "updated", "cursor": page["next_cursor"]})
+    assert status == 400 and body["error"]["code"] == "invalid_request"
+    status, _, _ = call("GET", "/sessions", query={"limit": "1", "sort": "created", "cursor": page["next_cursor"]})
+    assert status == 200
 
 
 def test_cross_user_isolation():
@@ -120,9 +207,10 @@ def test_tampered_cursor_is_rejected():
     create(sub="user-b")
     _, page, _ = call("GET", "/sessions", sub="user-b", query={"limit": "1"})
     other = base64.urlsafe_b64encode(
-        json.dumps({"user_id": "user-b", "session_id": "x"}).encode()
+        json.dumps({"user_id": "user-b", "session_id": "x", "updated_at": "2026-01-01T00:00:00.000000Z"}).encode()
     ).decode()
-    for cursor in ("not-base64!!", "e30", other):
+    legacy_shape = base64.urlsafe_b64encode(json.dumps({"user_id": "user-a", "session_id": "x"}).encode()).decode()
+    for cursor in ("not-base64!!", "e30", other, legacy_shape):
         status, body, _ = call("GET", "/sessions", sub="user-a", query={"cursor": cursor})
         assert status == 400 and body["error"]["code"] == "invalid_request"
 

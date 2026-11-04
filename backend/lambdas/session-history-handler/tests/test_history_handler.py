@@ -55,6 +55,8 @@ def tables(monkeypatch):
                 "title": "t",
                 "status": "active",
                 "message_count": 0,
+                "agent_type": "analysis",
+                "mode": "business",
                 "created_at": NOW.isoformat(),
                 "updated_at": NOW.isoformat(),
             }
@@ -100,7 +102,60 @@ def test_history_first_page_is_newest_turns_chronological():
     assert [i["sequence_number"] for i in body["items"]] == [4, 5]
     assert body["has_more"] is True and body["next_cursor"]
     item = body["items"][0]
-    assert set(item) == {"message_id", "role", "content_blocks", "citations", "timestamp", "sequence_number"}
+    assert set(item) == {
+        "message_id", "role", "content_blocks", "citations", "timestamp", "sequence_number", "truncated"
+    }
+
+
+def test_envelope_carries_session_metadata_for_reopening_the_chat():
+    _, body = call()
+    assert body["session"] == {
+        "session_id": "s1", "title": "t", "title_source": "prompt",
+        "agent_type": "analysis", "mode": "business", "model_id": None,
+        "document_type": None, "analysis_type": None,
+    }
+
+
+def test_envelope_carries_stored_turn_context():
+    boto3.resource("dynamodb", region_name="us-east-1").Table("ChatMetadataStore").put_item(
+        Item={
+            "user_id": "user-a",
+            "session_id": "d1",
+            "title": "t",
+            "status": "active",
+            "message_count": 0,
+            "agent_type": "drafting",
+            "document_type": "grant",
+            "analysis_type": "competitor",
+            "created_at": NOW.isoformat(),
+            "updated_at": NOW.isoformat(),
+        }
+    )
+    _, body = call("d1")
+    assert body["session"]["agent_type"] == "drafting"
+    assert body["session"]["document_type"] == "grant"
+    assert body["session"]["analysis_type"] == "competitor"
+    assert "user_id" not in body["session"]
+
+
+def test_default_page_size_is_20():
+    table = boto3.resource("dynamodb", region_name="us-east-1").Table("ChatHistoryStore")
+    for seq in range(7, 40):
+        table.put_item(Item={"session_id": "s1", "sequence_number": seq, "message_id": f"m{seq}", "role": "ai",
+                             "user_id": "user-a", "content_blocks": [], "citations": [],
+                             "timestamp": NOW.isoformat()})
+    _, body = call()
+    assert len(body["items"]) == 20 and body["items"][-1]["sequence_number"] == 39
+
+
+def test_items_stamped_with_another_owner_are_never_returned():
+    table = boto3.resource("dynamodb", region_name="us-east-1").Table("ChatHistoryStore")
+    table.put_item(Item={"session_id": "s1", "sequence_number": 7, "message_id": "x", "role": "human",
+                         "user_id": "user-b", "content_blocks": [{"block_type": "text", "body": "foreign"}],
+                         "citations": [], "timestamp": NOW.isoformat()})
+    _, body = call(query={"limit": "100"})
+    assert "x" not in [i["message_id"] for i in body["items"]]
+    assert all("user_id" not in i for i in body["items"])
 
 
 def test_history_cursor_round_trip_and_trace_items_skipped():
@@ -129,7 +184,12 @@ def test_empty_history_envelope():
             "updated_at": NOW.isoformat(),
         }
     )
-    assert call("empty") == (200, {"items": [], "next_cursor": None, "has_more": False})
+    status, body = call("empty")
+    assert status == 200
+    assert {k: body[k] for k in ("items", "next_cursor", "has_more")} == {
+        "items": [], "next_cursor": None, "has_more": False
+    }
+    assert body["session"]["session_id"] == "empty"
 
 
 def test_other_users_session_is_not_found():
@@ -141,7 +201,9 @@ def test_tampered_cursor_rejected():
     foreign = base64.urlsafe_b64encode(
         json.dumps({"session_id": "other-session", "sequence_number": 3}).encode()
     ).decode()
-    for cursor in ("@@@", foreign, "e30"):
+    # negative sort keys are reserved for checkpoint items, never a page cursor
+    negative = base64.urlsafe_b64encode(json.dumps({"session_id": "s1", "sequence_number": -1}).encode()).decode()
+    for cursor in ("@@@", foreign, "e30", negative):
         status, body = call(query={"cursor": cursor})
         assert status == 400 and body["error"]["code"] == "invalid_request"
 

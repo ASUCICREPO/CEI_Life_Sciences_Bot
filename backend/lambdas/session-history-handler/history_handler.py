@@ -41,6 +41,11 @@ def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _is_turn_sequence(value: Any) -> bool:
+    # turns are >= 0; negative sort keys are reserved for checkpoint items and are never valid page cursors
+    return _is_int(value) and value >= 0
+
+
 @api_handler(logger)
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     user_id = user_id_from_claims(event)
@@ -54,17 +59,36 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     limit = parse_limit(params)
     start_key = decode_cursor(
         params.get("cursor"),
-        {"session_id": lambda v: v == session_id, "sequence_number": _is_int},
+        {"session_id": lambda v: v == session_id, "sequence_number": _is_turn_sequence},
     )
 
     metadata, history = _repositories()
     # B12: the history table is keyed by session_id only, so ownership is proven through the metadata table first
-    if metadata.get(user_id, session_id) is None:
+    session = metadata.get(user_id, session_id)
+    if session is None:
         raise not_found("The session was not found.")
 
-    page = history.load_page(session_id, limit=limit, start_key=start_key)
+    # Owner-scoped read: items stamped with another user_id are dropped as well (defence in depth)
+    page = history.load_page(user_id, session_id, limit=limit, start_key=start_key)
     items = [
-        record.model_dump(mode="json", exclude={"session_id", "tool_name", "tool_input", "tool_output"})
+        record.model_dump(
+            mode="json", exclude={"session_id", "user_id", "tool_name", "tool_input", "tool_output"}
+        )
         for record in page.items
     ]
-    return json_response(200, page_envelope(items, page.next_key), event)
+    envelope = page_envelope(items, page.next_key)
+    # lets the UI reopen the chat in the right agent / mode / model
+    envelope["session"] = session.model_dump(
+        mode="json",
+        include={
+            "session_id",
+            "title",
+            "title_source",
+            "agent_type",
+            "mode",
+            "model_id",
+            "document_type",
+            "analysis_type",
+        },
+    )
+    return json_response(200, envelope, event)

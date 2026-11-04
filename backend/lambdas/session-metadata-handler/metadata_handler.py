@@ -22,10 +22,12 @@ from http_errors import (
     user_id_from_claims,
 )
 from shared.persistence.chat_metadata import (
+    SORT_ATTRIBUTE,
     ChatMetadataRecord,
     ChatMetadataRepository,
     ChatMode,
     SessionNotFoundError,
+    SortKey,
 )
 
 logger = get_logger(__name__)
@@ -46,8 +48,10 @@ def _repository() -> ChatMetadataRepository:
 
 
 def _new_session_id() -> str:
-    # ADR: time-ordered id (ms timestamp + random) | Rationale: the sort key then lists sessions newest-first without a GSI
-    return f"{int(time.time() * 1000):012x}-{secrets.token_hex(8)}"
+    # ADR: time-prefixed id (ms timestamp + 96 random bits, 37 chars) | Rationale: the same id is used as the
+    # AgentCore runtimeSessionId, which must be at least 33 characters; the prefix keeps ids roughly time-ordered
+    # for logs (list ordering now comes from the by_created / by_updated GSIs)
+    return f"{int(time.time() * 1000):012x}-{secrets.token_hex(12)}"
 
 
 def _validate_title(value: Any) -> str:
@@ -106,18 +110,32 @@ def _create(event: dict[str, Any], user_id: str) -> dict[str, Any]:
     )
     _repository().create(record)
     created = record.model_dump(mode="json")
-    response = {k: created[k] for k in ("session_id", "title", "mode", "status", "created_at")}
+    response = {k: created[k] for k in ("session_id", "title", "title_source", "mode", "status", "created_at")}
     return json_response(201, response, event)
+
+
+def _sort_param(params: dict[str, Any]) -> SortKey:
+    raw = params.get("sort") or SortKey.UPDATED.value
+    if raw not in {s.value for s in SortKey}:
+        raise invalid_request("The sort parameter must be 'updated' or 'created'.")
+    return SortKey(raw)
 
 
 def _list(event: dict[str, Any], user_id: str) -> dict[str, Any]:
     params = event.get("queryStringParameters") or {}
     limit = parse_limit(params)
+    sort = _sort_param(params)
+    # A GSI cursor is {user_id, session_id, <index sort attribute>}; the partition key is pinned to the caller,
+    # and a cursor minted under the other sort order has the wrong shape and is rejected
     start_key = decode_cursor(
         params.get("cursor"),
-        {"user_id": lambda v: v == user_id, "session_id": lambda v: isinstance(v, str)},
+        {
+            "user_id": lambda v: v == user_id,
+            "session_id": lambda v: isinstance(v, str),
+            SORT_ATTRIBUTE[sort]: lambda v: isinstance(v, str),
+        },
     )
-    page = _repository().list_by_user(user_id, limit=limit, start_key=start_key)
+    page = _repository().list_by_user(user_id, sort=sort, limit=limit, start_key=start_key)
     return json_response(200, page_envelope([_public(r) for r in page.items], page.next_key), event)
 
 
@@ -134,7 +152,7 @@ def _patch(event: dict[str, Any], user_id: str) -> dict[str, Any]:
     _reject_unknown(body, {"title", "mode"})
     if not body:
         raise invalid_request("Provide at least one of title or mode.")
-    title = _validate_title(body["title"]) if "title" in body else None
+    title = _validate_title(body["title"]) if "title" in body else None  # repo marks title_source="user"
     mode = _validate_mode(body["mode"]) if "mode" in body else None
     try:
         record = _repository().update(user_id, session_id, title=title, mode=mode)
