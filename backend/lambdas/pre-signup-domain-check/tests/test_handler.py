@@ -57,6 +57,14 @@ def test_empty_allowlist_rejects_every_domain(monkeypatch):
         handler.handler(_event("user@example.com"), None)
 
 
+@pytest.mark.parametrize("raw", ["", " ", " , ,"])
+def test_blank_allowlist_value_rejects_every_domain(monkeypatch, raw):
+    # CDK writes ALLOWED_EMAIL_DOMAINS="" when there is no deploy config: that must fail closed too
+    monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", raw)
+    with pytest.raises(Exception, match="Sign-up is not allowed"):
+        handler.handler(_event("user@example.com"), None)
+
+
 def test_two_at_signs_rejects(monkeypatch):
     monkeypatch.setenv("ALLOWED_EMAIL_DOMAINS", "example.com")
     with pytest.raises(Exception, match="Sign-up is not allowed"):
