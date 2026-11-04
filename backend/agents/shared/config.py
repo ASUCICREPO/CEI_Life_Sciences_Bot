@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -7,7 +8,10 @@ class AgentConfig(BaseSettings):
     model_config = {"env_prefix": "CEI_"}
 
     aws_region: str = "us-east-1"
-    aws_profile: str = "cei-project"
+    # Named local profile (e.g. CEI_AWS_PROFILE=cei-project for dev). None => default credential chain, which is
+    # what deployed runtimes must use (execution role). Never default this to a developer profile: inside AgentCore
+    # the profile does not exist and every model call fails with ProfileNotFound (surfaced as HTTP 424).
+    aws_profile: str | None = None
     # ADR: identity has no bypass flag | the old CEI_DIRECT_MODE also let the payload `user_id` stand in for the
     # Cognito `sub`; it is deleted (plan 3b4d4f64 decision 9). Data-source transport is a separate, identity-free
     # concern: True calls the public APIs in-process, False routes through the data-source Lambdas.
@@ -40,6 +44,13 @@ class AgentConfig(BaseSettings):
     # Browser CORS allowlist for the runtime container (shared/runtime/app_factory.py). Comma-separated explicit
     # origins (CEI_ALLOWED_ORIGINS), never "*". Empty => no CORS middleware (local, Vite-proxied runs).
     allowed_origins: str = ""
+
+    @field_validator("aws_profile", mode="before")
+    @classmethod
+    def _blank_profile_is_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @property
     def allowed_origins_list(self) -> list[str]:

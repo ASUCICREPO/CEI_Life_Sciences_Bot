@@ -20,9 +20,11 @@ def get_model(model_id: str | None = None, max_tokens: int | None = None) -> Cha
     kwargs: dict[str, Any] = {
         "model_id": model_id or config.default_model_id,
         "region_name": config.aws_region,
-        "credentials_profile_name": config.aws_profile,
         "config": _BOTO_CONFIG,
     }
+    if config.aws_profile:
+        # Local dev only; deployed runtimes leave it unset and use the execution role via the default chain
+        kwargs["credentials_profile_name"] = config.aws_profile
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
     return ChatBedrockConverse(**kwargs)
