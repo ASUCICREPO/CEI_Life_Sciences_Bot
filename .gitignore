@@ -76,3 +76,4 @@ backend/cei.deploy.json
 frontend/dist/
 frontend/public/config.json
 .playwright-mcp/
+.cloudforge/
