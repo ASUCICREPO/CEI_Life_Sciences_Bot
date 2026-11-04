@@ -53,6 +53,7 @@ def test_final_ai_text_skips_tool_call_payload_after_final_answer() -> None:
 
 class _Context:
     session_id = "test-session"
+    request_headers = {"Authorization": "Bearer test-token:test-user"}
 
 
 class _CompletedGraph:

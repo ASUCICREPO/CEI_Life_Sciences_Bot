@@ -13,6 +13,7 @@ from shared.tools.hitl.inline_functions import InlineFunctionRegistry, PlanStepI
 class _Context:
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
+        self.request_headers = {"Authorization": "Bearer test-token:test-user"}
 
 
 def _plan() -> PipelinePlan:

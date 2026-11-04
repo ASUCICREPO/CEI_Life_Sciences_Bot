@@ -16,18 +16,18 @@ from shared.tools.data_sources.pubchem import PubChemTool
 from shared.tools.data_sources.pubmed import PubMedTool
 
 ALL_DATA_SOURCE_TOOLS: list[DataSourceTool] = [
-    PubMedTool(direct_mode=config.direct_mode),
-    ClinicalTrialsTool(direct_mode=config.direct_mode),
-    BioRxivTool(direct_mode=config.direct_mode),
-    MedRxivTool(direct_mode=config.direct_mode),
-    ChEMBLTool(direct_mode=config.direct_mode),
-    OpenTargetsTool(direct_mode=config.direct_mode),
-    CMSCoverageTool(direct_mode=config.direct_mode),
-    ICD10Tool(direct_mode=config.direct_mode),
-    NPIRegistryTool(direct_mode=config.direct_mode),
-    PubChemTool(direct_mode=config.direct_mode),
-    OpenFDATool(direct_mode=config.direct_mode),
-    PatentsViewTool(direct_mode=config.direct_mode),
+    PubMedTool(direct_mode=config.data_sources_direct_invoke),
+    ClinicalTrialsTool(direct_mode=config.data_sources_direct_invoke),
+    BioRxivTool(direct_mode=config.data_sources_direct_invoke),
+    MedRxivTool(direct_mode=config.data_sources_direct_invoke),
+    ChEMBLTool(direct_mode=config.data_sources_direct_invoke),
+    OpenTargetsTool(direct_mode=config.data_sources_direct_invoke),
+    CMSCoverageTool(direct_mode=config.data_sources_direct_invoke),
+    ICD10Tool(direct_mode=config.data_sources_direct_invoke),
+    NPIRegistryTool(direct_mode=config.data_sources_direct_invoke),
+    PubChemTool(direct_mode=config.data_sources_direct_invoke),
+    OpenFDATool(direct_mode=config.data_sources_direct_invoke),
+    PatentsViewTool(direct_mode=config.data_sources_direct_invoke),
 ]
 
 

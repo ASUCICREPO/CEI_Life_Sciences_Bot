@@ -5,15 +5,17 @@ import logging
 import os
 from collections import OrderedDict
 
-from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from drafting.state import DocumentType
 from shared.presenters import build_drafting_surface
 from shared.response_text import final_ai_text
+from shared.runtime.history import begin_turn, end_turn
+from shared.runtime.app_factory import create_app
+from shared.runtime.identity import resolve_user_id
 
-app = BedrockAgentCoreApp()
+app = create_app()  # CORS for direct browser calls when CEI_ALLOWED_ORIGINS is set
 log = app.logger
 logging.basicConfig(level=logging.INFO)
 
@@ -83,7 +85,7 @@ async def invoke(payload, context):  # noqa: ANN001
 
     session_id: str = getattr(context, "session_id", "default")
     mode: str = payload.get("mode", "science")
-    user_id: str = payload.get("user_id", "cli-user")
+    user_id = resolve_user_id(payload, context)  # verified Cognito access-token sub; payload user_id ignored
 
     if mode not in ("science", "business"):
         mode = "science"
@@ -96,11 +98,23 @@ async def invoke(payload, context):  # noqa: ANN001
 
     from drafting.graph import compile_graph
 
+    # Cold thread (runtime restart / LRU eviction): rebuild short-term memory from ChatHistoryStore
+    history = await begin_turn(
+        user_id=user_id,
+        session_id=session_id,
+        prompt=prompt,
+        agent_type="drafting",
+        document_type=doc_type.value,
+        mode=mode,
+        warm=session_id in _thread_ids,
+        saver=_checkpointer,
+    )
     _touch_thread(session_id)
     graph = compile_graph(checkpointer=_checkpointer)
 
     initial_state = {
-        "messages": [HumanMessage(content=prompt)],
+        # D16: history is dynamic content — it rides in messages, after the cached system prompt/tools
+        "messages": [*history, HumanMessage(content=prompt)],
         "mode": mode,
         "user_id": user_id,
         "session_id": session_id,
@@ -129,7 +143,7 @@ async def invoke(payload, context):  # noqa: ANN001
     text = final_ai_text(result.get("messages", []))
     if text is None:
         text = "No response generated."
-        return {
+        response = {
             "result": text,
             "text": text,
             "ui": build_drafting_surface(
@@ -142,6 +156,8 @@ async def invoke(payload, context):  # noqa: ANN001
             ).model_dump(mode="json"),
             "exports": [],
         }
+        await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=response, prompt=prompt)
+        return response
 
     trace_text = _format_trace(result.get("trace", []))
     full_output = text + trace_text
@@ -152,7 +168,7 @@ async def invoke(payload, context):  # noqa: ANN001
     ]
 
     log.info(f"Drafting agent complete: session={session_id}, length={len(text)}, exports={len(exports)}")
-    return {
+    response = {
         "result": full_output,
         "text": text,
         "ui": build_drafting_surface(
@@ -165,6 +181,9 @@ async def invoke(payload, context):  # noqa: ANN001
         ).model_dump(mode="json"),
         "exports": exports,
     }
+    # stores `text` (not `result`): the trace is diagnostic output, not conversation content
+    await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=response, prompt=prompt)
+    return response
 
 
 if __name__ == "__main__":

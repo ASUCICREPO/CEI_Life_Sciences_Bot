@@ -6,7 +6,6 @@ import os
 from collections import OrderedDict
 from typing import Any, Dict, List
 
-from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -29,8 +28,12 @@ from shared.runtime import (
     parse_prompt,
     resume_value,
 )
+from shared.runtime.history import begin_turn, end_turn, record_resume
+from shared.runtime.checkpointing import restore_for_resume
+from shared.runtime.app_factory import create_app
+from shared.runtime.identity import resolve_user_id
 
-app = BedrockAgentCoreApp()
+app = create_app()  # CORS for direct browser calls when CEI_ALLOWED_ORIGINS is set
 log = app.logger
 logging.basicConfig(level=logging.INFO)
 
@@ -95,13 +98,18 @@ def _format_trace(trace_entries: List[Any]) -> str:
     return "\n".join(lines)
 
 
+def _parse_analysis_type(raw: Any) -> AnalysisType | None:
+    """Normalize a payload analysis_type: a valid AnalysisType, otherwise None."""
+    if not raw:
+        return None
+    try:
+        return AnalysisType(raw)
+    except ValueError:
+        return None
+
+
 def _initial_state(prompt: str, mode: str, user_id: str, session_id: str, analysis_type: str | None) -> Dict[str, Any]:
-    parsed_type: AnalysisType | None = None
-    if analysis_type:
-        try:
-            parsed_type = AnalysisType(analysis_type)
-        except ValueError:
-            parsed_type = None
+    parsed_type = _parse_analysis_type(analysis_type)
     return {
         "messages": [HumanMessage(content=prompt)],
         "mode": mode,
@@ -165,6 +173,7 @@ async def invoke(payload, context):  # noqa: ANN001
 
     graph = compile_graph(checkpointer=_checkpointer)
     config = {"configurable": {"thread_id": session_id}}
+    user_id = resolve_user_id(payload, context)  # verified Cognito access-token sub; payload user_id ignored
 
     if op is RuntimeOp.RESUME:
         action = parse_action(payload)
@@ -174,10 +183,16 @@ async def invoke(payload, context):  # noqa: ANN001
             if replayed is not None:
                 return replayed
 
+        if session_id not in _thread_ids and _pending.get(session_id) is None and action.session_id == session_id:
+            # cold resume (runtime restart / eviction): bring back the interrupted graph + its pending surface
+            await restore_for_resume(
+                user_id=user_id, session_id=session_id, saver=_checkpointer, graph=graph, pending=_pending
+            )
         stale = check_resume(_pending, session_id, action)
         if stale is not None:
             return stale
 
+        await record_resume(user_id=user_id, session_id=session_id, action=action)
         _touch_thread(session_id)
         result = await graph.ainvoke(Command(resume=resume_value(action)), config=config)
         surface = extract_interrupt_surface(result)
@@ -191,15 +206,22 @@ async def invoke(payload, context):  # noqa: ANN001
             envelope = _completed_result(session_id, result)
 
         envelope["action_response"] = response
+        await end_turn(
+            saver=_checkpointer,
+            user_id=user_id,
+            session_id=session_id,
+            envelope=envelope,
+            retrieved_results=result.get("retrieved_results"),
+        )
         if _replay.mode.value == "record" and scenario:
             _replay.record_resume(scenario, envelope)
         return envelope
 
     prompt = parse_prompt(payload)
     mode = parse_mode(payload)
-    user_id: str = payload.get("user_id", "cli-user")
     analysis_type = payload.get("analysis_type")
     scenario = f"{analysis_type or 'auto'}|{prompt}"
+    parsed_analysis_type = _parse_analysis_type(analysis_type)
     _remember_scenario(session_id, scenario)
 
     if _replay.enabled:
@@ -207,16 +229,38 @@ async def invoke(payload, context):  # noqa: ANN001
         if replayed is not None:
             return replayed
 
+    # Cold thread (runtime restart / LRU eviction): rebuild short-term memory from ChatHistoryStore
+    history = await begin_turn(
+        user_id=user_id,
+        session_id=session_id,
+        prompt=prompt,
+        agent_type="analysis",
+        analysis_type=parsed_analysis_type.value if parsed_analysis_type else None,
+        mode=mode,
+        warm=session_id in _thread_ids,
+        saver=_checkpointer,
+    )
     _touch_thread(session_id)
     log.info(f"Analysis agent invoked: session={session_id}, mode={mode}, analysis_type={analysis_type}")
 
-    result = await graph.ainvoke(_initial_state(prompt, mode, user_id, session_id, analysis_type), config=config)
+    state = _initial_state(prompt, mode, user_id, session_id, analysis_type)
+    # D16: history is dynamic content — it rides in messages, after the cached system prompt/tools
+    state["messages"] = [*history, *state["messages"]]
+    result = await graph.ainvoke(state, config=config)
     surface = extract_interrupt_surface(result)
     if surface is not None:
         _pending.register(session_id, surface)
         envelope = awaiting_envelope(surface, "Confirm the analysis scope before proceeding.")
     else:
         envelope = _completed_result(session_id, result)
+    await end_turn(
+        saver=_checkpointer,
+        user_id=user_id,
+        session_id=session_id,
+        envelope=envelope,
+        prompt=prompt,
+        retrieved_results=result.get("retrieved_results"),
+    )
     if _replay.mode.value == "record":
         _replay.record_run(scenario, envelope)
     return envelope

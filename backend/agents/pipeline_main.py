@@ -8,7 +8,6 @@ import uuid
 from collections import OrderedDict
 from typing import Any, Dict, List
 
-from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -32,8 +31,12 @@ from shared.runtime import (
     parse_prompt,
     resume_value,
 )
+from shared.runtime.history import begin_turn, end_turn, record_resume
+from shared.runtime.checkpointing import restore_for_resume
+from shared.runtime.app_factory import create_app
+from shared.runtime.identity import resolve_user_id
 
-app = BedrockAgentCoreApp()
+app = create_app()  # CORS for direct browser calls when CEI_ALLOWED_ORIGINS is set
 log = app.logger
 logging.basicConfig(level=logging.INFO)
 
@@ -124,7 +127,7 @@ def _final_job_status(steps: list) -> JobStatus:
     return JobStatus.PARTIAL
 
 
-async def _run_job(job_id: str, session_id: str, action_resume_value: dict, task_id: int) -> None:
+async def _run_job(job_id: str, session_id: str, user_id: str, action_resume_value: dict, task_id: int) -> None:
     try:
         graph = _compile_graph()
         result = await graph.ainvoke(
@@ -140,6 +143,8 @@ async def _run_job(job_id: str, session_id: str, action_resume_value: dict, task
             step_outcomes=_step_outcomes(steps),
         ).model_dump(mode="json")
         JOB_REGISTRY.finish(job_id, _final_job_status(steps), ui=ui, text=text)
+        # the async job's final answer is the AI turn that closes this conversation step
+        await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope={"text": text, "ui": ui})
         prompt = _thread_prompts.get(session_id, "")
         if prompt:
             _replay.record_job_status(prompt, JOB_REGISTRY.snapshot(job_id))
@@ -147,6 +152,7 @@ async def _run_job(job_id: str, session_id: str, action_resume_value: dict, task
     except Exception as exc:  # ADR: a crashed background job must still resolve the job record | never hang /pipeline
         log.error(f"Pipeline job failed: job={job_id} session={session_id} error={exc!r}")
         JOB_REGISTRY.finish(job_id, JobStatus.FAILED, ui=None, text=f"Pipeline run failed: {exc!r}")
+        await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope={"text": "Pipeline run failed."})
     finally:
         app.complete_async_task(task_id)
         _background_tasks.pop(job_id, None)
@@ -177,15 +183,22 @@ async def invoke(payload, context):  # noqa: ANN001
     if op is RuntimeOp.RESUME:
         action = parse_action(payload)
         prompt = _thread_prompts.get(session_id, "")
+        user_id = resolve_user_id(payload, context)  # verified Cognito access-token sub; payload user_id ignored
 
         if _replay.enabled:
             replayed = _replay.on_resume(prompt, session_id=session_id, action=action, job_id=None)
             if replayed is not None:
                 return replayed
 
+        if session_id not in _thread_ids and _pending.get(session_id) is None and action.session_id == session_id:
+            # cold resume (runtime restart / eviction): bring back the interrupted graph + its pending surface
+            await restore_for_resume(
+                user_id=user_id, session_id=session_id, saver=_checkpointer, graph=_compile_graph(), pending=_pending
+            )
         terminal = check_resume(_pending, session_id, action)
         if terminal is not None:
             return terminal
+        await record_resume(user_id=user_id, session_id=session_id, action=action)
         _pending.clear(session_id)
 
         graph = _compile_graph()
@@ -197,6 +210,7 @@ async def invoke(payload, context):  # noqa: ANN001
             await graph.ainvoke(Command(resume=resume_value(action)), config=config)
             text = "Plan rejected."
             envelope = completed_envelope(text, None, extra={"action_response": action_response(action, "completed")})
+            await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope)
             if _replay.mode.value == "record":
                 _replay.record_resume(prompt, envelope)
             return envelope
@@ -216,7 +230,7 @@ async def invoke(payload, context):  # noqa: ANN001
         JOB_REGISTRY.set_status(job_id, JobStatus.RUNNING)
 
         task_id = app.add_async_task("pipeline", {"job_id": job_id, "session_id": session_id})
-        task = asyncio.create_task(_run_job(job_id, session_id, resume_value(action), task_id))
+        task = asyncio.create_task(_run_job(job_id, session_id, user_id, resume_value(action), task_id))
         _background_tasks[job_id] = task
 
         text = "Plan approved — running the pipeline."
@@ -227,6 +241,7 @@ async def invoke(payload, context):  # noqa: ANN001
             "text": text,
             "result": text,
         }
+        await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope)
         if _replay.mode.value == "record":
             _replay.record_resume(prompt, envelope)
         return envelope
@@ -234,7 +249,7 @@ async def invoke(payload, context):  # noqa: ANN001
     # op is RUN (default)
     prompt = parse_prompt(payload)
     mode = parse_mode(payload)
-    user_id: str = payload.get("user_id", "cli-user")
+    user_id = resolve_user_id(payload, context)  # verified Cognito access-token sub; payload user_id ignored
     _thread_prompts[session_id] = prompt
 
     if _replay.enabled:
@@ -243,9 +258,20 @@ async def invoke(payload, context):  # noqa: ANN001
             return replayed
 
     graph = _compile_graph()
+    # Cold thread (runtime restart / LRU eviction): rebuild short-term memory from ChatHistoryStore
+    history = await begin_turn(
+        user_id=user_id,
+        session_id=session_id,
+        prompt=prompt,
+        agent_type="pipeline_manager",
+        mode=mode,
+        warm=session_id in _thread_ids,
+        saver=_checkpointer,
+    )
     _touch_thread(session_id)
     initial_state = {
-        "messages": [HumanMessage(content=prompt)],
+        # D16: history is dynamic content — it rides in messages, after the cached system prompt/tools
+        "messages": [*history, HumanMessage(content=prompt)],
         "mode": mode,
         "user_id": user_id,
         "session_id": session_id,
@@ -265,6 +291,7 @@ async def invoke(payload, context):  # noqa: ANN001
     if surface is None:
         text = "The plan could not be built."
         envelope = completed_envelope(text, None, trace_text=_format_trace(result.get("trace", [])))
+        await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope, prompt=prompt)
         if _replay.mode.value == "record":
             _replay.record_run(prompt, envelope)
         return envelope
@@ -273,6 +300,7 @@ async def invoke(payload, context):  # noqa: ANN001
     plan_obj = result.get("plan")
     text = f"## Proposed plan\n\n{plan_obj.summary}" if plan_obj else "A plan is ready for approval."
     envelope = awaiting_envelope(surface, text)
+    await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope, prompt=prompt)
     if _replay.mode.value == "record":
         _replay.record_run(prompt, envelope)
     return envelope

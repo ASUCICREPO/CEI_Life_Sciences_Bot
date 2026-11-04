@@ -5,9 +5,11 @@ from datetime import UTC, datetime
 from unittest.mock import Mock
 
 from langchain_core.messages import AIMessage, HumanMessage
+import pytest
 
 import analysis_main
 from analysis.run import run_analysis
+from analysis.state import AnalysisType
 from shared.presenters import build_analysis_surface
 from shared.schemas.citation import Citation, SourceType
 from shared.schemas.response_blocks import ProseBlock, ResponseDocument, ResponseSection
@@ -90,6 +92,7 @@ def test_run_analysis_skips_interrupt_and_returns_outcome(monkeypatch) -> None:
 
 class _Context:
     session_id = "runtime-session"
+    request_headers = {"Authorization": "Bearer test-token:test-user"}
 
 
 class _CompletedGraph:
@@ -124,6 +127,47 @@ def test_analysis_main_run_returns_awaiting_input_on_interrupt(monkeypatch) -> N
     assert response["ui"]["surface_id"] == "analysis-scope"
 
 
+def _spy_begin_turn(monkeypatch) -> list[dict]:
+    calls: list[dict] = []
+
+    async def _begin_turn(**kwargs):
+        calls.append(kwargs)
+        return []
+
+    async def _end_turn(**_):
+        return None
+
+    monkeypatch.setattr(analysis_main, "begin_turn", _begin_turn)
+    monkeypatch.setattr(analysis_main, "end_turn", _end_turn)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("competitor", "competitor"), ("not-a-type", None), ("", None), (None, None)],
+)
+def test_analysis_main_run_passes_normalized_analysis_type_to_begin_turn(monkeypatch, raw, expected) -> None:
+    result = {"messages": [AIMessage(content="Done.")], "trace": [], "retrieved_results": []}
+    import analysis.graph as graph_module
+    monkeypatch.setattr(graph_module, "compile_graph", lambda **_: _CompletedGraph(result))
+    calls = _spy_begin_turn(monkeypatch)
+
+    payload = {"prompt": "Analyze Our Co"}
+    if raw is not None:
+        payload["analysis_type"] = raw
+    asyncio.run(analysis_main.invoke(payload, _Context()))
+
+    assert len(calls) == 1
+    assert calls[0]["agent_type"] == "analysis"
+    assert calls[0]["analysis_type"] == expected
+
+
+@pytest.mark.parametrize("raw", [*(t.value for t in AnalysisType), "bogus", "", None])
+def test_parse_analysis_type_matches_initial_state(raw) -> None:
+    state = analysis_main._initial_state("p", "science", "u", "s", raw)
+    assert analysis_main._parse_analysis_type(raw) == state["analysis_type"]
+
+
 def test_analysis_main_resume_stale_without_pending(monkeypatch) -> None:
     payload = {
         "op": "resume",
@@ -141,6 +185,7 @@ def test_analysis_main_resume_stale_without_pending(monkeypatch) -> None:
 
     class _Context2:
         session_id = "runtime-session-2"
+        request_headers = {"Authorization": "Bearer test-token:test-user"}
 
     response = asyncio.run(analysis_main.invoke(payload, _Context2()))
     assert response["status"] == "stale"
@@ -169,6 +214,7 @@ def test_analysis_main_resume_completes_run(monkeypatch) -> None:
 
     class _Context3:
         session_id = "runtime-session-3"
+        request_headers = {"Authorization": "Bearer test-token:test-user"}
 
     payload = {
         "op": "resume",

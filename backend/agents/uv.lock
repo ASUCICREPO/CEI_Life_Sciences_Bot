@@ -109,6 +109,7 @@ source = { editable = "." }
 dependencies = [
     { name = "bedrock-agentcore" },
     { name = "boto3" },
+    { name = "cryptography" },
     { name = "jinja2" },
     { name = "langchain" },
     { name = "langchain-aws" },
@@ -130,6 +131,7 @@ dev = [
 requires-dist = [
     { name = "bedrock-agentcore" },
     { name = "boto3" },
+    { name = "cryptography" },
     { name = "jinja2" },
     { name = "langchain" },
     { name = "langchain-aws" },
