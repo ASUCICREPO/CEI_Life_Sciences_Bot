@@ -1,5 +1,6 @@
 import { safeParseCEIUISurface, type ActionRequest, type ActionResponse, type CEIUISurface } from './cei-ui/schema';
 import { actionResponseMatchesRequest } from './cei-ui/action-correlation';
+import { getLoadedRuntimeConfig } from './auth/config';
 
 export type AgentName = 'research' | 'drafting' | 'analysis' | 'pipeline';
 
@@ -7,13 +8,27 @@ export type AgentMode = 'science' | 'business';
 
 export type AnalysisType = 'competitor' | 'market' | 'legal_landscape';
 
+/** Mirrors backend/agents/drafting/state.py DocumentType; the Drafting runtime rejects any other value. */
+export type DocumentType = 'grant' | 'vc_pitch' | 'journal' | 'whitepaper' | 'latex';
+
 export type AgentStatus = 'completed' | 'awaiting_input' | 'running' | 'stale' | 'rejected';
 
 export interface AgentRunPayload {
   prompt: string;
   mode: AgentMode;
-  user_id: string;
   analysis_type?: AnalysisType;
+  document_type?: DocumentType;
+}
+
+/** Builds a run payload carrying only the turn context the target agent understands. */
+export function buildRunPayload(
+  agent: AgentName,
+  input: { prompt: string; mode: AgentMode; analysisType?: AnalysisType; documentType?: DocumentType },
+): AgentRunPayload {
+  const payload: AgentRunPayload = { prompt: input.prompt, mode: input.mode };
+  if (agent === 'analysis' && input.analysisType) payload.analysis_type = input.analysisType;
+  if (agent === 'drafting' && input.documentType) payload.document_type = input.documentType;
+  return payload;
 }
 
 export interface StepStatus {
@@ -62,11 +77,28 @@ export class AgentClientError extends Error {
   }
 }
 
+// ADR: agent proxy URL from /config.json `agentUrls` when present | Rationale: the deployed site POSTs to the
+// AgentProxy Lambda function URL (CORS handled by the Lambda service), which forwards the user's bearer token to
+// the AgentCore runtime; local runs have no agentUrls and keep the relative path the Vite dev proxy forwards to
+// `agentcore dev`.
 function agentPath(agent: AgentName): string {
-  return `/api/agents/${agent}`;
+  return getLoadedRuntimeConfig()?.agentUrls?.[agent] ?? `/api/agents/${agent}`;
+}
+
+// ADR: injected token provider, set once by the auth layer | Rationale: the runtimes persist and scope chat
+// history by the caller's Cognito `sub`, which they read from this bearer token (never from the payload)
+let tokenProvider: (() => Promise<string | null>) | null = null;
+
+export function setAgentTokenProvider(provider: (() => Promise<string | null>) | null): void {
+  tokenProvider = provider;
 }
 
 async function postInvocation(agent: AgentName, body: unknown, sessionId: string, timeoutMs: number): Promise<unknown> {
+  const token = tokenProvider ? await tokenProvider() : null;
+  // Never send an unauthenticated request: identity comes only from the bearer token's `sub`.
+  if (!token) {
+    throw new AgentClientError('You are signed out. Sign in again to continue.');
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
@@ -77,6 +109,7 @@ async function postInvocation(agent: AgentName, body: unknown, sessionId: string
         'content-type': 'application/json',
         accept: 'application/json',
         [SESSION_HEADER]: sessionId,
+        authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(body),
       signal: controller.signal,
@@ -85,13 +118,32 @@ async function postInvocation(agent: AgentName, body: unknown, sessionId: string
     if (controller.signal.aborted) {
       throw new AgentClientError('The agent did not respond in time.', error);
     }
+    // fetch() rejects with a TypeError (no status, no body) when the browser blocks the response (CORS) or the
+    // host is unreachable.
+    if (error instanceof TypeError) {
+      throw new AgentClientError(
+        `The ${agent} agent could not be reached: the request was blocked or the service is unreachable ` +
+          '(CORS, expired sign-in, throttling or network). Sign in again and retry; if it persists, check the ' +
+          'browser console for the blocked request.',
+        error,
+      );
+    }
     throw new AgentClientError('Could not reach the agent service.', error);
   } finally {
     clearTimeout(timeout);
   }
 
   if (!response.ok) {
-    throw new AgentClientError(`The agent service returned an error (HTTP ${response.status}).`);
+    if (response.status === 401) {
+      throw new AgentClientError('Your sign-in has expired. Sign in again to continue.');
+    }
+    if (response.status === 429) {
+      throw new AgentClientError(`The ${agent} agent is busy. Wait a moment and try again.`);
+    }
+    if (response.status === 504) {
+      throw new AgentClientError('The agent did not respond in time.');
+    }
+    throw new AgentClientError(`The ${agent} agent returned an error (HTTP ${response.status}).`);
   }
 
   const parsed: unknown = await response.json().catch((error: unknown) => {
@@ -174,9 +226,16 @@ export function getOrCreateSessionId(threadKey: string): string {
   const storageKey = `cei-session:${threadKey}`;
   const existing = sessionStorage.getItem(storageKey);
   if (existing) return existing;
-  const created = `cei-demo-${crypto.randomUUID()}`;
+  // Plain uuid: matches the backend's `^[A-Za-z0-9_-]{1,64}$` session-id contract.
+  const created = crypto.randomUUID();
   sessionStorage.setItem(storageKey, created);
   return created;
+}
+
+// Continue an existing chat (e.g. opened from the history list): later turns on this thread reuse its
+// session id, so the runtime rehydrates that conversation instead of starting a new one.
+export function adoptSessionId(threadKey: string, sessionId: string): void {
+  sessionStorage.setItem(`cei-session:${threadKey}`, sessionId);
 }
 
 // ADR: carry the session id to /pipeline?job=... via sessionStorage | the

@@ -14,35 +14,25 @@ import { loadRuntimeConfig } from './lib/auth/config'
 const rootElement = document.getElementById('root')!
 const root = createRoot(rootElement)
 
-// ADR: local demo mode skips /config.json | import.meta.env.DEV is inlined at
-// build time, so this whole branch (and anything it alone references) is
-// dead-code-eliminated from the production bundle.
-if (import.meta.env.DEV && import.meta.env.VITE_LOCAL_DEMO === 'true') {
-  root.render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  )
-} else {
-  // ADR: block first render on /config.json | the app cannot build a UserManager without it
-  loadRuntimeConfig()
-    .then(() => {
-      root.render(
-        <StrictMode>
-          <App />
-        </StrictMode>,
-      )
-    })
-    .catch((error: unknown) => {
-      root.render(
-        <div className="h-screen flex items-center justify-center bg-surface-primary">
-          <div className="max-w-sm text-center space-y-2">
-            <p className="text-sm text-text-primary font-medium">Unable to load app configuration.</p>
-            <p className="text-xs text-text-secondary">
-              {error instanceof Error ? error.message : 'Unknown error.'}
-            </p>
-          </div>
-        </div>,
-      )
-    })
-}
+// ADR: block first render on /config.json | the app cannot build a UserManager without it,
+// and there is no unauthenticated mode (local dev uses a real dev Cognito pool).
+loadRuntimeConfig()
+  .then(() => {
+    root.render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+  })
+  .catch((error: unknown) => {
+    root.render(
+      <div className="h-screen flex items-center justify-center bg-surface-primary">
+        <div className="max-w-sm text-center space-y-2">
+          <p className="text-sm text-text-primary font-medium">Unable to load app configuration.</p>
+          <p className="text-xs text-text-secondary">
+            {error instanceof Error ? error.message : 'Unknown error.'}
+          </p>
+        </div>
+      </div>,
+    )
+  })

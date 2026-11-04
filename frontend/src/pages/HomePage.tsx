@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { mockSessions } from '../mocks/sessions';
+import { resumeState, useSessions } from '../lib/useSessions';
 import {
   ArrowRight, Clock, CheckCircle2, AlertCircle,
   FileText, FlaskConical, Briefcase, Sparkles
@@ -10,11 +10,11 @@ import { ViewMode } from '../design-system/tokens';
 export function HomePage() {
   const { mode } = useApp();
   const navigate = useNavigate();
+  const { sessions, isLoading: sessionsLoading, error: sessionsError } = useSessions({ limit: 5 });
 
   const statusIcon = {
     active: <Clock size={14} className="text-cei-blue-light" />,
-    completed: <CheckCircle2 size={14} className="text-success" />,
-    partial: <AlertCircle size={14} className="text-evidence-moderate" />,
+    archived: <CheckCircle2 size={14} className="text-success" />,
   };
 
   const quickActions = mode === ViewMode.SCIENCE
@@ -61,20 +61,32 @@ export function HomePage() {
       </div>
 
       <div className="space-y-2">
-        {mockSessions.map((session) => (
+        {sessionsLoading && <p className="text-xs text-text-tertiary px-1 py-2">Loading your chats…</p>}
+        {!sessionsLoading && sessionsError && (
+          <p role="alert" className="flex items-center gap-2 text-xs text-text-secondary px-1 py-2">
+            <AlertCircle size={14} className="text-evidence-weak" aria-hidden="true" />
+            {sessionsError}
+          </p>
+        )}
+        {!sessionsLoading && !sessionsError && sessions.length === 0 && (
+          <p className="text-xs text-text-tertiary px-1 py-2">No chats yet. Start a task to begin.</p>
+        )}
+        {sessions.map((session) => (
           <button
-            key={session.id}
-            onClick={() => navigate('/tasks', { state: { sessionId: session.id } })}
+            key={session.session_id}
+            onClick={() => navigate('/tasks', { state: resumeState(session) })}
             className="w-full text-left px-4 py-3 bg-surface-elevated border border-border-subtle rounded-lg hover:border-cei-blue-light/30 hover:shadow-sm transition-all group"
           >
             <div className="flex items-start gap-3">
-              <div className="mt-0.5">{statusIcon[session.status]}</div>
+              <div className="mt-0.5">{statusIcon[session.status] ?? statusIcon.active}</div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-text-primary group-hover:text-cei-blue transition-colors truncate">{session.title}</p>
-                <p className="text-xs text-text-secondary mt-0.5 line-clamp-1">{session.description}</p>
+                <p className="text-sm font-medium text-text-primary group-hover:text-cei-blue transition-colors truncate">{session.title || 'Untitled chat'}</p>
+                <p className="text-xs text-text-secondary mt-0.5 line-clamp-1">
+                  {session.message_count} {session.message_count === 1 ? 'message' : 'messages'}{session.agent_type ? ` · ${session.agent_type}` : ''}
+                </p>
                 <div className="flex items-center gap-3 mt-1.5">
-                  <span className="text-[10px] text-text-tertiary uppercase tracking-wide">{session.mode}</span>
-                  <span className="text-[10px] text-text-tertiary">Updated {new Date(session.updatedAt).toLocaleDateString()}</span>
+                  {session.mode && <span className="text-[10px] text-text-tertiary uppercase tracking-wide">{session.mode}</span>}
+                  {session.updated_at && <span className="text-[10px] text-text-tertiary">Updated {new Date(session.updated_at).toLocaleDateString()}</span>}
                 </div>
               </div>
               <ArrowRight size={14} className="text-text-tertiary group-hover:text-cei-blue-light mt-1 shrink-0 transition-colors" />
@@ -84,7 +96,7 @@ export function HomePage() {
       </div>
 
       <div className="mt-8 px-4 py-2.5 bg-amber-50/50 border border-amber-200/40 rounded-lg">
-        <p className="text-xs text-amber-700"><span className="font-semibold">Sample data for demonstration.</span> Conversations and results use realistic biotech scenarios for prototype evaluation.</p>
+        <p className="text-xs text-amber-700"><span className="font-semibold">Recent chats are your real sessions.</span> Quick actions open the task launcher.</p>
       </div>
     </div>
   );

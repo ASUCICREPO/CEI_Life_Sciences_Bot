@@ -2,5 +2,6 @@
   "region": "us-east-1",
   "userPoolId": "us-east-1_XXXXXXXXX",
   "userPoolClientId": "XXXXXXXXXXXXXXXXXXXXXXXXXX",
-  "cognitoDomain": "https://cei-ls-000000000000.auth.us-east-1.amazoncognito.com"
+  "cognitoDomain": "https://cei-ls-000000000000.auth.us-east-1.amazoncognito.com",
+  "apiBaseUrl": "/api"
 }

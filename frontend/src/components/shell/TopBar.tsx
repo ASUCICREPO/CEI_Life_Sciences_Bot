@@ -125,20 +125,18 @@ export function TopBar() {
         </button>
       </div>
 
-      {!(import.meta.env.DEV && import.meta.env.VITE_LOCAL_DEMO === 'true') && (
-        <div className="hidden md:flex items-center gap-2 text-xs text-text-tertiary shrink-0">
-          {userEmail && <span className="truncate max-w-[10rem]" title={userEmail}>{userEmail}</span>}
-          <button
-            type="button"
-            onClick={() => void signOut()}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-panel transition-colors"
-            aria-label="Sign out"
-          >
-            <LogOut size={13} aria-hidden="true" />
-            <span>Sign out</span>
-          </button>
-        </div>
-      )}
+      <div className="hidden md:flex items-center gap-2 text-xs text-text-tertiary shrink-0">
+        {userEmail && <span className="truncate max-w-[10rem]" title={userEmail}>{userEmail}</span>}
+        <button
+          type="button"
+          onClick={() => void signOut()}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-panel transition-colors"
+          aria-label="Sign out"
+        >
+          <LogOut size={13} aria-hidden="true" />
+          <span>Sign out</span>
+        </button>
+      </div>
     </header>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { useProductTour } from '../components/tour/ProductTour';
 import { mockTaskGroups } from '../mocks/tasks';
@@ -12,7 +12,15 @@ import { NcbiToolCard } from '../components/NcbiToolCard';
 import { NcbiToolMenu } from '../components/NcbiToolMenu';
 import { detectNcbiTool, getNcbiTool } from '../mocks/ncbiTools';
 import type { NcbiToolId } from '../mocks/ncbiTools';
-import type { AnalysisType } from '../lib/agentClient';
+import type { AgentName } from '../lib/agentClient';
+import {
+  agentForTask,
+  liveAnalysisTaskIds,
+  liveDraftingTaskIds,
+  liveTaskIds,
+  resolveResumeTarget,
+  type ResumeRouteState,
+} from '../lib/resumeRouting';
 import {
   FlaskConical, Target, Atom, Map, Eye, Package, Zap, Scale, GitBranch,
   ArrowRight, Clock, ShieldAlert, Search, Send, User, Bot,
@@ -28,18 +36,18 @@ const groupIcons: Record<string, typeof FlaskConical> = {
   'produce-deliverable': Package,
   'landscape-analysis': Scale,
   'run-a-pipeline': GitBranch,
+  'live-research-drafting': Search,
   'cross-domain': Zap,
 };
 
 // ADR: live tasks call the local AgentCore runtimes | every other task keeps
-// its existing mock chat (taskConversations) unchanged.
-const liveAnalysisTaskIds: Record<string, AnalysisType> = {
-  'analysis-competitor': 'competitor',
-  'analysis-market': 'market',
-  'analysis-legal': 'legal_landscape',
+// its existing mock chat (taskConversations) unchanged. Task <-> agent routing lives in lib/resumeRouting.ts.
+const livePlaceholders: Record<AgentName, string> = {
+  research: 'Ask a scientific question...',
+  drafting: 'Describe the document to draft...',
+  analysis: 'Describe the competitor, market, or legal scope to analyze...',
+  pipeline: 'Describe the multi-step request...',
 };
-const livePipelineTaskId = 'run-pipeline';
-const liveTaskIds = new Set([...Object.keys(liveAnalysisTaskIds), livePipelineTaskId]);
 
 const scienceTaskIds = new Set([
   'research-question', 'check-sequence', 'find-public-data', 'target-assessment',
@@ -57,19 +65,20 @@ export function TaskLauncherPage() {
   const { mode } = useApp();
   const { reportTourEvent, isOpen: tourIsOpen, stage: tourStage } = useProductTour();
   const location = useLocation();
+  const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
-  const sessionTaskIds: Record<string, string> = {
-    'session-1': 'target-assessment',
-    'session-2': 'regulatory-planning',
-    'session-3': 'variant-interpretation',
-    'session-4': 'compound-discovery',
-  };
-  const routeState = location.state as { sessionId?: string; taskId?: string } | null;
-  const initialTask = routeState?.taskId
-    ?? (routeState?.sessionId ? sessionTaskIds[routeState.sessionId] : undefined)
-    ?? null;
+  // Route state from History/Home/LeftRail: `sessionId` is a real backend session to resume in a live chat.
+  const routeState = location.state as ({ sessionId?: string; taskId?: string } & ResumeRouteState) | null;
+  const resumeSessionId = routeState?.sessionId;
+  // Reopen the chat in the runtime that owns the session; an unknown agent never falls through to the pipeline.
+  const resumeTarget = resumeSessionId ? resolveResumeTarget(routeState) : null;
+  const resumeTaskId = resumeTarget?.kind === 'resume' ? resumeTarget.taskId : undefined;
+  const initialTask = routeState?.taskId ?? resumeTaskId ?? null;
   const [activeTask, setActiveTask] = useState<string | null>(initialTask);
+  const [unresumable, setUnresumable] = useState(
+    resumeTarget?.kind === 'unresumable' && !routeState?.taskId ? resumeTarget : null,
+  );
   const [inputValue, setInputValue] = useState('');
   // Extra messages added by the user during the session (the Q&A thread)
   const [extraMessages, setExtraMessages] = useState<ChatMessage[]>([]);
@@ -177,9 +186,41 @@ export function TaskLauncherPage() {
     askQuestion(inputValue);
   };
 
-  // ─── ACTIVE TASK: Live agent (Analysis / Pipeline Manager) ──
-  if (activeTask && liveTaskIds.has(activeTask)) {
+  // ─── RESUME FAILED: the saved chat's agent can't be reopened here ──
+  if (unresumable && !activeTask) {
+    return (
+      <div className="h-full flex items-center justify-center px-6">
+        <div role="alert" className="max-w-md text-center">
+          <div className="w-12 h-12 rounded-2xl bg-cei-blue/10 flex items-center justify-center mb-4 mx-auto">
+            <ShieldAlert size={24} className="text-cei-blue" />
+          </div>
+          <h2 className="text-base font-semibold text-text-primary">Can't resume this chat</h2>
+          <p className="text-sm text-text-secondary mt-1.5">{unresumable.reason}</p>
+          <p className="text-xs text-text-tertiary mt-1">Agent: {unresumable.agentType ?? 'unknown'}</p>
+          <div className="flex gap-2 justify-center mt-4">
+            <button
+              onClick={() => navigate('/history')}
+              className="text-xs px-3 py-1.5 rounded-full border border-border-subtle text-text-secondary hover:text-cei-blue transition-all"
+            >
+              Back to History
+            </button>
+            <button
+              onClick={() => setUnresumable(null)}
+              className="text-xs px-3 py-1.5 rounded-full border border-border-subtle text-text-secondary hover:text-cei-blue transition-all"
+            >
+              Browse tasks
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── ACTIVE TASK: Live agent (Research / Drafting / Analysis / Pipeline Manager) ──
+  const liveAgent = activeTask && liveTaskIds.has(activeTask) ? agentForTask(activeTask) : null;
+  if (activeTask && liveAgent) {
     const analysisType = liveAnalysisTaskIds[activeTask];
+    const documentType = liveDraftingTaskIds[activeTask];
     const taskDef = mockTaskGroups.flatMap((group) => group.tasks).find((task) => task.id === activeTask);
     const agentMode = mode === ViewMode.BUSINESS ? 'business' : 'science';
     return (
@@ -195,14 +236,16 @@ export function TaskLauncherPage() {
         </div>
         <div className="flex-1 overflow-hidden">
           <LiveAgentChat
-            agent={analysisType ? 'analysis' : 'pipeline'}
+            agent={liveAgent}
             mode={agentMode}
             analysisType={analysisType}
+            documentType={documentType}
             threadKey={activeTask}
+            resumeSessionId={activeTask === resumeTaskId ? resumeSessionId : undefined}
             title={taskDef?.title ?? 'Live agent'}
             description={taskDef?.description ?? ''}
             examples={taskDef?.examples ?? []}
-            placeholder={analysisType ? 'Describe the competitor, market, or legal scope to analyze...' : 'Describe the multi-step request...'}
+            placeholder={livePlaceholders[liveAgent]}
           />
         </div>
       </div>

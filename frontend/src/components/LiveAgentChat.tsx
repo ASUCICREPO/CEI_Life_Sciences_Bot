@@ -1,10 +1,13 @@
-import { useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, Send, User } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { Bot, Loader2, Send, User } from 'lucide-react';
 import { CEIUISurface } from './cei-ui/cei-ui-surface';
 import { SafeMarkdown } from './cei-ui/markdown';
 import {
   AgentClientError,
+  adoptSessionId,
+  buildRunPayload,
   getOrCreateSessionId,
   invokeAgent,
   setJobSession,
@@ -12,8 +15,11 @@ import {
   type AgentMode,
   type AgentName,
   type AnalysisType,
+  type DocumentType,
 } from '../lib/agentClient';
 import type { CEIUISurface as CEIUISurfaceType } from '../lib/cei-ui/schema';
+import { SessionsClientError, type HistoryMessage } from '../lib/sessionsClient';
+import { useSessionsClient } from '../lib/useSessions';
 
 interface LiveMessage {
   id: string;
@@ -29,23 +35,142 @@ interface LiveAgentChatProps {
   agent: AgentName;
   mode: AgentMode;
   analysisType?: AnalysisType;
+  /** Drafting only: the document type every turn carries (the runtime requires it). */
+  documentType?: DocumentType;
   threadKey: string;
+  /** Existing backend session to continue (e.g. opened from History); its history is loaded on mount. */
+  resumeSessionId?: string;
   title: string;
   description: string;
   examples: string[];
   placeholder: string;
 }
 
-// ADR: a dedicated live chat for Analysis and Pipeline tasks | the mock task
+const HISTORY_PAGE_SIZE = 30;
+const LOAD_OLDER_THRESHOLD_PX = 200;
+
+// History turns are rendered read-only: tool rows are internal, and past HITL surfaces are not re-answerable.
+function toLiveMessages(items: HistoryMessage[]): LiveMessage[] {
+  return items
+    .filter((item) => item.role !== 'tool')
+    .map((item): LiveMessage => ({
+      id: `history-${item.message_id || item.sequence_number}`,
+      role: item.role === 'human' ? 'user' : 'assistant',
+      text: item.text,
+      surface: item.ui,
+      uiError: item.ui_error,
+      answered: true,
+    }));
+}
+
+// ADR: a dedicated live chat for the Research, Drafting, Analysis and Pipeline tasks | the mock task
 // chat (ChatResponse/taskConversations) stays untouched; this component talks
-// to the real local AgentCore runtimes through agentClient.
-export function LiveAgentChat({ agent, mode, analysisType, threadKey, title, description, examples, placeholder }: LiveAgentChatProps) {
+// to the AgentCore runtimes through agentClient and reads history via sessionsClient.
+export function LiveAgentChat({ agent, mode, analysisType, documentType, threadKey, resumeSessionId, title, description, examples, placeholder }: LiveAgentChatProps) {
   const navigate = useNavigate();
-  const sessionId = useMemo(() => getOrCreateSessionId(threadKey), [threadKey]);
+  const sessionsClient = useSessionsClient();
+  const sessionId = useMemo(() => {
+    if (resumeSessionId) {
+      // New turns on this thread continue the resumed session.
+      adoptSessionId(threadKey, resumeSessionId);
+      return resumeSessionId;
+    }
+    return getOrCreateSessionId(threadKey);
+  }, [threadKey, resumeSessionId]);
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isRunning, setIsRunning] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(Boolean(resumeSessionId));
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [olderCursor, setOlderCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const formId = useId();
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Set right before prepending older messages so the layout effect can keep the viewport anchored.
+  const prependAnchor = useRef<{ scrollTop: number; totalSize: number } | null>(null);
+  const lastMessageId = useRef<string | null>(null);
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 120,
+    overscan: 3,
+    getItemKey: (index) => messages[index]?.id ?? index,
+  });
+
+  // Newest history page first (items in a page are chronological); `next_cursor` points to older messages.
+  useEffect(() => {
+    if (!resumeSessionId) return;
+    let cancelled = false;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    sessionsClient
+      .loadHistory(resumeSessionId, { limit: HISTORY_PAGE_SIZE })
+      .then((page) => {
+        if (cancelled) return;
+        const loaded = toLiveMessages(page.items);
+        // The latest assistant surface may still be awaiting input, so keep it answerable.
+        const last = loaded[loaded.length - 1];
+        if (last && last.role === 'assistant' && last.surface) last.answered = false;
+        setMessages(loaded);
+        setOlderCursor(page.next_cursor);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setHistoryError(error instanceof SessionsClientError ? error.message : 'Could not load this conversation.');
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeSessionId, sessionsClient]);
+
+  const loadOlder = useCallback(() => {
+    if (!resumeSessionId || !olderCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    sessionsClient
+      .loadHistory(resumeSessionId, { limit: HISTORY_PAGE_SIZE, cursor: olderCursor })
+      .then((page) => {
+        const older = toLiveMessages(page.items);
+        const element = scrollRef.current;
+        if (element && older.length > 0) {
+          prependAnchor.current = { scrollTop: element.scrollTop, totalSize: virtualizer.getTotalSize() };
+        }
+        setMessages((prev) => {
+          const known = new Set(prev.map((message) => message.id));
+          return [...older.filter((message) => !known.has(message.id)), ...prev];
+        });
+        setOlderCursor(page.next_cursor);
+      })
+      .catch((error: unknown) => {
+        setHistoryError(error instanceof SessionsClientError ? error.message : 'Could not load older messages.');
+      })
+      .finally(() => setLoadingOlder(false));
+  }, [resumeSessionId, olderCursor, loadingOlder, sessionsClient, virtualizer]);
+
+  // Preserve the viewport when older messages are prepended; follow the conversation when a new turn is appended.
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    const anchor = prependAnchor.current;
+    if (element && anchor) {
+      prependAnchor.current = null;
+      element.scrollTop = anchor.scrollTop + (virtualizer.getTotalSize() - anchor.totalSize);
+      return;
+    }
+    const newest = messages[messages.length - 1]?.id ?? null;
+    if (newest && newest !== lastMessageId.current) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+    }
+    lastMessageId.current = newest;
+  }, [messages, virtualizer]);
+
+  const handleScroll = () => {
+    const element = scrollRef.current;
+    if (element && element.scrollTop < LOAD_OLDER_THRESHOLD_PX) loadOlder();
+  };
 
   function appendFromEnvelope(envelope: AgentEnvelope, isError = false): string {
     const id = `${agent}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -71,10 +196,11 @@ export function LiveAgentChat({ agent, mode, analysisType, threadKey, title, des
     setInputValue('');
     setIsRunning(true);
     try {
-      const envelope = await invokeAgent(agent, { prompt: trimmed, mode, user_id: 'local-demo', analysis_type: analysisType }, sessionId);
+      const payload = buildRunPayload(agent, { prompt: trimmed, mode, analysisType, documentType });
+      const envelope = await invokeAgent(agent, payload, sessionId);
       appendFromEnvelope(envelope);
     } catch (error) {
-      const message = error instanceof AgentClientError ? error.message : 'The agent could not be reached. Confirm the local runtime is running.';
+      const message = error instanceof AgentClientError ? error.message : 'The agent could not be reached. Try again in a moment.';
       setMessages((prev) => [...prev, { id: `error-${Date.now()}`, role: 'assistant', text: message, isError: true }]);
     } finally {
       setIsRunning(false);
@@ -93,6 +219,45 @@ export function LiveAgentChat({ agent, mode, analysisType, threadKey, title, des
     void askQuestion(inputValue);
   };
 
+  const renderMessage = (message: LiveMessage) => (
+    <>
+      {message.role === 'user' && (
+        <div className="flex items-start gap-3 max-w-2xl">
+          <div className="w-6 h-6 rounded-full bg-cei-blue/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+            <User size={12} className="text-cei-blue" />
+          </div>
+          <p className="text-sm text-text-primary leading-relaxed">{message.text}</p>
+        </div>
+      )}
+      {message.role === 'assistant' && (
+        <div className="flex items-start gap-3">
+          <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${message.isError ? 'bg-evidence-weak' : 'bg-cei-blue'}`}>
+            <Bot size={12} className="text-white" />
+          </div>
+          <div className="flex-1 min-w-0 max-w-3xl">
+            {message.uiError && (
+              <p className="text-xs text-evidence-moderate mb-1.5">{message.uiError} Showing the plain-text answer instead.</p>
+            )}
+            {message.surface ? (
+              <CEIUISurface
+                surface={message.surface}
+                agent={agent}
+                sessionId={sessionId}
+                fallbackText={message.text}
+                disabled={message.answered}
+                onAction={(envelope) => handleAction(message.id, envelope)}
+              />
+            ) : (
+              <SafeMarkdown content={message.text ?? ''} />
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  const showEmptyState = messages.length === 0 && !historyLoading && !historyError;
+
   return (
     <div className="h-full flex flex-col">
       <div className="border-b border-border-subtle px-6 py-3 bg-surface-elevated flex-shrink-0">
@@ -100,8 +265,24 @@ export function LiveAgentChat({ agent, mode, analysisType, threadKey, title, des
         <p className="text-xs text-text-secondary mt-0.5">{description}</p>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
-        {messages.length === 0 && (
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-6 py-6">
+        {historyLoading && (
+          <div role="status" className="flex items-center justify-center gap-2 py-6 text-sm text-text-secondary">
+            <Loader2 size={16} className="animate-spin text-cei-blue" aria-hidden="true" />
+            <span>Loading conversation…</span>
+          </div>
+        )}
+        {historyError && (
+          <p role="alert" className="text-xs text-evidence-weak text-center py-2">{historyError}</p>
+        )}
+        {loadingOlder && (
+          <div className="flex items-center justify-center gap-2 py-2 text-xs text-text-tertiary">
+            <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+            <span>Loading older messages…</span>
+          </div>
+        )}
+
+        {showEmptyState && (
           <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
             <div className="w-12 h-12 rounded-2xl bg-cei-blue/10 flex items-center justify-center mb-4">
               <Bot size={24} className="text-cei-blue" />
@@ -122,42 +303,24 @@ export function LiveAgentChat({ agent, mode, analysisType, threadKey, title, des
           </div>
         )}
 
-        {messages.map((message) => (
-          <div key={message.id}>
-            {message.role === 'user' && (
-              <div className="flex items-start gap-3 max-w-2xl">
-                <div className="w-6 h-6 rounded-full bg-cei-blue/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <User size={12} className="text-cei-blue" />
+        {messages.length > 0 && (
+          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+            {virtualizer.getVirtualItems().map((item) => {
+              const message = messages[item.index];
+              return (
+                <div
+                  key={item.key}
+                  data-index={item.index}
+                  ref={virtualizer.measureElement}
+                  className="absolute top-0 left-0 w-full pb-5"
+                  style={{ transform: `translateY(${item.start}px)` }}
+                >
+                  {renderMessage(message)}
                 </div>
-                <p className="text-sm text-text-primary leading-relaxed">{message.text}</p>
-              </div>
-            )}
-            {message.role === 'assistant' && (
-              <div className="flex items-start gap-3">
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${message.isError ? 'bg-evidence-weak' : 'bg-cei-blue'}`}>
-                  <Bot size={12} className="text-white" />
-                </div>
-                <div className="flex-1 min-w-0 max-w-3xl">
-                  {message.uiError && (
-                    <p className="text-xs text-evidence-moderate mb-1.5">{message.uiError} Showing the plain-text answer instead.</p>
-                  )}
-                  {message.surface ? (
-                    <CEIUISurface
-                      surface={message.surface}
-                      agent={agent}
-                      sessionId={sessionId}
-                      fallbackText={message.text}
-                      disabled={message.answered}
-                      onAction={(envelope) => handleAction(message.id, envelope)}
-                    />
-                  ) : (
-                    <SafeMarkdown content={message.text ?? ''} />
-                  )}
-                </div>
-              </div>
-            )}
+              );
+            })}
           </div>
-        ))}
+        )}
 
         {isRunning && (
           <div className="flex items-start gap-3">
@@ -187,14 +350,14 @@ export function LiveAgentChat({ agent, mode, analysisType, threadKey, title, des
                 }
               }}
               rows={1}
-              disabled={isRunning}
+              disabled={isRunning || historyLoading}
               placeholder={placeholder}
               className="w-full resize-y pl-4 pr-12 py-3 rounded-xl border border-border-subtle bg-surface-panel text-sm placeholder:text-text-tertiary focus:border-cei-blue-light focus:ring-2 focus:ring-cei-blue-light/20 transition-all disabled:opacity-60"
               aria-label={placeholder}
             />
             <button
               type="submit"
-              disabled={!inputValue.trim() || isRunning}
+              disabled={!inputValue.trim() || isRunning || historyLoading}
               className="absolute right-2 top-2.5 p-2 rounded-lg bg-cei-blue text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-cei-navy transition-colors"
               aria-label="Send"
             >

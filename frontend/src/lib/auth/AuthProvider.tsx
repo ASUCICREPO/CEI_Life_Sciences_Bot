@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import type { User, UserManager } from 'oidc-client-ts';
 import { loadRuntimeConfig, type RuntimeConfig } from './config';
 import { getUserManager, buildCognitoLogoutUrl } from './userManager';
+import { setAgentTokenProvider } from '../agentClient';
 
 interface AuthContextValue {
   user: User | null;
@@ -11,28 +12,22 @@ interface AuthContextValue {
   signIn: (returnTo?: string) => Promise<void>;
   signOut: () => Promise<void>;
   getAccessToken: () => Promise<string | null>;
+  /** The validated /config.json; null until it has loaded. */
+  config: RuntimeConfig | null;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-// ADR: a fixed local user for VITE_LOCAL_DEMO | only ever constructed when
-// import.meta.env.DEV is true, so this object is absent from the production
-// bundle once dead branches below are eliminated.
-function createLocalDemoUser(): User {
-  return { profile: { email: 'cei-local-demo-auth-bypass@cei.internal', sub: 'cei-local-demo-auth-bypass' } } as unknown as User;
-}
-
+// ADR: no auth bypass in any build | local dev signs in to a real dev Cognito pool exactly like prod,
+// so every API call carries a real access token and the backend scopes data by the token's `sub`.
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [userManager, setUserManager] = useState<UserManager | null>(null);
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
-  const [user, setUser] = useState<User | null>(
-    import.meta.env.DEV && import.meta.env.VITE_LOCAL_DEMO === 'true' ? createLocalDemoUser() : null,
-  );
-  const [isLoading, setIsLoading] = useState(!(import.meta.env.DEV && import.meta.env.VITE_LOCAL_DEMO === 'true'));
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    if (import.meta.env.DEV && import.meta.env.VITE_LOCAL_DEMO === 'true') return;
     let cancelled = false;
 
     loadRuntimeConfig()
@@ -100,12 +95,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const getAccessToken = useCallback(async () => {
     if (!userManager) return null;
     const currentUser = await userManager.getUser();
-    return currentUser?.access_token ?? null;
+    if (!currentUser || currentUser.expired) return null;
+    return currentUser.access_token ?? null;
   }, [userManager]);
 
+  // Agent calls carry the access token so runtimes record history under the caller's Cognito sub
+  useEffect(() => {
+    setAgentTokenProvider(getAccessToken);
+    return () => setAgentTokenProvider(null);
+  }, [getAccessToken]);
+
   const value = useMemo<AuthContextValue>(
-    () => ({ user, isLoading, error, userManager, signIn, signOut, getAccessToken }),
-    [user, isLoading, error, userManager, signIn, signOut, getAccessToken]
+    () => ({ user, isLoading, error, userManager, config, signIn, signOut, getAccessToken }),
+    [user, isLoading, error, userManager, config, signIn, signOut, getAccessToken]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

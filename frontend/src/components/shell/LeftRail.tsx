@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useProductTour } from '../tour/ProductTour';
-import { mockSessions } from '../../mocks/sessions';
+import { resumeState, useSessions } from '../../lib/useSessions';
 
 interface NavItem {
   id: string;
@@ -37,6 +37,7 @@ export function LeftRail() {
   const location = useLocation();
   const { sidebarCollapsed, setSidebarCollapsed } = useApp();
   const { reportTourEvent } = useProductTour();
+  const { sessions: recentSessions, isLoading: recentLoading, error: recentError } = useSessions({ limit: 3 });
 
   const isActive = (path: string) => path === '/' ? location.pathname === '/' : location.pathname.startsWith(path);
 
@@ -85,13 +86,18 @@ export function LeftRail() {
         <div className="px-3 py-2 border-t border-border-subtle">
           <p className="text-[10px] uppercase tracking-wider text-text-tertiary font-semibold mb-2">Recent chats</p>
           <div className="space-y-1">
-            {mockSessions.slice(0, 3).map((session) => (
+            {recentLoading && <p className="text-xs text-text-tertiary px-1 py-1">Loading…</p>}
+            {!recentLoading && recentError && <p className="text-xs text-text-tertiary px-1 py-1">Could not load chats.</p>}
+            {!recentLoading && !recentError && recentSessions.length === 0 && (
+              <p className="text-xs text-text-tertiary px-1 py-1">No chats yet.</p>
+            )}
+            {recentSessions.slice(0, 3).map((session) => (
               <button
-                key={session.id}
-                onClick={() => navigate('/tasks', { state: { sessionId: session.id } })}
+                key={session.session_id}
+                onClick={() => navigate('/tasks', { state: resumeState(session) })}
                 className="w-full text-left text-xs text-text-secondary hover:text-text-primary truncate py-1 px-1 rounded hover:bg-surface-panel transition-colors"
               >
-                {session.title}
+                {session.title || 'Untitled chat'}
               </button>
             ))}
           </div>
