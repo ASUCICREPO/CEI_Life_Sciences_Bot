@@ -97,7 +97,7 @@ def test_run_then_resume_then_job_status_completes(monkeypatch) -> None:
     fake_graph = _FakeGraph(plan)
     monkeypatch.setattr(pipeline_main, "_compile_graph", lambda: fake_graph)
 
-    session_id = "sess-main-1"
+    session_id = "0b0c4f7e-4444-4a44-8a44-000000000001"
 
     async def _scenario():
         run_response = await pipeline_main.invoke(
@@ -131,7 +131,7 @@ def test_reject_plan_does_not_create_a_job(monkeypatch) -> None:
     plan = _plan()
     fake_graph = _FakeGraph(plan)
     monkeypatch.setattr(pipeline_main, "_compile_graph", lambda: fake_graph)
-    session_id = "sess-main-2"
+    session_id = "0b0c4f7e-4444-4a44-8a44-000000000002"
 
     async def _scenario():
         run_response = await pipeline_main.invoke({"prompt": "Do something"}, _Context(session_id))
@@ -148,8 +148,8 @@ def test_job_status_is_isolated_by_session(monkeypatch) -> None:
     plan = _plan()
     fake_graph = _FakeGraph(plan)
     monkeypatch.setattr(pipeline_main, "_compile_graph", lambda: fake_graph)
-    owner_session = "sess-owner"
-    other_session = "sess-other"
+    owner_session = "0b0c4f7e-4444-4a44-8a44-000000000003"
+    other_session = "0b0c4f7e-4444-4a44-8a44-000000000004"
 
     async def _scenario():
         run_response = await pipeline_main.invoke({"prompt": "Owner task"}, _Context(owner_session))
@@ -163,3 +163,93 @@ def test_job_status_is_isolated_by_session(monkeypatch) -> None:
 
     job_id, status_response = asyncio.run(_scenario())
     assert status_response == {"status": "error", "message": "Job not found."}
+
+
+_JOB_SESSION = "0b0c4f7e-4444-4a44-8a44-000000000010"
+
+
+def _spy_get_owned(monkeypatch) -> list:
+    calls: list = []
+    real = pipeline_main.JOB_REGISTRY.get_owned
+
+    def spy(job_id, *, user_id, session_id):
+        calls.append({"job_id": job_id, "user_id": user_id, "session_id": session_id})
+        return real(job_id, user_id=user_id, session_id=session_id)
+
+    monkeypatch.setattr(pipeline_main.JOB_REGISTRY, "get_owned", spy)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("owner", "job_session"),
+    [
+        ("someone-else", _JOB_SESSION),  # another user's job in the same session id
+        ("test-user", "0b0c4f7e-4444-4a44-8a44-000000000011"),  # caller's job, but another session
+        (None, _JOB_SESSION),  # legacy job without an owner is never returned
+    ],
+    ids=["other-user", "other-session", "no-owner"],
+)
+def test_job_status_uses_get_owned_and_refuses_with_generic_message(monkeypatch, owner, job_session) -> None:
+    record = pipeline_main.JOB_REGISTRY.create(session_id=job_session, agent_type="pipeline", user_id=owner)
+    calls = _spy_get_owned(monkeypatch)
+    response = asyncio.run(
+        pipeline_main.invoke({"op": "job_status", "job_id": record.job_id}, _Context(_JOB_SESSION))
+    )
+    assert response == {"status": "error", "message": "Job not found."}
+    assert calls == [{"job_id": record.job_id, "user_id": "test-user", "session_id": _JOB_SESSION}]
+
+
+def test_job_status_returns_snapshot_for_owned_job(monkeypatch) -> None:
+    record = pipeline_main.JOB_REGISTRY.create(session_id=_JOB_SESSION, agent_type="pipeline", user_id="test-user")
+    calls = _spy_get_owned(monkeypatch)
+    response = asyncio.run(
+        pipeline_main.invoke({"op": "job_status", "job_id": record.job_id}, _Context(_JOB_SESSION))
+    )
+    assert response.get("message") != "Job not found."
+    assert response["job_id"] == record.job_id
+    assert len(calls) == 1
+
+
+class _FakeReplay:
+    enabled = True
+    mode = SimpleNamespace(value="replay")
+
+    def __init__(self, result=None) -> None:
+        self.result = result
+        self.job_status_calls: list = []
+
+    def on_job_status(self, job_id, *, session_id):
+        self.job_status_calls.append((job_id, session_id))
+        return self.result
+
+
+def test_job_status_replay_not_consulted_when_session_ownership_fails(monkeypatch) -> None:
+    import shared.runtime.history as history
+    from shared.persistence.chat_metadata import SessionNotFoundError
+
+    class _ForeignRecorder:
+        async def assert_owner(self, **_):
+            raise SessionNotFoundError(_JOB_SESSION)
+
+    monkeypatch.setattr(history, "get_recorder", lambda: _ForeignRecorder())
+    replay = _FakeReplay(result={"status": "completed", "text": "replayed fixture data"})
+    monkeypatch.setattr(pipeline_main, "_replay", replay)
+    calls = _spy_get_owned(monkeypatch)
+    response = asyncio.run(pipeline_main.invoke({"op": "job_status", "job_id": "job-x"}, _Context(_JOB_SESSION)))
+    assert response.status_code == 404
+    assert b"replayed fixture data" not in response.body
+    assert replay.job_status_calls == []
+    assert calls == []
+
+
+def test_job_status_replay_miss_still_enforces_job_ownership(monkeypatch) -> None:
+    record = pipeline_main.JOB_REGISTRY.create(session_id=_JOB_SESSION, agent_type="pipeline", user_id="someone-else")
+    replay = _FakeReplay(result=None)
+    monkeypatch.setattr(pipeline_main, "_replay", replay)
+    calls = _spy_get_owned(monkeypatch)
+    response = asyncio.run(
+        pipeline_main.invoke({"op": "job_status", "job_id": record.job_id}, _Context(_JOB_SESSION))
+    )
+    assert response == {"status": "error", "message": "Job not found."}
+    assert replay.job_status_calls == [(record.job_id, _JOB_SESSION)]
+    assert len(calls) == 1

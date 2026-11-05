@@ -203,7 +203,9 @@ async def dispatch(state: PipelineState, config: RunnableConfig) -> dict[str, An
     plan_obj = state["plan"]
     steps_by_id = {step.step_id: step for step in plan_obj.steps}
     status_by_id = {status.step_id: status for status in state.get("steps", [])}
-    session_id = state.get("session_id", "default")
+    session_id = state.get("session_id")
+    if not session_id:  # no default session id: sub-step threads derive from the run's own session UUID
+        raise ValueError("pipeline state has no session_id")
     mode = state.get("mode", "science")
     user_id = state.get("user_id", "cli-user")
     job_id = (config.get("configurable") or {}).get("job_id") if config else None

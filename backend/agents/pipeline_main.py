@@ -34,7 +34,7 @@ from shared.runtime import (
 from shared.runtime.history import begin_turn, end_turn, record_resume
 from shared.runtime.checkpointing import restore_for_resume
 from shared.runtime.app_factory import create_app
-from shared.runtime.identity import resolve_user_id
+from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
 
 app = create_app()  # CORS for direct browser calls when CEI_ALLOWED_ORIGINS is set
 log = app.logger
@@ -159,8 +159,10 @@ async def _run_job(job_id: str, session_id: str, user_id: str, action_resume_val
 
 
 @app.entrypoint
-async def invoke(payload, context):  # noqa: ANN001
-    session_id: str = getattr(context, "session_id", "default")
+@guarded_entrypoint  # UUID session id + verified caller + ownership, before any op touches the session
+async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
+    session_id = session.session_id
+    user_id = session.user_id
     op = parse_op(payload)
 
     if op is RuntimeOp.JOB_STATUS:
@@ -168,11 +170,13 @@ async def invoke(payload, context):  # noqa: ANN001
         if not isinstance(job_id, str) or not job_id:
             return {"status": "error", "message": "job_id is required."}
         if _replay.enabled:
+            # replayed jobs are fixtures, not registry records; the session itself was owner-checked above
             replayed = _replay.on_job_status(job_id, session_id=session_id)
             if replayed is not None:
                 return replayed
-        record = JOB_REGISTRY.get(job_id)
-        if record is None or record.session_id != session_id:
+        # the job must have been started by this caller in this session (jobs without an owner are refused)
+        if JOB_REGISTRY.get_owned(job_id, user_id=user_id, session_id=session_id) is None:
+            log.warning(f"Job status refused: job={job_id} session={session_id}")
             return {"status": "error", "message": "Job not found."}
         snapshot = JOB_REGISTRY.snapshot(job_id)
         if _replay.mode.value == "record":
@@ -183,7 +187,6 @@ async def invoke(payload, context):  # noqa: ANN001
     if op is RuntimeOp.RESUME:
         action = parse_action(payload)
         prompt = _thread_prompts.get(session_id, "")
-        user_id = resolve_user_id(payload, context)  # verified Cognito access-token sub; payload user_id ignored
 
         if _replay.enabled:
             replayed = _replay.on_resume(prompt, session_id=session_id, action=action, job_id=None)
@@ -226,6 +229,7 @@ async def invoke(payload, context):  # noqa: ANN001
             agent_type="pipeline_manager",
             steps=_plan_steps_for_registry(plan_obj),
             job_id=job_id,
+            user_id=user_id,
         )
         JOB_REGISTRY.set_status(job_id, JobStatus.RUNNING)
 
@@ -249,7 +253,6 @@ async def invoke(payload, context):  # noqa: ANN001
     # op is RUN (default)
     prompt = parse_prompt(payload)
     mode = parse_mode(payload)
-    user_id = resolve_user_id(payload, context)  # verified Cognito access-token sub; payload user_id ignored
     _thread_prompts[session_id] = prompt
 
     if _replay.enabled:
