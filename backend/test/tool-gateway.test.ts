@@ -164,12 +164,12 @@ describe('ToolGateway (F4)', () => {
   });
 
   describe('source Lambdas', () => {
-    const sources = resourcesOf(template, 'AWS::Lambda::Function').filter((f) => f.Environment?.Variables?.CEI_ENVIRONMENT === 'deployed');
+    const sources = resourcesOf(template, 'AWS::Lambda::Function').filter((f) => f.Environment?.Variables?.CEI_API_KEY_SECRET_PREFIX);
 
-    it('deploys ten, refusing direct mode (B19), on Python 3.14 with a 90 s timeout', () => {
+    it('deploys ten on Python 3.14 with a 90 s timeout and no direct-mode switch', () => {
       expect(sources).toHaveLength(10);
       for (const fn of sources) {
-        expect(fn.Environment.Variables.CEI_DIRECT_MODE).toBe('false');
+        expect(fn.Environment.Variables.CEI_DIRECT_MODE).toBeUndefined();
         expect(fn.Runtime).toBe('python3.14');
         expect(fn.Timeout).toBe(90);
         expect(fn.Layers).toHaveLength(1);

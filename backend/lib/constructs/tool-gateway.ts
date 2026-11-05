@@ -170,9 +170,7 @@ export class ToolGateway extends Construct {
         timeout: Duration.seconds(90),
         memorySize: 256,
         environment: {
-          // B19: deployed compute refuses CEI_DIRECT_MODE; the source Lambdas only call fetch()
-          CEI_ENVIRONMENT: 'deployed',
-          CEI_DIRECT_MODE: 'false',
+          // The source Lambdas only call tool.fetch() (the real upstream call); no direct-mode switch is involved
           CEI_API_KEY_SECRET_PREFIX: 'cei/user-keys',
         },
       });
