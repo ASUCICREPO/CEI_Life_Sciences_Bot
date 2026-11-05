@@ -28,8 +28,10 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
-# AgentCore accepts 33-256 characters; the SPA sends a UUID (36). Charset matches the agents' contract.
-_SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{33,256}$")
+# Every session is a dedicated UUID (8-4-4-4-12, 36 chars; AgentCore needs >= 33). No default or fallback id.
+_SESSION_ID_PATTERN = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 _AGENT_PATH_PATTERN = re.compile(r"^/([a-z]+)/?$")
 _MAX_TOKEN_LENGTH = 8192
 _MAX_BODY_BYTES = 1_000_000
@@ -131,7 +133,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _error(401, "unauthorized", "Authentication is required.", rid)
 
     session_id = headers.get(SESSION_HEADER.lower()) or ""
-    if not _SESSION_ID_PATTERN.match(session_id):
+    if not _SESSION_ID_PATTERN.fullmatch(session_id):  # fullmatch: `$` alone lets "<uuid>\n" through
         _log(agent, 400, started, rid)
         return _error(400, "invalid_request", "A valid session id header is required.", rid)
 

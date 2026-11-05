@@ -130,7 +130,13 @@ def test_missing_or_malformed_bearer_is_401(captured, auth):
     assert captured == []
 
 
-@pytest.mark.parametrize("session", [None, "", "short", "a" * 257, SESSION + "\r\nX: y", "bad id with spaces........."])
+@pytest.mark.parametrize(
+    "session",
+    [
+        None, "", "short", "a" * 257, SESSION + "\r\nX: y", "bad id with spaces.........",
+        "default", "a" * 36, "0b0c4f7e11114a118a11000000000001",  # no default ids, UUIDs only
+    ],
+)
 def test_invalid_session_id_is_400(captured, session):
     headers = {"authorization": "Bearer abc"}
     if session is not None:
@@ -194,6 +200,55 @@ def test_non_https_agent_url_is_ignored(monkeypatch, captured):
     monkeypatch.setenv("AGENT_URLS", json.dumps({"research": "http://evil.example/"}))
     assert handler.handler(_event(), _Ctx())["statusCode"] == 404
     assert captured == []
+
+
+def _session_event(session):
+    headers = {"authorization": "Bearer abc.def.ghi"}
+    if session is not None:
+        headers[handler.SESSION_HEADER.lower()] = session
+    return _event(headers=headers)
+
+
+@pytest.mark.parametrize("session", [None, "session-1", "default"], ids=["missing", "session-1", "default"])
+def test_missing_or_non_uuid_session_header_is_400_without_upstream_call(captured, session):
+    result = handler.handler(_session_event(session), _Ctx())
+    assert result["statusCode"] == 400
+    assert _error_code(result) == "invalid_request"
+    assert captured == []
+
+
+def test_uppercase_uuid_is_accepted_and_forwarded_verbatim(captured):
+    upper = SESSION.upper()
+    result = handler.handler(_session_event(upper), _Ctx())
+    assert result["statusCode"] == 200
+    assert captured[0][0].get_header(handler.SESSION_HEADER.capitalize()) == upper  # not lower-cased
+
+
+def test_braced_uuid_is_rejected_400(captured):
+    result = handler.handler(_session_event("{" + SESSION + "}"), _Ctx())
+    assert result["statusCode"] == 400
+    assert captured == []
+
+
+def test_uuid_with_trailing_newline_is_rejected_400(captured):
+    # `$` in a Python regex also matches just before a trailing "\n"; the header must still be refused.
+    result = handler.handler(_session_event(SESSION + "\n"), _Ctx())
+    assert result["statusCode"] == 400
+    assert captured == []
+
+
+def test_valid_uuid_forwarded_unchanged_and_no_id_generated(captured, monkeypatch):
+    import uuid
+
+    def _no_generation(*_a, **_k):
+        raise AssertionError("proxy must never generate a session id")
+
+    for name in ("uuid1", "uuid4"):
+        monkeypatch.setattr(uuid, name, _no_generation)
+    result = handler.handler(_session_event(SESSION), _Ctx())
+    assert result["statusCode"] == 200
+    assert len(captured) == 1
+    assert captured[0][0].get_header(handler.SESSION_HEADER.capitalize()) == SESSION
 
 
 def test_logs_never_contain_token_or_session(captured, caplog):

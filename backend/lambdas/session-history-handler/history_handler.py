@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from http_errors import (
+    GENERIC_INTERNAL_ERROR,
     ApiError,
     api_handler,
     decode_cursor,
@@ -15,14 +15,14 @@ from http_errors import (
     not_found,
     page_envelope,
     parse_limit,
+    request_id,
     user_id_from_claims,
 )
 from shared.persistence.chat_history import ChatHistoryRepository
-from shared.persistence.chat_metadata import ChatMetadataRepository
+from shared.persistence.chat_metadata import ChatMetadataRepository, SessionNotFoundError
+from shared.persistence.ownership import OwnershipCheckError, is_session_uuid, verify_session_owner
 
 logger = get_logger(__name__)
-
-SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 _metadata: ChatMetadataRepository | None = None
 _history: ChatHistoryRepository | None = None
@@ -53,20 +53,33 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         raise ApiError(404, "not_found", "The route was not found.")
 
     session_id = (event.get("pathParameters") or {}).get("sessionId")
-    if not isinstance(session_id, str) or not SESSION_ID_PATTERN.match(session_id):
+    if not is_session_uuid(session_id):
         raise invalid_request("The sessionId path parameter is not valid.")
+
+    metadata, history = _repositories()
+    # Ownership first, before anything else reads the session; fail closed if the owner cannot be read.
+    # B12: the history table is keyed by session_id only, so the stamped owner is checked, then the metadata row
+    # (keyed by the caller) must exist too.
+    try:
+        verify_session_owner(history, user_id, session_id)
+    except SessionNotFoundError:
+        raise not_found("The session was not found.") from None
+    except OwnershipCheckError:
+        logger.exception(
+            "session ownership check failed; request refused",
+            extra={"request_id": request_id(event, context), "route": event.get("resource")},
+        )
+        raise ApiError(500, "internal_error", GENERIC_INTERNAL_ERROR) from None
+    session = metadata.get(user_id, session_id)
+    if session is None:
+        raise not_found("The session was not found.")
+
     params = event.get("queryStringParameters") or {}
     limit = parse_limit(params)
     start_key = decode_cursor(
         params.get("cursor"),
         {"session_id": lambda v: v == session_id, "sequence_number": _is_turn_sequence},
     )
-
-    metadata, history = _repositories()
-    # B12: the history table is keyed by session_id only, so ownership is proven through the metadata table first
-    session = metadata.get(user_id, session_id)
-    if session is None:
-        raise not_found("The session was not found.")
 
     # Owner-scoped read: items stamped with another user_id are dropped as well (defence in depth)
     page = history.load_page(user_id, session_id, limit=limit, start_key=start_key)

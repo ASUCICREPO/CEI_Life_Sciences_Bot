@@ -16,6 +16,8 @@ from typing import Any, Callable
 
 DEFAULT_LIMIT = 20  # B78
 MAX_LIMIT = 100  # B78
+# The only text a caller sees for a server-side failure; the real cause goes to the function's CloudWatch log.
+GENERIC_INTERNAL_ERROR = "It's not you, it's us. Something went wrong"
 
 ERROR_CODES = frozenset(
     {
@@ -124,10 +126,10 @@ def error_response(
 # --- pagination -------------------------------------------------------------
 
 
-def parse_limit(params: dict[str, str] | None) -> int:
+def parse_limit(params: dict[str, str] | None, default: int = DEFAULT_LIMIT) -> int:
     raw = (params or {}).get("limit")
     if raw is None or raw == "":
-        return DEFAULT_LIMIT
+        return default
     try:
         limit = int(raw)
     except ValueError:
@@ -213,10 +215,9 @@ def api_handler(logger: logging.Logger) -> Callable[[Callable[..., dict[str, Any
             except ApiError as exc:
                 return error_response(exc.status, exc.code, exc.message, rid, exc.retriable, event)
             except Exception:
+                # full traceback (incl. chained causes) to CloudWatch; the caller gets the generic text only
                 logger.exception("unhandled error", extra={"request_id": rid})
-                return error_response(
-                    500, "internal_error", "An internal error occurred.", rid, False, event
-                )
+                return error_response(500, "internal_error", GENERIC_INTERNAL_ERROR, rid, False, event)
 
         return wrapper
 
