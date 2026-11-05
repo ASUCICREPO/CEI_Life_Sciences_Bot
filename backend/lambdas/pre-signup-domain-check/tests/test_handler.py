@@ -1,11 +1,15 @@
+import importlib.util
 import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import handler  # noqa: E402
+# ADR: load by file path under a unique name | Rationale: every Lambda dir has a handler.py, and a bare
+# `import handler` returns whichever one another test file cached first (pytest shares sys.modules)
+_spec = importlib.util.spec_from_file_location("pre_signup_handler", Path(__file__).resolve().parent.parent / "handler.py")
+handler = importlib.util.module_from_spec(_spec)
+sys.modules["pre_signup_handler"] = handler
+_spec.loader.exec_module(handler)
 
 
 def _event(email=None):

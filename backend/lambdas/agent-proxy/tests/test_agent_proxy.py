@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import socket
+import importlib.util
 import sys
 import urllib.error
 from email.message import Message
@@ -9,9 +10,12 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import handler  # noqa: E402
+# ADR: load by file path under a unique name | Rationale: every Lambda dir has a handler.py, and a bare
+# `import handler` returns whichever one another test file cached first (pytest shares sys.modules)
+_spec = importlib.util.spec_from_file_location("agent_proxy_handler", Path(__file__).resolve().parent.parent / "handler.py")
+handler = importlib.util.module_from_spec(_spec)
+sys.modules["agent_proxy_handler"] = handler
+_spec.loader.exec_module(handler)
 
 TARGET = "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/arn%3Aaws%3Abedrock-agentcore%3Aus-east-1%3A123%3Aruntime%2Fr/invocations?qualifier=DEFAULT"
 SESSION = "0f8b6c1e-2a4d-4e5f-9a7b-1c2d3e4f5a6b"
