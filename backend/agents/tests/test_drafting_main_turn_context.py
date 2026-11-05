@@ -11,7 +11,7 @@ from drafting.state import DocumentType
 
 
 class _Context:
-    session_id = "drafting-runtime-session"
+    session_id = "0b0c4f7e-2222-4a22-8a22-000000000001"  # runtime session ids are dedicated UUIDs
     request_headers = {"Authorization": "Bearer test-token:test-user"}
 
 

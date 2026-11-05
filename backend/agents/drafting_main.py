@@ -13,7 +13,7 @@ from shared.presenters import build_drafting_surface
 from shared.response_text import final_ai_text
 from shared.runtime.history import begin_turn, end_turn
 from shared.runtime.app_factory import create_app
-from shared.runtime.identity import resolve_user_id
+from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
 
 app = create_app()  # CORS for direct browser calls when CEI_ALLOWED_ORIGINS is set
 log = app.logger
@@ -70,7 +70,8 @@ def _format_trace(trace_entries: list) -> str:
 
 
 @app.entrypoint
-async def invoke(payload, context):  # noqa: ANN001
+@guarded_entrypoint  # UUID session id + verified caller + ownership, before any session work
+async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     prompt = payload.get("prompt", "")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
@@ -83,9 +84,9 @@ async def invoke(payload, context):  # noqa: ANN001
             f"document_type must be one of: {', '.join(dt.value for dt in DocumentType)}"
         )
 
-    session_id: str = getattr(context, "session_id", "default")
+    session_id = session.session_id
+    user_id = session.user_id
     mode: str = payload.get("mode", "science")
-    user_id = resolve_user_id(payload, context)  # verified Cognito access-token sub; payload user_id ignored
 
     if mode not in ("science", "business"):
         mode = "science"

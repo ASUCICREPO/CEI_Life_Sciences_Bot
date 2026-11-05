@@ -242,7 +242,9 @@ def research_subagent(state: DraftingState) -> dict[str, Any]:
     from research.graph import compile_graph as compile_research_graph
 
     questions = state.get("research_questions", [])
-    session_id = state.get("session_id", "default")
+    session_id = state.get("session_id")
+    if not session_id:  # no default session id: sub-research threads derive from the run's own session UUID
+        raise ValueError("drafting state has no session_id")
     inputs = [
         {
             "messages": [HumanMessage(content=q)],
