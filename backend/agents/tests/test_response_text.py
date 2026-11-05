@@ -52,7 +52,7 @@ def test_final_ai_text_skips_tool_call_payload_after_final_answer() -> None:
 
 
 class _Context:
-    session_id = "test-session"
+    session_id = "0b0c4f7e-3333-4a33-8a33-000000000001"  # runtime session ids are dedicated UUIDs
     request_headers = {"Authorization": "Bearer test-token:test-user"}
 
 
