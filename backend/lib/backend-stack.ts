@@ -476,6 +476,8 @@ export class BackendStack extends cdk.Stack {
       new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }),
     );
     chatHistoryTable.grant(sessionHistory.role, 'dynamodb:Query');
+    // F6 B59: GET .../turns/{messageId}/trace reads the trace head (GetItem) and its chunks (BatchGetItem)
+    chatHistoryTable.grant(sessionHistory.role, 'dynamodb:GetItem', 'dynamodb:BatchGetItem');
 
     // ---------------------------------------------------------------
     // AgentCore runtimes (plan 3b4d4f64 decision 9): Cognito JWT inbound authorizer + Authorization header
@@ -585,6 +587,11 @@ export class BackendStack extends cdk.Stack {
     sessionResource.addMethod('PATCH', metadataIntegration, methodOptions);
     const historyResource = sessionResource.addResource('history', { defaultCorsPreflightOptions: corsOptions });
     historyResource.addMethod('GET', historyIntegration, methodOptions);
+    // F6 B59: lazy per-turn trace, fetched only when the user opens the thinking block
+    const turnsResource = sessionResource.addResource('turns', { defaultCorsPreflightOptions: corsOptions });
+    const turnResource = turnsResource.addResource('{messageId}', { defaultCorsPreflightOptions: corsOptions });
+    const traceResource = turnResource.addResource('trace', { defaultCorsPreflightOptions: corsOptions });
+    traceResource.addMethod('GET', historyIntegration, methodOptions);
 
     // Gateway-generated errors (no Lambda ran) use the same envelope as the Lambdas. The static CORS origin is the
     // site; a localhost dev origin therefore sees these particular errors as CORS failures.
