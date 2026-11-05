@@ -63,7 +63,8 @@ class ChatHistoryRecord(BaseModel):
 
 
 TURN_RECORD_TYPE = "turn"
-# Lowest sort key a turn may use; negative sort keys are reserved for checkpoint items.
+# Lowest sort key a turn may use; negative sort keys are reserved for checkpoint items ([-1000, -1],
+# shared/persistence/checkpoints.py) and per-turn trace items (<= -1001, shared/persistence/traces.py).
 MIN_TURN_SEQUENCE = 0
 
 # DynamoDB's hard item limit is 400 KB; leave headroom for attribute-name overhead and encoding drift.

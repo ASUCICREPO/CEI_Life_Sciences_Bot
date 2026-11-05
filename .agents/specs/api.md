@@ -146,6 +146,19 @@ Called by a running agent (real-time or async) before its 1 h tool token expires
 
 `GET .../turns/{messageId}/trace` loads the trace only when the user expands that turn's thinking block (B59, B7). Returns the ordered trace-event log for that turn (steps, tool calls with inputs/outputs, sources, grounding decisions, reasoning text labeled `"summarized"` where applicable) — never model IDs, guardrail/system prompts, prompt versions, or secrets (B7).
 
+Implemented (F6): same ownership order as `/history` (`verify_session_owner` → metadata row → read). `messageId` must match `^[A-Za-z0-9_-]{1,128}$` (else `400 invalid_request`). Missing, foreign, or torn traces are `404 not_found`. Success is `200` with `Cache-Control: private, max-age=300`:
+
+```json
+{
+  "message_id": "msg-1",
+  "events": [
+    {"seq": 0, "type": "trace_event", "step_type": "reasoning", "reasoning_text": "[SEARCH] 12 results", "reasoning_label": "summarized"}
+  ]
+}
+```
+
+Each event is the streaming-protocol.md `trace_event`, allow-listed to `seq, type, ts, step_type, tool_name, tool_input, tool_output_summary, sources, reasoning_text, reasoning_label` and deny-scanned (`backend/agents/shared/streaming/trace_redaction.py`). Storage: `backend/agents/shared/persistence/traces.py` (head + ≤350 KB chunks below the checkpoint sort-key range; gzip above 400 KB).
+
 ### HITL actions
 
 | Method | Path | Mode | Phase |

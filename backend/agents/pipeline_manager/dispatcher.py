@@ -17,6 +17,7 @@ from pipeline_manager.state import PipelineStep
 from shared.response_text import final_ai_text
 from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
+from shared.streaming.trace_redaction import redacts_trace_output
 from shared.tools.base import DataSourceResult
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ def _build_prompt(step: PipelineStep, dependency_outputs: dict[str, str]) -> str
     return "\n\n".join(parts)
 
 
+@redacts_trace_output  # B7: step traces are redacted at the source
 def _prefixed_trace(step_id: str, entries: Any) -> list[TraceEntry]:
     prefixed: list[TraceEntry] = []
     for entry in entries or []:

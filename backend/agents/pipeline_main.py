@@ -34,6 +34,7 @@ from shared.runtime import (
 from shared.runtime.history import begin_turn, end_turn, record_resume
 from shared.runtime.checkpointing import restore_for_resume
 from shared.runtime.app_factory import create_app
+from shared.streaming.trace_redaction import redacts_trace_input
 from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
 
 app = create_app()  # CORS for direct browser calls when CEI_ALLOWED_ORIGINS is set
@@ -74,6 +75,7 @@ def _touch_thread(thread_id: str) -> None:
     _thread_ids[thread_id] = True
 
 
+@redacts_trace_input  # B7: model ids / guardrails / prompts / secrets never reach trace_text
 def _format_trace(trace_entries: List[Any]) -> str:
     if not trace_entries:
         return ""
@@ -294,7 +296,10 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     if surface is None:
         text = "The plan could not be built."
         envelope = completed_envelope(text, None, trace_text=_format_trace(result.get("trace", [])))
-        await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope, prompt=prompt)
+        await end_turn(
+            saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope, prompt=prompt,
+            trace=result.get("trace"),
+        )
         if _replay.mode.value == "record":
             _replay.record_run(prompt, envelope)
         return envelope
@@ -303,7 +308,10 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     plan_obj = result.get("plan")
     text = f"## Proposed plan\n\n{plan_obj.summary}" if plan_obj else "A plan is ready for approval."
     envelope = awaiting_envelope(surface, text)
-    await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope, prompt=prompt)
+    await end_turn(
+        saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope, prompt=prompt,
+        trace=result.get("trace"),
+    )
     if _replay.mode.value == "record":
         _replay.record_run(prompt, envelope)
     return envelope

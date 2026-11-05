@@ -367,3 +367,95 @@ def test_malformed_input_is_invalid_request():
 def test_missing_claims_is_unauthorized():
     status, body = call(claims=False)
     assert status == 401 and body["error"]["code"] == "unauthorized"
+
+
+# ---- GET /sessions/{sessionId}/turns/{messageId}/trace (F6, B59) --------------------------------------------------
+
+TRACE_EVENTS = [
+    {"seq": 0, "type": "trace_event", "step_type": "tool_call", "tool_name": "pubmed___search",
+     "tool_output_summary": "12 results retrieved"},
+    {"seq": 1, "type": "trace_event", "step_type": "reasoning", "reasoning_text": "done",
+     "reasoning_label": "summarized"},
+]
+
+
+def _seed_trace(owner="user-a", message_id="m3", turn_seq=3, events=TRACE_EVENTS):
+    from shared.persistence.traces import TraceRepository
+
+    table = boto3.resource("dynamodb", region_name="us-east-1").Table("ChatHistoryStore")
+    assert TraceRepository(table=table, redactor=dict).save(owner, S1, turn_seq, message_id, events)
+
+
+def call_trace(sid=S1, message_id="m3", *, sub="user-a"):
+    handler._traces = None
+    event = {
+        "httpMethod": "GET",
+        "resource": "/sessions/{sessionId}/turns/{messageId}/trace",
+        "pathParameters": {"sessionId": sid, "messageId": message_id},
+        "queryStringParameters": None,
+        "requestContext": {"requestId": "req-1", "authorizer": {"claims": {"sub": sub}}},
+    }
+    response = handler.handler(event, None)
+    return response, json.loads(response["body"])
+
+
+def test_trace_route_returns_events_with_private_cache():
+    _seed_trace()
+    response, body = call_trace()
+    assert response["statusCode"] == 200
+    assert body == {"message_id": "m3", "events": TRACE_EVENTS}
+    assert response["headers"]["Cache-Control"] == "private, max-age=300"
+
+
+def test_trace_route_missing_trace_or_unknown_message_is_404():
+    assert call_trace(message_id="m3")[0]["statusCode"] == 404
+    assert call_trace(message_id="nope")[0]["statusCode"] == 404
+
+
+def test_trace_route_foreign_trace_head_is_404():
+    _seed_trace(owner="user-b")
+    response, body = call_trace()
+    assert response["statusCode"] == 404 and body["error"]["code"] == "not_found"
+
+
+def test_trace_route_other_users_session_is_404():
+    _seed_trace()
+    assert call_trace(sub="user-b")[0]["statusCode"] == 404
+
+
+@pytest.mark.parametrize("message_id", ["../x", "a b", "x" * 129, ""])
+def test_trace_route_invalid_message_id_is_400_with_no_store_calls(tracked, message_id):
+    response, body = call_trace(message_id=message_id)
+    assert response["statusCode"] == 400 and body["error"]["code"] == "invalid_request"
+    assert tracked == []
+
+
+def test_trace_route_checks_ownership_before_metadata_and_trace(tracked, monkeypatch):
+    from shared.persistence.traces import TraceRepository
+
+    real_load = TraceRepository.load
+
+    def load(self, *args, **kwargs):
+        tracked.append("traces.load")
+        return real_load(self, *args, **kwargs)
+
+    monkeypatch.setattr(TraceRepository, "load", load)
+    _seed_trace()
+    assert call_trace()[0]["statusCode"] == 200
+    assert tracked == ["verify_session_owner", "metadata.get", "traces.load"]
+
+
+def test_history_never_includes_trace_items():
+    _seed_trace()
+    _, body = call()
+    assert [i["sequence_number"] for i in body["items"]] == [1, 2, 3, 4, 5]
+    assert all("events" not in i for i in body["items"])
+
+
+def test_unknown_route_is_404():
+    event = {
+        "httpMethod": "POST", "resource": "/sessions/{sessionId}/turns/{messageId}/trace",
+        "pathParameters": {"sessionId": S1, "messageId": "m3"},
+        "requestContext": {"requestId": "req-1", "authorizer": {"claims": {"sub": "user-a"}}},
+    }
+    assert handler.handler(event, None)["statusCode"] == 404

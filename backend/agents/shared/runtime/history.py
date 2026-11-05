@@ -11,8 +11,10 @@ Cold-thread restore order (plan 3b4d4f64 decision 10): the full LangGraph checkp
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import uuid
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
@@ -27,6 +29,7 @@ if TYPE_CHECKING:
     from langchain_core.messages import BaseMessage
     from langgraph.checkpoint.base import BaseCheckpointSaver
 
+    from shared.persistence.traces import TraceRepository
     from shared.schemas.cei_ui import ActionRequest
 
 log = logging.getLogger(__name__)
@@ -118,9 +121,12 @@ async def end_turn(
     retrieved_results: Sequence[object] | None = None,
     recorder: ConversationRecorder | None = None,
     saver: BaseCheckpointSaver | None = None,
+    trace: Sequence[object] | None = None,
 ) -> None:
     """Record the answer from a runtime response envelope (`text` + optional `ui`); with a `saver`, snapshot the
-    thread's checkpoint in the background under the AI turn's sequence. Never raises."""
+    thread's checkpoint in the background under the AI turn's sequence. With `trace` (the run's TraceEntry list),
+    persist its REDACTED events under the AI turn (F6, B7/B9) — best-effort. Never raises."""
+    message_id = uuid.uuid4().hex
     try:
         text = envelope.get("text") or ""
         ui = envelope.get("ui")
@@ -131,12 +137,43 @@ async def end_turn(
             ui_surface=dict(ui) if isinstance(ui, Mapping) else None,
             citations=citations_from(retrieved_results),
             first_prompt=prompt,
+            message_id=message_id,
         )
     except Exception:  # noqa: BLE001
         log.exception("chat history: could not record answer session=%s", session_id)
         return
     if saver is not None and isinstance(sequence, int):
         checkpointing.schedule_checkpoint_save(user_id=user_id, session_id=session_id, saver=saver, version=sequence)
+    if trace and isinstance(sequence, int):
+        await save_trace(user_id=user_id, session_id=session_id, turn_seq=sequence, message_id=message_id, trace=trace)
+
+
+@lru_cache(maxsize=1)
+def get_trace_repository() -> TraceRepository:
+    from shared.persistence.traces import TraceRepository
+
+    return TraceRepository()
+
+
+async def save_trace(
+    *,
+    user_id: str,
+    session_id: str,
+    turn_seq: int,
+    message_id: str,
+    trace: Sequence[object],
+    repository: TraceRepository | None = None,
+) -> bool:
+    """Persist the redacted trace of one AI turn. Logs and returns False on any failure; never fails the turn."""
+    from shared.streaming.trace_redaction import trace_events_from_entries
+
+    try:
+        events = trace_events_from_entries(trace)
+        repo = repository or get_trace_repository()
+        return await asyncio.to_thread(repo.save, user_id, session_id, turn_seq, message_id, events)
+    except Exception:  # noqa: BLE001
+        log.exception("chat history: could not record trace session=%s turn=%s", session_id, turn_seq)
+        return False
 
 
 def describe_action(action: ActionRequest) -> str:

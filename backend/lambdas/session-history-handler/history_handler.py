@@ -1,7 +1,13 @@
-"""Session History Handler: GET /sessions/{sessionId}/history (turns only; api.md, F3)."""
+"""Session History Handler (api.md, F3/F6).
+
+  GET /sessions/{sessionId}/history                     turns only
+  GET /sessions/{sessionId}/turns/{messageId}/trace     one AI turn's redacted reasoning/tool trace (B59, lazy)
+"""
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
 from typing import Any
 
 from http_errors import (
@@ -19,13 +25,20 @@ from http_errors import (
     user_id_from_claims,
 )
 from shared.persistence.chat_history import ChatHistoryRepository
-from shared.persistence.chat_metadata import ChatMetadataRepository, SessionNotFoundError
+from shared.persistence.chat_metadata import ChatMetadataRecord, ChatMetadataRepository, SessionNotFoundError
 from shared.persistence.ownership import OwnershipCheckError, is_session_uuid, verify_session_owner
+from shared.persistence.traces import TraceRepository
 
 logger = get_logger(__name__)
 
+HISTORY_ROUTE = ("GET", "/sessions/{sessionId}/history")
+TRACE_ROUTE = ("GET", "/sessions/{sessionId}/turns/{messageId}/trace")
+TRACE_CACHE_CONTROL = "private, max-age=300"
+_MESSAGE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
 _metadata: ChatMetadataRepository | None = None
 _history: ChatHistoryRepository | None = None
+_traces: TraceRepository | None = None
 
 
 def _repositories() -> tuple[ChatMetadataRepository, ChatHistoryRepository]:
@@ -37,27 +50,29 @@ def _repositories() -> tuple[ChatMetadataRepository, ChatHistoryRepository]:
     return _metadata, _history
 
 
+def _trace_repository() -> TraceRepository:
+    global _traces
+    if _traces is None:
+        _traces = TraceRepository()
+    return _traces
+
+
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _is_turn_sequence(value: Any) -> bool:
-    # turns are >= 0; negative sort keys are reserved for checkpoint items and are never valid page cursors
+    # turns are >= 0; negative sort keys are reserved for checkpoint/trace items and are never valid page cursors
     return _is_int(value) and value >= 0
 
 
-@api_handler(logger)
-def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    user_id = user_id_from_claims(event)
-    if (event.get("httpMethod"), event.get("resource")) != ("GET", "/sessions/{sessionId}/history"):
-        raise ApiError(404, "not_found", "The route was not found.")
-
+def _authorized_session(event: dict[str, Any], context: Any, user_id: str) -> tuple[str, ChatMetadataRecord]:
+    """Validate sessionId, then prove ownership before anything else reads the session (fail closed)."""
     session_id = (event.get("pathParameters") or {}).get("sessionId")
     if not is_session_uuid(session_id):
         raise invalid_request("The sessionId path parameter is not valid.")
 
     metadata, history = _repositories()
-    # Ownership first, before anything else reads the session; fail closed if the owner cannot be read.
     # B12: the history table is keyed by session_id only, so the stamped owner is checked, then the metadata row
     # (keyed by the caller) must exist too.
     try:
@@ -73,6 +88,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     session = metadata.get(user_id, session_id)
     if session is None:
         raise not_found("The session was not found.")
+    return session_id, session
+
+
+def _get_history(event: dict[str, Any], context: Any, user_id: str) -> dict[str, Any]:
+    session_id, session = _authorized_session(event, context, user_id)
+    _, history = _repositories()
 
     params = event.get("queryStringParameters") or {}
     limit = parse_limit(params)
@@ -105,3 +126,33 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         },
     )
     return json_response(200, envelope, event)
+
+
+def _get_trace(event: dict[str, Any], context: Any, user_id: str) -> dict[str, Any]:
+    message_id = (event.get("pathParameters") or {}).get("messageId")
+    if not isinstance(message_id, str) or not _MESSAGE_ID.match(message_id):
+        raise invalid_request("The messageId path parameter is not valid.")
+    session_id, _ = _authorized_session(event, context, user_id)
+
+    events = _trace_repository().load(user_id, session_id, message_id)
+    if events is None:
+        raise not_found("The trace was not found.")
+    response = json_response(200, {"message_id": message_id, "events": events}, event)
+    response["headers"]["Cache-Control"] = TRACE_CACHE_CONTROL
+    return response
+
+
+# Strategy registry: (method, resource) -> route function
+ROUTES: dict[tuple[str, str], Callable[[dict[str, Any], Any, str], dict[str, Any]]] = {
+    HISTORY_ROUTE: _get_history,
+    TRACE_ROUTE: _get_trace,
+}
+
+
+@api_handler(logger)
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    user_id = user_id_from_claims(event)
+    route = ROUTES.get((event.get("httpMethod"), event.get("resource")))
+    if route is None:
+        raise ApiError(404, "not_found", "The route was not found.")
+    return route(event, context, user_id)

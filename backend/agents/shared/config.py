@@ -24,6 +24,9 @@ class AgentConfig(BaseSettings):
     # Short-term-memory checkpoints in ChatHistoryStore (shared/persistence/checkpoints.py)
     checkpoint_chunk_bytes: int = 300_000
     checkpoint_max_chunks: int = 32
+    # Per-turn reasoning/tool traces in ChatHistoryStore (shared/persistence/traces.py, F6 B9/B78)
+    trace_gzip_threshold_bytes: int = 400_000
+    trace_chunk_bytes: int = 350_000
     chat_history_table: str = "ChatHistoryStore"
     chat_metadata_table: str = "ChatMetadataStore"
     job_id_table: str = "JobIdStore"
