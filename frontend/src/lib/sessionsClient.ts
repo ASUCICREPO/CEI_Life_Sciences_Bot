@@ -1,4 +1,5 @@
 import { safeParseCEIUISurface, type CEIUISurface } from './cei-ui/schema';
+import { parseStreamEvent, type TraceEvent } from './stream/events';
 
 // Typed client for the Session REST API (session-metadata / session-history Lambdas behind API Gateway).
 // Every call carries the Cognito access token; the backend derives the user from the token's `sub` only.
@@ -96,6 +97,12 @@ export interface LoadHistoryOptions {
   cursor?: string | null;
 }
 
+/** GET /sessions/{sessionId}/turns/{messageId}/trace (B59): one AI turn's redacted trace log. */
+export interface TurnTrace {
+  message_id: string;
+  events: TraceEvent[];
+}
+
 export interface SessionsClient {
   listSessions(options?: ListSessionsOptions): Promise<Page<SessionSummary>>;
   getSession(sessionId: string): Promise<SessionSummary>;
@@ -103,6 +110,8 @@ export interface SessionsClient {
   updateSession(sessionId: string, patch: { title?: string; mode?: SessionMode }): Promise<SessionSummary>;
   /** Newest page first; items within a page are chronological. Pass `next_cursor` to load older messages. */
   loadHistory(sessionId: string, options?: LoadHistoryOptions): Promise<HistoryPage>;
+  /** Lazy: called only when the user expands a turn's thinking block. Invalid events are skipped. */
+  loadTurnTrace(sessionId: string, messageId: string): Promise<TurnTrace>;
 }
 
 export interface SessionsClientOptions {
@@ -295,6 +304,13 @@ export function createSessionsClient(getToken: TokenProvider, options: SessionsC
     async loadHistory(sessionId, { limit, cursor } = {}) {
       const raw = await request('GET', `${sessionPath(sessionId)}/history${query({ limit, cursor })}`);
       return { ...toPage(raw, toHistoryMessage), session: toSessionRef(asRecord(raw)?.session, sessionId) };
+    },
+    async loadTurnTrace(sessionId, messageId) {
+      const raw = asRecord(await request('GET', `${sessionPath(sessionId)}/turns/${encodeURIComponent(messageId)}/trace`));
+      const events = (Array.isArray(raw?.events) ? raw.events : [])
+        .map(parseStreamEvent)
+        .filter((event): event is TraceEvent => event?.type === 'trace_event');
+      return { message_id: typeof raw?.message_id === 'string' ? raw.message_id : messageId, events };
     },
   };
 }
