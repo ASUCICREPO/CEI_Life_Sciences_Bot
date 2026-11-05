@@ -31,6 +31,7 @@ from shared.runtime import (
 from shared.runtime.history import begin_turn, end_turn, record_resume
 from shared.runtime.checkpointing import restore_for_resume
 from shared.runtime.app_factory import create_app
+from shared.streaming.trace_redaction import redacts_trace_input
 from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
 
 app = create_app()  # CORS for direct browser calls when CEI_ALLOWED_ORIGINS is set
@@ -74,6 +75,7 @@ def _touch_thread(thread_id: str) -> None:
     _thread_ids[thread_id] = True
 
 
+@redacts_trace_input  # B7: model ids / guardrails / prompts / secrets never reach trace_text
 def _format_trace(trace_entries: List[Any]) -> str:
     if not trace_entries:
         return ""
@@ -213,6 +215,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
             session_id=session_id,
             envelope=envelope,
             retrieved_results=result.get("retrieved_results"),
+            trace=result.get("trace"),
         )
         if _replay.mode.value == "record" and scenario:
             _replay.record_resume(scenario, envelope)
@@ -261,6 +264,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         envelope=envelope,
         prompt=prompt,
         retrieved_results=result.get("retrieved_results"),
+        trace=result.get("trace"),
     )
     if _replay.mode.value == "record":
         _replay.record_run(scenario, envelope)

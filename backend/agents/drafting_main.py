@@ -13,6 +13,7 @@ from shared.presenters import build_drafting_surface
 from shared.response_text import final_ai_text
 from shared.runtime.history import begin_turn, end_turn
 from shared.runtime.app_factory import create_app
+from shared.streaming.trace_redaction import redacts_trace_input
 from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
 
 app = create_app()  # CORS for direct browser calls when CEI_ALLOWED_ORIGINS is set
@@ -45,6 +46,7 @@ def _touch_thread(thread_id: str) -> None:
     _thread_ids[thread_id] = True
 
 
+@redacts_trace_input  # B7: model ids / guardrails / prompts / secrets never reach trace_text
 def _format_trace(trace_entries: list) -> str:
     if not trace_entries:
         return ""
@@ -183,7 +185,10 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         "exports": exports,
     }
     # stores `text` (not `result`): the trace is diagnostic output, not conversation content
-    await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=response, prompt=prompt)
+    await end_turn(
+        saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=response, prompt=prompt,
+        trace=result.get("trace"),
+    )
     return response
 
 

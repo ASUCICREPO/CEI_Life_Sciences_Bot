@@ -130,6 +130,7 @@ class ConversationRecorder:
         citations: list[dict[str, Any]] | None = None,
         thinking: str | None = None,
         first_prompt: str | None = None,
+        message_id: str | None = None,
     ) -> int | None:
         """Record the agent's answer; returns its sequence (None on failure). Never raises: the user still gets
         the answer if persistence fails."""
@@ -141,6 +142,7 @@ class ConversationRecorder:
                 MessageRole.AI,
                 self._ai_blocks(text, ui_surface, thinking),
                 citations or [],
+                message_id,
             )
         except Exception:  # noqa: BLE001 — logged, never surfaced to the user
             log.exception("chat history: failed to record AI turn session=%s", session_id)
@@ -241,6 +243,7 @@ class ConversationRecorder:
         role: MessageRole,
         blocks: list[ContentBlock],
         citations: list[dict[str, Any]],
+        message_id: str | None = None,
     ) -> int:
         """Allocate the next sequence number from the metadata counter and write one message item."""
         for _ in range(_SEQUENCE_RETRIES):
@@ -249,7 +252,7 @@ class ConversationRecorder:
             )
             record = ChatHistoryRecord(
                 session_id=session_id,
-                message_id=uuid.uuid4().hex,
+                message_id=message_id or uuid.uuid4().hex,
                 role=role,
                 user_id=user_id,
                 content_blocks=blocks,
