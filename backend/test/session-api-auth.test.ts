@@ -38,7 +38,20 @@ describe.each([
 ])('Session API auth (%s)', (_label, config) => {
   const template = build(config);
   const methods = Object.entries(template.findResources('AWS::ApiGateway::Method'));
-  const nonOptions = methods.filter(([, m]) => (m as any).Properties.HttpMethod !== 'OPTIONS');
+  // ADR: exempt only the F4/B67 machine route | Rationale: POST /internal/token-refresh is called by an agent runtime
+  // role with SigV4, not a signed-in user, so it is AWS_IAM by design; the test below pins it to that one route
+  const iamMethods = methods.filter(([, m]) => (m as any).Properties.AuthorizationType === 'AWS_IAM');
+  const nonOptions = methods.filter(
+    ([, m]) => (m as any).Properties.HttpMethod !== 'OPTIONS' && (m as any).Properties.AuthorizationType !== 'AWS_IAM',
+  );
+
+  test('the only AWS_IAM method is POST /internal/token-refresh (B67)', () => {
+    expect(iamMethods).toHaveLength(1);
+    const props = (iamMethods[0][1] as any).Properties;
+    expect(props.HttpMethod).toBe('POST');
+    const resource = template.findResources('AWS::ApiGateway::Resource')[props.ResourceId.Ref] as any;
+    expect(resource.Properties.PathPart).toBe('token-refresh');
+  });
   const options = methods.filter(([, m]) => (m as any).Properties.HttpMethod === 'OPTIONS');
   const authorizers = template.findResources('AWS::ApiGateway::Authorizer');
   const authorizerIds = Object.keys(authorizers);
