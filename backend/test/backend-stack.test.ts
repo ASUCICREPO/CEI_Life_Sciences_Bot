@@ -332,11 +332,16 @@ describe('BackendStack', () => {
       return { template, all, metadata: byPk('user_id'), history: byPk('session_id') };
     };
 
-    it('defines by_created and by_updated GSIs on ChatMetadataStore with projection ALL', () => {
+    it('defines the sort and title-search GSIs on ChatMetadataStore with projection ALL', () => {
       const { metadata } = tables();
       const gsis = metadata.Properties.GlobalSecondaryIndexes;
-      expect(gsis).toHaveLength(2);
-      for (const [name, sk] of [['by_created', 'created_at'], ['by_updated', 'updated_at']]) {
+      expect(gsis).toHaveLength(4);
+      for (const [name, sk] of [
+        ['by_created', 'created_at'],
+        ['by_updated', 'updated_at'],
+        ['by_activity', 'last_activity_at'],
+        ['by_title', 'title_search'],
+      ]) {
         const gsi = gsis.find((g: any) => g.IndexName === name);
         expect(gsi.KeySchema).toEqual([
           { AttributeName: 'user_id', KeyType: 'HASH' },
@@ -371,9 +376,68 @@ describe('BackendStack', () => {
     it('grants the metadata GSIs by exact name, never index/*', () => {
       const { template } = tables();
       const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
-      expect(policies).toContain('/index/by_created');
-      expect(policies).toContain('/index/by_updated');
+      for (const name of ['by_created', 'by_updated', 'by_activity', 'by_title']) {
+        expect(policies).toContain(`/index/${name}`);
+      }
       expect(policies).not.toContain('/index/*');
+    });
+
+    it('keeps the original metadata table logical id so the deployed table is never replaced', () => {
+      const { template } = tables();
+      const ids = Object.keys(template.findResources('AWS::DynamoDB::Table'));
+      const metadataIds = ids.filter((id) => id.includes('ChatMetadataStore'));
+      expect(metadataIds).toHaveLength(1);
+      expect(metadataIds[0]).not.toContain('ChatMetadataStoreV2');
+    });
+
+    // Every DynamoDB statement attached to roles whose logical id matches `rolePattern`, flattened per action
+    const dynamoGrants = (rolePattern: RegExp) => {
+      const { template } = tables();
+      const grants: { action: string; resource: string }[] = [];
+      for (const policy of Object.values(template.findResources('AWS::IAM::Policy'))) {
+        const roles: string[] = (policy.Properties.Roles ?? []).map((r: any) => r.Ref ?? '');
+        if (!roles.some((r) => rolePattern.test(r))) continue;
+        for (const st of policy.Properties.PolicyDocument.Statement) {
+          const actions: string[] = [st.Action].flat();
+          const resources: any[] = [st.Resource].flat();
+          for (const action of actions.filter((a) => a.startsWith('dynamodb:'))) {
+            for (const res of resources) grants.push({ action, resource: JSON.stringify(res) });
+          }
+        }
+      }
+      return grants;
+    };
+    const onMetadataTable = (r: string) => r.includes('ChatMetadataStore') && !r.includes('/index/');
+    const onMetadataIndex = (r: string) => r.includes('ChatMetadataStore') && r.includes('/index/');
+    const onHistoryTable = (r: string) => r.includes('ChatHistoryStore');
+
+    it('grants the AgentRuntimes roles UpdateItem on metadata, Query on exact index ARNs, and no Scan', () => {
+      const grants = dynamoGrants(/^AgentRuntimes/);
+      expect(grants.length).toBeGreaterThan(0);
+      expect(grants.some((g) => g.action === 'dynamodb:UpdateItem' && onMetadataTable(g.resource))).toBe(true);
+      const indexGrants = grants.filter((g) => onMetadataIndex(g.resource));
+      expect(indexGrants.every((g) => g.action === 'dynamodb:Query')).toBe(true);
+      for (const name of ['by_created', 'by_updated', 'by_activity', 'by_title']) {
+        expect(indexGrants.some((g) => g.resource.includes(`/index/${name}`))).toBe(true);
+      }
+      expect(grants.some((g) => g.resource.includes('/index/*'))).toBe(false);
+      expect(grants.some((g) => g.action === 'dynamodb:Scan' || g.action === 'dynamodb:*')).toBe(false);
+    });
+
+    it('gives the metadata Lambda no DeleteItem or Scan, and history access only via Query', () => {
+      const grants = dynamoGrants(/^SessionMetadataHandlerRole/);
+      expect(grants.length).toBeGreaterThan(0);
+      for (const forbidden of ['dynamodb:DeleteItem', 'dynamodb:Scan', 'dynamodb:*']) {
+        expect(grants.some((g) => g.action === forbidden)).toBe(false);
+      }
+      expect(grants.filter((g) => onHistoryTable(g.resource)).map((g) => g.action)).toEqual(['dynamodb:Query']);
+    });
+
+    it('gives the history Lambda only GetItem on metadata and Query on history', () => {
+      const grants = dynamoGrants(/^SessionHistoryHandlerRole/);
+      const metadataActions = grants.filter((g) => g.resource.includes('ChatMetadataStore')).map((g) => g.action);
+      expect(metadataActions).toEqual(['dynamodb:GetItem']);
+      expect(grants.filter((g) => onHistoryTable(g.resource)).map((g) => g.action)).toEqual(['dynamodb:Query']);
     });
   });
 });

@@ -177,16 +177,22 @@ describe('BackendStack REST API + session store', () => {
     }
   });
 
-  it('gives only ChatMetadataStore the by_created / by_updated GSIs (projection ALL)', () => {
+  it('gives only ChatMetadataStore the sort and title-search GSIs (projection ALL)', () => {
     const tables = Object.values(template.findResources('AWS::DynamoDB::Table')) as any[];
     const metadata = tables.find((t) => t.Properties.KeySchema[0].AttributeName === 'user_id');
     const history = tables.find((t) => t.Properties.KeySchema[0].AttributeName === 'session_id');
     expect(history.Properties.GlobalSecondaryIndexes).toBeUndefined();
     const gsis = metadata.Properties.GlobalSecondaryIndexes;
-    expect(gsis.map((g: any) => g.IndexName).sort()).toEqual(['by_created', 'by_updated']);
+    expect(gsis.map((g: any) => g.IndexName).sort()).toEqual(['by_activity', 'by_created', 'by_title', 'by_updated']);
+    const sortKeys: Record<string, string> = {
+      by_created: 'created_at',
+      by_updated: 'updated_at',
+      by_activity: 'last_activity_at',
+      by_title: 'title_search',
+    };
     for (const g of gsis) {
       expect(g.KeySchema[0]).toEqual({ AttributeName: 'user_id', KeyType: 'HASH' });
-      expect(g.KeySchema[1].AttributeName).toBe(g.IndexName === 'by_created' ? 'created_at' : 'updated_at');
+      expect(g.KeySchema[1].AttributeName).toBe(sortKeys[g.IndexName]);
       expect(g.Projection).toEqual({ ProjectionType: 'ALL' });
     }
   });
@@ -229,13 +235,19 @@ describe('BackendStack REST API + session store', () => {
       expect(resource).not.toContain('"*"');
       expect(resource).not.toContain('/index/*');
       if (resource.includes('/index/')) {
-        // only the metadata handler may Query, and only the two named GSIs
+        // only the metadata handler may Query, and only the named GSIs
         expect(statement.actions).toEqual(['dynamodb:Query']);
         expect(historyStatements).not.toContain(statement);
       }
       expect(statement.actions).not.toContain('dynamodb:DeleteItem');
       expect(statement.actions).not.toContain('dynamodb:Scan');
     }
+  });
+
+  it('lets the metadata handler read the history owner stamp (Query only) for its ownership check', () => {
+    const statements = policyActionsFor(template, 'SessionMetadataHandlerRole');
+    const onHistory = statements.filter((s) => JSON.stringify(s.resource).includes('ChatHistoryStore'));
+    expect(onHistory.map((s) => s.actions.join(','))).toEqual(['dynamodb:Query']);
   });
 
   it('exposes apiBaseUrl in config.json and as an output', () => {

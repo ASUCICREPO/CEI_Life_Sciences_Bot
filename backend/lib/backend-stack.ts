@@ -333,10 +333,13 @@ export class BackendStack extends cdk.Stack {
 
     // ---------------------------------------------------------------
     // Session stores (B12, B52, B58): DynamoDB, AWS-managed encryption, PITR, no TTL (kept forever)
-    // ChatMetadataStore carries two sort-key GSIs (by_created / by_updated) so the history list can be
-    // ordered by either timestamp; both stay partitioned by user_id so a query can never cross users
+    // ChatMetadataStore carries sort-key GSIs (by_created / by_updated / by_activity) so the history list can be
+    // ordered by any timestamp, plus by_title for title search; all stay partitioned by user_id so a query can
+    // never cross users
     // ---------------------------------------------------------------
 
+    // NOTE: DynamoDB allows only ONE new GSI per table update. Adding several GSIs to this existing table in one
+    // deploy fails the stack update — add one per deploy, or create them out-of-band and re-import the table.
     const chatMetadataTable = new dynamodb.Table(this, 'ChatMetadataStore', {
       partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
@@ -351,9 +354,7 @@ export class BackendStack extends cdk.Stack {
     // ADR: two GSIs keyed (user_id, created_at|updated_at), projection ALL | Rationale: the history list sorts
     // by either timestamp (user toggle) and ALL avoids a follow-up GetItem per row; timestamps are UTC ISO-8601
     // with a 'Z' suffix so lexicographic order == time order | Alternative: sorting in the Lambda rejected —
-    // breaks pagination. NOTE: DynamoDB creates at most one GSI per table update; if this table is already
-    // deployed without them, deploy by_created first and by_updated in a second deploy.
-    const CHAT_METADATA_INDEXES = ['by_created', 'by_updated'] as const;
+    // breaks pagination.
     chatMetadataTable.addGlobalSecondaryIndex({
       indexName: 'by_created',
       partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
@@ -366,6 +367,27 @@ export class BackendStack extends cdk.Stack {
       sortKey: { name: 'updated_at', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
+    // ADR: by_activity keyed (user_id, last_activity_at) | Rationale: the default history order is "last used by
+    // the user" — last_activity_at moves only when the user sends a message, so an old chat that gets a new message
+    // jumps above newer chats; updated_at also moves on renames / generated titles / AI answers | Alternative:
+    // reusing by_updated rejected (a rename would reorder the list).
+    chatMetadataTable.addGlobalSecondaryIndex({
+      indexName: 'by_activity',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'last_activity_at', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+    // ADR: by_title keyed (user_id, title_search) | Rationale: title_search is the case-folded chat title, kept in
+    // step with every title write; the search query reads only the caller's partition of this index (contains()
+    // filter for substring matches, title order, cursor = last returned row) | Alternative: OpenSearch rejected for
+    // the PoC (cost + another store) — revisit if users need relevance-ranked or message-body search.
+    chatMetadataTable.addGlobalSecondaryIndex({
+      indexName: 'by_title',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'title_search', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+    const CHAT_METADATA_INDEXES = ['by_created', 'by_updated', 'by_activity', 'by_title'];
     const chatMetadataIndexArns = CHAT_METADATA_INDEXES.map(
       (name) => `${chatMetadataTable.tableArn}/index/${name}`,
     );
@@ -447,6 +469,8 @@ export class BackendStack extends cdk.Stack {
     sessionMetadata.role.addToPrincipalPolicy(
       new iam.PolicyStatement({ actions: ['dynamodb:Query'], resources: chatMetadataIndexArns }),
     );
+    // GET/PATCH /sessions/{id} prove ownership against the history partition's stamped owner (owner_of) first
+    chatHistoryTable.grant(sessionMetadata.role, 'dynamodb:Query');
     // B12: history is keyed by session_id only, so the history handler proves ownership with a metadata GetItem first
     sessionHistory.role.addToPrincipalPolicy(
       new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }),
@@ -571,7 +595,7 @@ export class BackendStack extends cdk.Stack {
       ['AccessDenied', apigw.ResponseType.ACCESS_DENIED, '403', 'forbidden', 'Access is denied.', false],
       ['Throttled', apigw.ResponseType.THROTTLED, '429', 'rate_limited', 'Too many requests. Try again shortly.', true],
       ['Default4xx', apigw.ResponseType.DEFAULT_4XX, '', 'invalid_request', 'The request could not be processed.', false],
-      ['Default5xx', apigw.ResponseType.DEFAULT_5XX, '', 'internal_error', 'An internal error occurred.', false],
+      ['Default5xx', apigw.ResponseType.DEFAULT_5XX, '', 'internal_error', "It's not you, it's us. Something went wrong", false],
     ];
     for (const [name, type, statusCode, code, message, retriable] of gatewayResponses) {
       api.addGatewayResponse(`${name}Response`, {
