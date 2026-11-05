@@ -191,8 +191,11 @@ class OpenFDATool(DataSourceTool):
                         )
                     )
             except Exception as exc:
-                logger.error({"event": "openfda_fetch_error", "endpoint": path, "error": str(exc)})
-                errors.append(f"{kind}: {exc!s}")
+                # requests puts the full URL (query string, so the api_key) in HTTPError messages: never leak it
+                key = self._api_key_params().get("api_key")
+                error = str(exc).replace(key, "[REDACTED]") if key else str(exc)
+                logger.error({"event": "openfda_fetch_error", "endpoint": path, "error": error})
+                errors.append(f"{kind}: {error}")
 
         return DataSourceResult(
             source_type=self.source_type,
