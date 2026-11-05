@@ -9,6 +9,9 @@ class _NullRecorder:
     async def start_turn(self, **_: object) -> None:
         return None
 
+    async def assert_owner(self, **_: object) -> None:
+        return None
+
     async def finish_turn(self, **_: object) -> None:
         return None
 
