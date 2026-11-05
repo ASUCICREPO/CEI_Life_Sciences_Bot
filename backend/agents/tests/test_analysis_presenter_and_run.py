@@ -91,7 +91,7 @@ def test_run_analysis_skips_interrupt_and_returns_outcome(monkeypatch) -> None:
 
 
 class _Context:
-    session_id = "runtime-session"
+    session_id = "0b0c4f7e-1111-4a11-8a11-000000000001"  # runtime session ids are dedicated UUIDs
     request_headers = {"Authorization": "Bearer test-token:test-user"}
 
 
@@ -173,7 +173,7 @@ def test_analysis_main_resume_stale_without_pending(monkeypatch) -> None:
         "op": "resume",
         "action": {
             "request_id": "r1",
-            "session_id": "runtime-session-2",
+            "session_id": "0b0c4f7e-1111-4a11-8a11-000000000002",
             "surface_id": "analysis-scope",
             "revision": 1,
             "interaction_id": "analysis-scope-review",
@@ -184,7 +184,7 @@ def test_analysis_main_resume_stale_without_pending(monkeypatch) -> None:
     }
 
     class _Context2:
-        session_id = "runtime-session-2"
+        session_id = "0b0c4f7e-1111-4a11-8a11-000000000002"
         request_headers = {"Authorization": "Bearer test-token:test-user"}
 
     response = asyncio.run(analysis_main.invoke(payload, _Context2()))
@@ -210,17 +210,17 @@ def test_analysis_main_resume_completes_run(monkeypatch) -> None:
         surface_id="analysis-scope", revision=1, analysis_type="competitor",
         competitors=[], market=None, jurisdiction=None, focal_entity=None,
     )
-    analysis_main._pending.register("runtime-session-3", surface)
+    analysis_main._pending.register("0b0c4f7e-1111-4a11-8a11-000000000003", surface)
 
     class _Context3:
-        session_id = "runtime-session-3"
+        session_id = "0b0c4f7e-1111-4a11-8a11-000000000003"
         request_headers = {"Authorization": "Bearer test-token:test-user"}
 
     payload = {
         "op": "resume",
         "action": {
             "request_id": "r1",
-            "session_id": "runtime-session-3",
+            "session_id": "0b0c4f7e-1111-4a11-8a11-000000000003",
             "surface_id": "analysis-scope",
             "revision": 1,
             "interaction_id": "analysis-scope-review",

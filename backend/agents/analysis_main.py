@@ -31,7 +31,7 @@ from shared.runtime import (
 from shared.runtime.history import begin_turn, end_turn, record_resume
 from shared.runtime.checkpointing import restore_for_resume
 from shared.runtime.app_factory import create_app
-from shared.runtime.identity import resolve_user_id
+from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
 
 app = create_app()  # CORS for direct browser calls when CEI_ALLOWED_ORIGINS is set
 log = app.logger
@@ -162,10 +162,12 @@ def _completed_result(session_id: str, result: Dict[str, Any]) -> Dict[str, Any]
 
 
 @app.entrypoint
-async def invoke(payload, context):  # noqa: ANN001
+@guarded_entrypoint  # UUID session id + verified caller + ownership, before any op touches the session
+async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     from analysis.graph import compile_graph
 
-    session_id: str = getattr(context, "session_id", "default")
+    session_id = session.session_id
+    user_id = session.user_id
     op = parse_op(payload)
 
     if op is RuntimeOp.JOB_STATUS:
@@ -173,7 +175,6 @@ async def invoke(payload, context):  # noqa: ANN001
 
     graph = compile_graph(checkpointer=_checkpointer)
     config = {"configurable": {"thread_id": session_id}}
-    user_id = resolve_user_id(payload, context)  # verified Cognito access-token sub; payload user_id ignored
 
     if op is RuntimeOp.RESUME:
         action = parse_action(payload)
