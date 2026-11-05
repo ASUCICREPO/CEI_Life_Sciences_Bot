@@ -1,0 +1,253 @@
+[
+  {
+    "sourceId": "pubmed",
+    "tool": {
+      "name": "search",
+      "description": "Search PubMed biomedical article records for citations, abstracts, authors, publication years, and PMIDs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "sourceId": "clinicaltrials",
+    "tool": {
+      "name": "search",
+      "description": "Search ClinicalTrials.gov study records for NCT IDs, titles, recruitment status, summaries, and start years.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query."
+          },
+          "status": {
+            "type": "string",
+            "description": "Status."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "sourceId": "biorxiv",
+    "tool": {
+      "name": "search",
+      "description": "Search bioRxiv life-science preprints for titles, abstracts, authors, years, and DOIs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "sourceId": "medrxiv",
+    "tool": {
+      "name": "search",
+      "description": "Search medRxiv health-science preprints for titles, abstracts, authors, years, and DOIs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "sourceId": "chembl",
+    "tool": {
+      "name": "search",
+      "description": "Search ChEMBL molecule records for names, molecule types, synonyms, and maximum clinical phase.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query."
+          },
+          "target_type": {
+            "type": "string",
+            "description": "Target Type."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "sourceId": "opentargets",
+    "tool": {
+      "name": "search",
+      "description": "Search Open Targets records for target, disease, and drug names with descriptions and identifiers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Target."
+          },
+          "disease": {
+            "type": "string",
+            "description": "Disease."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "target"
+        ]
+      }
+    }
+  },
+  {
+    "sourceId": "cmscoverage",
+    "tool": {
+      "name": "search",
+      "description": "Search CMS National Coverage Determination records for policy titles, decision memos, and effective dates.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "sourceId": "icd10",
+    "tool": {
+      "name": "search",
+      "description": "Search ICD-10-CM diagnosis classification records for codes and condition names.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "sourceId": "npi",
+    "tool": {
+      "name": "search",
+      "description": "Search NPI Registry provider records for identifiers, names, credentials, taxonomy, and provider type.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "npi": {
+            "type": "string",
+            "description": "Npi."
+          },
+          "state": {
+            "type": "string",
+            "description": "State."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        }
+      }
+    }
+  },
+  {
+    "sourceId": "pubchem",
+    "tool": {
+      "name": "search",
+      "description": "Search PubChem compound records for identifiers, chemical names, formulas, weights, and structure identifiers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query."
+          },
+          "search_type": {
+            "type": "string",
+            "description": "Search Type, default name."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  }
+]

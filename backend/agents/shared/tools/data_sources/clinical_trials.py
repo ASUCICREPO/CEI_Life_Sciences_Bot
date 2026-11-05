@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote_plus
 
-import requests
 from pydantic import BaseModel, Field
 
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, DataSourceTool
+from shared.tools import retrying_http as http
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +31,13 @@ class ClinicalTrialsTool(DataSourceTool):
     def _build_payload(self, query: str, status: str = "", max_results: int = 10) -> dict[str, Any]:
         return {"query": query, "status": status, "max_results": max_results}
 
-    def _direct_invoke(self, query: str, status: str = "", max_results: int = 10, **_: Any) -> DataSourceResult:
+    def fetch(self, query: str, status: str = "", max_results: int = 10, **_: Any) -> DataSourceResult:
         retrieved_at = datetime.now(timezone.utc)
         try:
             params: dict[str, Any] = {"query.term": query, "pageSize": max_results}
             if status:
                 params["filter.overallStatus"] = status
-            resp = requests.get(_API, params=params, headers=_HEADERS, timeout=_TIMEOUT)
+            resp = http.get(_API, params=params, headers=_HEADERS, timeout=_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
 
@@ -86,5 +86,5 @@ class ClinicalTrialsTool(DataSourceTool):
                 query_metadata={"query": query, "total": len(results)},
             )
         except Exception as exc:
-            logger.error({"event": "clinical_trials_direct_invoke_error", "error": str(exc)})
+            logger.error({"event": "clinical_trials_fetch_error", "error": str(exc)})
             return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": str(exc)})

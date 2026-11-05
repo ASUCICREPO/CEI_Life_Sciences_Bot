@@ -6,11 +6,11 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote_plus
 
-import requests
 from pydantic import BaseModel, Field
 
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, DataSourceTool
+from shared.tools import retrying_http as http
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,8 @@ class PubMedTool(DataSourceTool):
     function_name = "cei-data-source-pubmed"
     source_type = SourceType.PUBMED
     description = "Search PubMed biomedical article records for citations, abstracts, authors, publication years, and PMIDs."
+    # B20: an NCBI API key raises the E-utilities limit from 3 to 10 requests/second
+    supports_api_key = True
 
     class InputSchema(BaseModel):
         query: str
@@ -32,12 +34,13 @@ class PubMedTool(DataSourceTool):
     def _build_payload(self, query: str, max_results: int = 10) -> dict[str, Any]:
         return {"query": query, "max_results": max_results}
 
-    def _direct_invoke(self, query: str, max_results: int = 10, **_: Any) -> DataSourceResult:
+    def fetch(self, query: str, max_results: int = 10, api_key: str | None = None, **_: Any) -> DataSourceResult:
         retrieved_at = datetime.now(timezone.utc)
+        key_param = {"api_key": api_key} if api_key else {}
         try:
-            search_resp = requests.get(
+            search_resp = http.get(
                 _ESEARCH,
-                params={"db": "pubmed", "term": query, "retmax": max_results, "retmode": "json"},
+                params={"db": "pubmed", "term": query, "retmax": max_results, "retmode": "json", **key_param},
                 headers=_HEADERS,
                 timeout=_TIMEOUT,
             )
@@ -46,9 +49,9 @@ class PubMedTool(DataSourceTool):
             if not ids:
                 return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"query": query, "total": 0})
 
-            fetch_resp = requests.get(
+            fetch_resp = http.get(
                 _EFETCH,
-                params={"db": "pubmed", "id": ",".join(ids), "rettype": "abstract", "retmode": "xml"},
+                params={"db": "pubmed", "id": ",".join(ids), "rettype": "abstract", "retmode": "xml", **key_param},
                 headers=_HEADERS,
                 timeout=_TIMEOUT,
             )
@@ -97,5 +100,7 @@ class PubMedTool(DataSourceTool):
                 query_metadata={"query": query, "total": len(results)},
             )
         except Exception as exc:
-            logger.error({"event": "pubmed_direct_invoke_error", "error": str(exc)})
-            return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": str(exc)})
+            # requests puts the full URL (query string included) in HTTPError messages: never leak the key
+            error = str(exc).replace(api_key, "[REDACTED]") if api_key else str(exc)
+            logger.error({"event": "pubmed_fetch_error", "error": error})
+            return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": error})

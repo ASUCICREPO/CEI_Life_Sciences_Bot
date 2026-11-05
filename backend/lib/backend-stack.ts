@@ -14,9 +14,10 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
-import { DeployConfig, DEFAULT_LIMITS } from './config/deploy-config';
+import { DeployConfig, DEFAULT_LIMITS, DEFAULT_TOOL_POLICY_MODE } from './config/deploy-config';
 import { PythonDepsLayer } from './constructs/python-deps-layer';
 import { AgentRuntimes } from './constructs/agent-runtimes';
+import { ToolGateway } from './constructs/tool-gateway';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export interface BackendStackProps extends cdk.StackProps {
@@ -639,6 +640,20 @@ export class BackendStack extends cdk.Stack {
         },
       ],
     );
+
+    // ---------------------------------------------------------------
+    // F4: tool Gateway — 10 data-source targets, Router M2M scopes, Cedar (LOG_ONLY -> ENFORCE), token refresh
+    // ---------------------------------------------------------------
+
+    new ToolGateway(this, 'ToolGateway', {
+      userPool,
+      cognitoDomainUrl,
+      userPoolDomain,
+      api,
+      requestValidator,
+      pythonDepsLayer: pythonDeps.layer,
+      policyMode: this.config?.toolPolicyMode ?? DEFAULT_TOOL_POLICY_MODE,
+    });
 
     // ---------------------------------------------------------------
     // BucketDeployment — SPA assets, then config.json (no-cache) in a second

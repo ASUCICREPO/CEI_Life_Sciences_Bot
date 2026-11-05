@@ -72,6 +72,8 @@ Options:
   --max-background <n>          Max concurrent background runs/user (default: 1)
   --allow-localhost-callback     Add http://localhost:5173 as an extra Cognito
                                  SPA callback/logout URL (B90, local dev only)
+  --tool-policy-mode <mode>     Cedar policy mode on the tool Gateway (F4/B30):
+                                 LOG_ONLY (default) or ENFORCE
   --spike <id>                  Also deploy a throwaway spike stack (B92). Comma-
                                  separated. Known id: tool-scope (S2). Normal
                                  deploys leave this unset.
@@ -133,6 +135,7 @@ RPS_FLAG=""
 MAX_REALTIME_FLAG=""
 MAX_BACKGROUND_FLAG=""
 ALLOW_LOCALHOST_CALLBACK_FLAG=""
+TOOL_POLICY_MODE_FLAG=""
 # FIXME: remove after S2 validation (B92)
 SPIKE_FLAG=""
 SPIKE_POLICY_MODE_FLAG=""
@@ -155,6 +158,7 @@ while [ $# -gt 0 ]; do
     --max-realtime) MAX_REALTIME_FLAG="${2:-}"; shift 2 ;;
     --max-background) MAX_BACKGROUND_FLAG="${2:-}"; shift 2 ;;
     --allow-localhost-callback) ALLOW_LOCALHOST_CALLBACK_FLAG="true"; shift 1 ;;
+    --tool-policy-mode) TOOL_POLICY_MODE_FLAG="${2:-}"; shift 2 ;;
     # FIXME: remove after S2 validation (B92)
     --spike) SPIKE_FLAG="${2:-}"; shift 2 ;;
     --spike-policy-mode) SPIKE_POLICY_MODE_FLAG="${2:-}"; shift 2 ;;
@@ -278,6 +282,8 @@ else
   esac
 fi
 
+# ADR: LOG_ONLY default, also under --non-interactive | Rationale: F4/B30 — the tool Gateway starts LOG_ONLY and is only flipped to ENFORCE after a clean audit, so a deploy must never reach ENFORCE unless asked for
+prompt TOOL_POLICY_MODE "$TOOL_POLICY_MODE_FLAG" "Tool Gateway policy mode (LOG_ONLY or ENFORCE)" "LOG_ONLY" true
 # FIXME: remove after S2 validation (B92)
 # ADR: optional prompt, blank = normal deploy | Rationale: B92 — a spike stack must never deploy unless asked for, so the default is empty and --non-interactive keeps it empty
 prompt SPIKE "$SPIKE_FLAG" "Spike stacks to deploy (comma-separated, blank for none; known: tool-scope)" "" false
@@ -321,6 +327,7 @@ redact_url() {
 
 # FIXME: remove after S2 validation (B92)
 [[ -z "$SPIKE" || "$SPIKE" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || fail "--spike must be a comma-separated list of ids (for example tool-scope)."
+[[ "$TOOL_POLICY_MODE" == "LOG_ONLY" || "$TOOL_POLICY_MODE" == "ENFORCE" ]] || fail "--tool-policy-mode must be LOG_ONLY or ENFORCE."
 [[ -z "$SPIKE_POLICY_MODE" || "$SPIKE_POLICY_MODE" == "LOG_ONLY" || "$SPIKE_POLICY_MODE" == "ENFORCE" ]] || fail "--spike-policy-mode must be LOG_ONLY or ENFORCE."
 
 IFS=',' read -ra DOMAIN_ARR <<< "$EMAIL_DOMAINS"
@@ -373,6 +380,7 @@ Deployment configuration
   Max real-time runs/user: $MAX_REALTIME
   Max background runs:     $MAX_BACKGROUND
   Allow localhost callback: $ALLOW_LOCALHOST_CALLBACK
+  Tool policy mode:        $TOOL_POLICY_MODE
   Spike stacks:            ${SPIKE:-(none)}${SPIKE_POLICY_MODE:+ (policy mode: $SPIKE_POLICY_MODE)}
   GitHub PAT provided:     $( [ -n "$GITHUB_PAT" ] && echo yes || echo no )
   AWS account:             $ACCOUNT_ID
@@ -416,6 +424,7 @@ write_config() {
   CEI_REPO_URL="$REPO_URL" \
   CEI_BRANCH="$BRANCH" \
   CEI_ALLOW_LOCALHOST_CALLBACK="$ALLOW_LOCALHOST_CALLBACK" \
+  CEI_TOOL_POLICY_MODE="$TOOL_POLICY_MODE" \
   node -e '
     const fs = require("fs");
     const splitList = (v) => (v || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -433,6 +442,7 @@ write_config() {
       },
       webSearchEnabled: false,
       allowLocalhostCallback: process.env.CEI_ALLOW_LOCALHOST_CALLBACK === "true",
+      toolPolicyMode: process.env.CEI_TOOL_POLICY_MODE,
       repository: {
         url: process.env.CEI_REPO_URL,
         branch: process.env.CEI_BRANCH

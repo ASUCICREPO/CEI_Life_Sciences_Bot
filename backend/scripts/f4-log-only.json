@@ -1,0 +1,161 @@
+{
+  "mode": "LOG_ONLY",
+  "results": [
+    {
+      "section": "token",
+      "check": "all-scope token issued",
+      "status": "PASS",
+      "detail": "HTTP 200 "
+    },
+    {
+      "section": "token",
+      "check": "carries cei_user_sub and cei_session_id",
+      "status": "PASS",
+      "detail": "{'cei_user_sub': '00497f18-85e6-457c-a81f-880a17fe0810', 'cei_session_id': 'f4test-1793747229'}"
+    },
+    {
+      "section": "token",
+      "check": "scopes are exactly the requested set",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "token",
+      "check": "1 h lifetime",
+      "status": "PASS",
+      "detail": "3600"
+    },
+    {
+      "section": "token",
+      "check": "malformed metadata -> token refused",
+      "status": "PASS",
+      "detail": "HTTP 400"
+    },
+    {
+      "section": "token",
+      "check": "no metadata -> token issued without claims",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "section": "list",
+      "check": "initialize",
+      "status": "PASS",
+      "detail": "{'jsonrpc': '2.0', 'id': 1, 'result': {'protocolVersion': '2025-03-26', 'capabilities': {'tools': {'listChanged': False}, 'prompts': {'listChanged': False}, 'resources': {'listChanged': False}, 'exten"
+    },
+    {
+      "section": "list",
+      "check": "tools/list shows all ten tools",
+      "status": "PASS",
+      "detail": "['biorxiv___search', 'chembl___search', 'clinicaltrials___search', 'cmscoverage___search', 'icd10___search', 'medrxiv___search', 'npi___search', 'opentargets___search', 'pubchem___search', 'pubmed___search']"
+    },
+    {
+      "section": "call",
+      "check": "pubmed___search returns citations",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "call",
+      "check": "clinicaltrials___search returns citations",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "call",
+      "check": "biorxiv___search returns citations",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "call",
+      "check": "medrxiv___search returns citations",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "call",
+      "check": "chembl___search returns citations",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "call",
+      "check": "opentargets___search returns citations",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "call",
+      "check": "cmscoverage___search returns citations",
+      "status": "FAIL",
+      "detail": "ok: {'source_type': 'cms_coverage', 'results': [{'ncd_id': '', 'title': '', 'decision_memo': '', 'effective_date': ''}, {'ncd_id': '', 'title': '', 'decision_memo':"
+    },
+    {
+      "section": "call",
+      "check": "icd10___search returns citations",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "call",
+      "check": "npi___search returns citations",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "call",
+      "check": "pubchem___search returns citations",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "scope",
+      "check": "PubMed-only token calls pubmed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "section": "scope",
+      "check": "LOG_ONLY: PubMed-only token still reaches chembl",
+      "status": "PASS",
+      "detail": "ok {'source_type': 'chembl', 'results': [{'chembl_id': 'CHEMBL25', 'name': 'ASPIRIN', 'type': 'Small molecule', 'max_phase': '4.0', 'synonyms': ['8-hour bayer', 'A"
+    },
+    {
+      "section": "scope",
+      "check": "LOG_ONLY tools/list for PubMed-only token: ['biorxiv___search', 'chembl___search', 'clinicaltrials___search', 'cmscoverage___search', 'icd10___search', 'medrxiv___search', 'npi___search', 'opentargets___search', 'pubchem___search', 'pubmed___search']",
+      "status": "INFO",
+      "detail": ""
+    },
+    {
+      "section": "refresh",
+      "check": "non-allowlisted signed caller -> 403",
+      "status": "PASS",
+      "detail": "HTTP 403"
+    },
+    {
+      "section": "logs",
+      "check": "Gateway log group received events (64)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "logs",
+      "check": "events mentioning a policy decision: 13",
+      "status": "INFO",
+      "detail": ""
+    }
+  ],
+  "log_sample": [
+    "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"event_timestamp\":1793747231812,\"body\":{\"isError\":false,\"responseBody\":\"{jsonrpc=2.0, id=2, result={tools=[{inputSchema={type=object, properties={query={description=Query., type=string}, max_results={description=Max Results, 1 to 100, default 10., type=integer}}, required=[query]}, name=biorxiv___search, description=Search bioRxiv life-science preprints for titles, abstracts, authors, years, and DOIs.}, {inputSchema={type=object, properties={query={description=Query., type=string}, target_type={description=Target Type., type=string}, max_results={description=Max Results, 1 to 100, default 10., type=integer}}, required=[query]}, name=chembl___search, description=Search ChEMBL molecule records for names, molecule types, synonyms, and maximum clinical phase.}, {inputSchema={type=object, properties={query={description=Query., type=string}, max_results={description=Max Results, 1 to 100, default 10., type=integer}, status={description=Status., type=string}}, required=[query]}, name=clinicaltrials___search, description=Search ClinicalTrials.gov study records for NCT IDs, titles, recruitment status, summaries, and start years.}, {inputSchema={type=object, properties={query={description=Query., type=string}, max_results={description=Max Results, 1 to 100, default 10., type=integer}}, required=[query]}, name=cmscoverage___search, description=Search CMS National Coverage Determination record",
+    "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"event_timestamp\":1793747232132,\"body\":{\"isError\":false,\"log\":\"Policy evaluation completed\",\"id\":\"3\",\"policy\":{\"decision\":\"ALLOW\",\"policyEngineArn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:policy-engine/cei_tools_engine-l7ujngzlqu\",\"determiningPolicies\":[\"permit_pubmed-sqehhf3sep\"],\"principal\":{\"entityType\":\"AgentCore::OAuthUser\",\"entityId\":\"2pkga0o9s3gn58a127ih2hfikc\"},\"latencyMs\":60,\"temporal_evaluation_invoked\":false}},\"account_id\":\"257137551728\",\"request_id\":\"75986c69-db33-4e73-8e84-56ca5b3511b3\",\"trace_id\":\"6aea691f6cd0c93f71c1fb30707d0270\",\"span_id\":\"dcd5ed75fa6007e3\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-ufr8suwx2p\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"75986c69-db33-4e73-8e84-56ca5b3511b3\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793747232132367354,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6aea691f6cd0c93f71c1fb30707d0270\",\"spanId\":\"dcd5ed75fa6007e3\"}",
+    "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"event_timestamp\":1793747234827,\"body\":{\"isError\":false,\"log\":\"Policy evaluation completed\",\"id\":\"4\",\"policy\":{\"decision\":\"ALLOW\",\"policyEngineArn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:policy-engine/cei_tools_engine-l7ujngzlqu\",\"determiningPolicies\":[\"permit_clinicaltrials-jk682m9zlf\"],\"principal\":{\"entityType\":\"AgentCore::OAuthUser\",\"entityId\":\"2pkga0o9s3gn58a127ih2hfikc\"},\"latencyMs\":78,\"temporal_evaluation_invoked\":false}},\"account_id\":\"257137551728\",\"request_id\":\"6ff57891-948b-49c8-9477-86c37101f2b3\",\"trace_id\":\"6aea692269d990d17b8479e95c051c3d\",\"span_id\":\"82f4aec44520a29e\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-ufr8suwx2p\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"6ff57891-948b-49c8-9477-86c37101f2b3\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793747234827052145,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6aea692269d990d17b8479e95c051c3d\",\"spanId\":\"82f4aec44520a29e\"}",
+    "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"event_timestamp\":1793747236914,\"body\":{\"isError\":false,\"log\":\"Policy evaluation completed\",\"id\":\"5\",\"policy\":{\"decision\":\"ALLOW\",\"policyEngineArn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:policy-engine/cei_tools_engine-l7ujngzlqu\",\"determiningPolicies\":[\"permit_biorxiv-gqza80ct4z\"],\"principal\":{\"entityType\":\"AgentCore::OAuthUser\",\"entityId\":\"2pkga0o9s3gn58a127ih2hfikc\"},\"latencyMs\":45,\"temporal_evaluation_invoked\":false}},\"account_id\":\"257137551728\",\"request_id\":\"e8f1ad3d-0646-497b-9cc5-6e6dab2a64ba\",\"trace_id\":\"6aea69246a3285f20e88192b6d4fa677\",\"span_id\":\"de87b1e764d460b6\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-ufr8suwx2p\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"e8f1ad3d-0646-497b-9cc5-6e6dab2a64ba\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793747236914650398,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6aea69246a3285f20e88192b6d4fa677\",\"spanId\":\"de87b1e764d460b6\"}",
+    "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"event_timestamp\":1793747241584,\"body\":{\"isError\":false,\"log\":\"Policy evaluation completed\",\"id\":\"7\",\"policy\":{\"decision\":\"ALLOW\",\"policyEngineArn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:policy-engine/cei_tools_engine-l7ujngzlqu\",\"determiningPolicies\":[\"permit_chembl-f84cu3o8ps\"],\"principal\":{\"entityType\":\"AgentCore::OAuthUser\",\"entityId\":\"2pkga0o9s3gn58a127ih2hfikc\"},\"latencyMs\":41,\"temporal_evaluation_invoked\":false}},\"account_id\":\"257137551728\",\"request_id\":\"35575940-99e7-4867-bf4a-afdcfaf3c4bd\",\"trace_id\":\"6aea6929209049133af4fa5e5567b7a7\",\"span_id\":\"e7a5c6facfde27d7\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-ufr8suwx2p\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"35575940-99e7-4867-bf4a-afdcfaf3c4bd\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793747241584734187,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6aea6929209049133af4fa5e5567b7a7\",\"spanId\":\"e7a5c6facfde27d7\"}",
+    "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"event_timestamp\":1793747244013,\"body\":{\"isError\":false,\"log\":\"Policy evaluation completed\",\"id\":\"8\",\"policy\":{\"decision\":\"ALLOW\",\"policyEngineArn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:policy-engine/cei_tools_engine-l7ujngzlqu\",\"determiningPolicies\":[\"permit_opentargets-cddw9d93_o\"],\"principal\":{\"entityType\":\"AgentCore::OAuthUser\",\"entityId\":\"2pkga0o9s3gn58a127ih2hfikc\"},\"latencyMs\":47,\"temporal_evaluation_invoked\":false}},\"account_id\":\"257137551728\",\"request_id\":\"741a5ed7-abb6-452c-b325-813f7798f132\",\"trace_id\":\"6aea692b75c9c42e104b4c201ebb581c\",\"span_id\":\"09c9123d3925a410\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-ufr8suwx2p\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"741a5ed7-abb6-452c-b325-813f7798f132\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793747244013597629,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6aea692b75c9c42e104b4c201ebb581c\",\"spanId\":\"09c9123d3925a410\"}",
+    "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"event_timestamp\":1793747246495,\"body\":{\"isError\":false,\"log\":\"Policy evaluation completed\",\"id\":\"9\",\"policy\":{\"decision\":\"ALLOW\",\"policyEngineArn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:policy-engine/cei_tools_engine-l7ujngzlqu\",\"determiningPolicies\":[\"permit_cmscoverage-onozzlj8av\"],\"principal\":{\"entityType\":\"AgentCore::OAuthUser\",\"entityId\":\"2pkga0o9s3gn58a127ih2hfikc\"},\"latencyMs\":47,\"temporal_evaluation_invoked\":false}},\"account_id\":\"257137551728\",\"request_id\":\"9623c084-ec06-4cb6-a700-b3fd27abb349\",\"trace_id\":\"6aea692e2e14690a3aff348524ba634d\",\"span_id\":\"33b5e9cb293ebf5b\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-ufr8suwx2p\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"9623c084-ec06-4cb6-a700-b3fd27abb349\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793747246495334774,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6aea692e2e14690a3aff348524ba634d\",\"spanId\":\"33b5e9cb293ebf5b\"}",
+    "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"event_timestamp\":1793747249224,\"body\":{\"isError\":false,\"log\":\"Policy evaluation completed\",\"id\":\"10\",\"policy\":{\"decision\":\"ALLOW\",\"policyEngineArn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:policy-engine/cei_tools_engine-l7ujngzlqu\",\"determiningPolicies\":[\"permit_icd10-5ytf_6xsck\"],\"principal\":{\"entityType\":\"AgentCore::OAuthUser\",\"entityId\":\"2pkga0o9s3gn58a127ih2hfikc\"},\"latencyMs\":62,\"temporal_evaluation_invoked\":false}},\"account_id\":\"257137551728\",\"request_id\":\"cce6c2e0-52dc-4340-b95e-aa3da4ab0091\",\"trace_id\":\"6aea69314621d66f2e877a1342bd8ba9\",\"span_id\":\"e6315978c61d6055\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-ufr8suwx2p\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"cce6c2e0-52dc-4340-b95e-aa3da4ab0091\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793747249224001958,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6aea69314621d66f2e877a1342bd8ba9\",\"spanId\":\"e6315978c61d6055\"}",
+    "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"event_timestamp\":1793747250992,\"body\":{\"isError\":false,\"log\":\"Policy evaluation completed\",\"id\":\"11\",\"policy\":{\"decision\":\"ALLOW\",\"policyEngineArn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:policy-engine/cei_tools_engine-l7ujngzlqu\",\"determiningPolicies\":[\"permit_npi-i0ip3pan22\"],\"principal\":{\"entityType\":\"AgentCore::OAuthUser\",\"entityId\":\"2pkga0o9s3gn58a127ih2hfikc\"},\"latencyMs\":47,\"temporal_evaluation_invoked\":false}},\"account_id\":\"257137551728\",\"request_id\":\"8c225c73-efeb-43a1-98e0-ebf8bee0cde9\",\"trace_id\":\"6aea693253f476e20bb04a603606ee86\",\"span_id\":\"c6f721ce9eed5532\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-ufr8suwx2p\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"8c225c73-efeb-43a1-98e0-ebf8bee0cde9\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793747250992430653,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6aea693253f476e20bb04a603606ee86\",\"spanId\":\"c6f721ce9eed5532\"}",
+    "{\"resource_arn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"event_timestamp\":1793747252983,\"body\":{\"isError\":false,\"log\":\"Policy evaluation completed\",\"id\":\"12\",\"policy\":{\"decision\":\"ALLOW\",\"policyEngineArn\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:policy-engine/cei_tools_engine-l7ujngzlqu\",\"determiningPolicies\":[\"permit_pubchem-wwgmsotr57\"],\"principal\":{\"entityType\":\"AgentCore::OAuthUser\",\"entityId\":\"2pkga0o9s3gn58a127ih2hfikc\"},\"latencyMs\":51,\"temporal_evaluation_invoked\":false}},\"account_id\":\"257137551728\",\"request_id\":\"464efb46-5c59-401a-a4a8-a02160af655d\",\"trace_id\":\"6aea693405a50a297c3f953f7bc059c2\",\"span_id\":\"1d796a11acfdadfa\",\"resource\":{\"attributes\":{\"service.name\":\"cei-tools-ufr8suwx2p\",\"cloud.resource_id\":\"arn:aws:bedrock-agentcore:us-east-2:257137551728:gateway/cei-tools-ufr8suwx2p\",\"cloud.platform\":\"aws_bedrock_agentcore\"}},\"attributes\":{\"aws.request.id\":\"464efb46-5c59-401a-a4a8-a02160af655d\",\"aws.account.id\":\"257137551728\",\"aws.resource.type\":\"AWS::BedrockAgentCore::Gateway\"},\"timeUnixNano\":1793747252983659349,\"severityNumber\":9,\"severityText\":\"INFO\",\"traceId\":\"6aea693405a50a297c3f953f7bc059c2\",\"spanId\":\"1d796a11acfdadfa\"}"
+  ]
+}

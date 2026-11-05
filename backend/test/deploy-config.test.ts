@@ -39,6 +39,15 @@ describe('parseDeployConfig', () => {
     expect(config.allowLocalhostCallback).toBe(true);
   });
 
+  it('defaults toolPolicyMode to LOG_ONLY (F4/B30) and accepts ENFORCE', () => {
+    expect(parseDeployConfig(validRaw()).toolPolicyMode).toBe('LOG_ONLY');
+    expect(parseDeployConfig(validRaw({ toolPolicyMode: 'ENFORCE' })).toolPolicyMode).toBe('ENFORCE');
+  });
+
+  it.each(['enforce', 'OFF', true, ''])('rejects toolPolicyMode %p', (value) => {
+    expect(() => parseDeployConfig(validRaw({ toolPolicyMode: value }))).toThrow(/toolPolicyMode/);
+  });
+
   it('rejects a non-boolean allowLocalhostCallback', () => {
     let error: DeployConfigError | undefined;
     try {

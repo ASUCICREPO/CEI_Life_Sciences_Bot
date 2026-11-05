@@ -11,6 +11,11 @@ export interface DeployLimits {
   maxBackgroundRunsPerUser: number;
 }
 
+/** Cedar policy engine mode on the tool Gateway (B30: start LOG_ONLY, then ENFORCE). */
+export type ToolPolicyMode = 'LOG_ONLY' | 'ENFORCE';
+export const TOOL_POLICY_MODES: readonly ToolPolicyMode[] = ['LOG_ONLY', 'ENFORCE'];
+export const DEFAULT_TOOL_POLICY_MODE: ToolPolicyMode = 'LOG_ONLY';
+
 /**
  * The configuration `deploy.sh` collects and writes to a CDK context JSON file,
  * and that the CDK app / stack read back at synth/deploy time.
@@ -26,6 +31,8 @@ export interface DeployConfig {
   webSearchEnabled: boolean;
   /** B90: adds the localhost:5173 callback/logout URLs to the SPA Cognito client for local dev. Default false. */
   allowLocalhostCallback: boolean;
+  /** F4/B30: Cedar policy mode on the tool Gateway. Starts LOG_ONLY, flipped to ENFORCE after the audit. Default LOG_ONLY. */
+  toolPolicyMode?: ToolPolicyMode;
   repository?: {
     url: string;
     branch: string;
@@ -255,6 +262,16 @@ export function parseDeployConfig(raw: unknown): DeployConfig {
     }
   }
 
+  // F4/B30: tool Gateway policy mode — absent means LOG_ONLY (the safe start of the LOG_ONLY -> ENFORCE rollout)
+  let toolPolicyMode: ToolPolicyMode = DEFAULT_TOOL_POLICY_MODE;
+  if (raw.toolPolicyMode !== undefined) {
+    if (!TOOL_POLICY_MODES.includes(raw.toolPolicyMode as ToolPolicyMode)) {
+      errors.push(`toolPolicyMode: must be one of ${TOOL_POLICY_MODES.join(', ')}`);
+    } else {
+      toolPolicyMode = raw.toolPolicyMode as ToolPolicyMode;
+    }
+  }
+
   const repository = parseRepository(raw.repository, errors);
 
   if (errors.length > 0) {
@@ -271,6 +288,7 @@ export function parseDeployConfig(raw: unknown): DeployConfig {
     limits,
     webSearchEnabled,
     allowLocalhostCallback,
+    toolPolicyMode,
     ...(repository ? { repository } : {}),
   };
 }
