@@ -26,13 +26,32 @@ class ChatMode(StrEnum):
 class SortKey(StrEnum):
     """History-list ordering; each value is backed by a (user_id, <timestamp>) GSI."""
 
+    ACTIVITY = "activity"  # last time the user sent a message in the chat (default)
     CREATED = "created"
     UPDATED = "updated"
 
 
 # GSI names must match backend/lib/backend-stack.ts (ChatMetadataStore indexes)
-SORT_INDEX: dict[SortKey, str] = {SortKey.CREATED: "by_created", SortKey.UPDATED: "by_updated"}
-SORT_ATTRIBUTE: dict[SortKey, str] = {SortKey.CREATED: "created_at", SortKey.UPDATED: "updated_at"}
+SORT_INDEX: dict[SortKey, str] = {
+    SortKey.ACTIVITY: "by_activity",
+    SortKey.CREATED: "by_created",
+    SortKey.UPDATED: "by_updated",
+}
+SORT_ATTRIBUTE: dict[SortKey, str] = {
+    SortKey.ACTIVITY: "last_activity_at",
+    SortKey.CREATED: "created_at",
+    SortKey.UPDATED: "updated_at",
+}
+# Title search index: (user_id, title_search) where title_search is the normalized (case-folded) title
+TITLE_INDEX = "by_title"
+TITLE_SEARCH_ATTRIBUTE = "title_search"
+SEARCH_QUERY_MAX = 100
+_SEARCH_MAX_READS = 10  # bound on index pages read to fill one search page
+
+
+def normalize_title(value: str) -> str:
+    """Case-folded, whitespace-collapsed title: the stored `title_search` value and the search query form."""
+    return " ".join((value or "").casefold().split())
 
 
 class TitleSource(StrEnum):
@@ -64,6 +83,9 @@ class ChatMetadataRecord(BaseModel):
     message_count: int = 0
     created_at: datetime
     updated_at: datetime
+    # Bumped only when the user sends a message (not on renames / generated titles / AI answers): drives the
+    # default "last used" history order. None on legacy rows until backfilled (scripts/backfill_chat_metadata.py).
+    last_activity_at: datetime | None = None
 
 
 def to_iso(value: datetime) -> str:
@@ -80,6 +102,10 @@ def to_iso(value: datetime) -> str:
 
 def _now() -> str:
     return to_iso(datetime.now(UTC))
+
+
+# Sentinel for _update: "the same timestamp as this write's updated_at"
+_NOW: Any = object()
 
 
 def _is_conditional_failure(exc: ClientError) -> bool:
@@ -101,10 +127,11 @@ class BaseChatMetadataRepository(ABC):
         self,
         user_id: str,
         *,
-        sort: SortKey = SortKey.UPDATED,
+        sort: SortKey = SortKey.ACTIVITY,
         status: ChatStatus | None = None,
         limit: int = 20,
         start_key: dict[str, Any] | None = None,
+        query: str | None = None,
     ) -> Page[ChatMetadataRecord]: ...
 
     @abstractmethod
@@ -124,7 +151,7 @@ class BaseChatMetadataRepository(ABC):
     def set_generated_title(self, user_id: str, session_id: str, title: str) -> bool: ...
 
     @abstractmethod
-    def increment_message_count(self, user_id: str, session_id: str) -> int: ...
+    def increment_message_count(self, user_id: str, session_id: str, *, user_activity: bool = False) -> int: ...
 
     @abstractmethod
     def archive(self, user_id: str, session_id: str) -> None: ...
@@ -141,6 +168,9 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
         item = record.model_dump(mode="json")
         item["created_at"] = to_iso(record.created_at)
         item["updated_at"] = to_iso(record.updated_at)
+        # sparse GSIs: an absent attribute keeps the row out of by_activity, a None would be rejected as a key
+        item["last_activity_at"] = to_iso(record.last_activity_at or record.created_at)
+        item[TITLE_SEARCH_ATTRIBUTE] = normalize_title(record.title)
         return item
 
     def create(self, record: ChatMetadataRecord) -> None:
@@ -171,12 +201,18 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
         self,
         user_id: str,
         *,
-        sort: SortKey = SortKey.UPDATED,
+        sort: SortKey = SortKey.ACTIVITY,
         status: ChatStatus | None = None,
         limit: int = 20,
         start_key: dict[str, Any] | None = None,
+        query: str | None = None,
     ) -> Page[ChatMetadataRecord]:
+        """One page of the caller's chats, newest first by `sort`; with `query`, title matches via by_title."""
         from boto3.dynamodb.conditions import Attr, Key
+
+        needle = normalize_title(query or "")
+        if needle:
+            return self._search_titles(user_id, needle, status=status, limit=limit, start_key=start_key)
 
         kwargs: dict[str, Any] = {
             "IndexName": SORT_INDEX[SortKey(sort)],
@@ -194,6 +230,59 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
         # A GSI cursor is {user_id, session_id, <index sort attribute>}
         return Page(items=items, next_key=from_dynamo(response.get("LastEvaluatedKey")))
 
+    def _search_titles(
+        self,
+        user_id: str,
+        needle: str,
+        *,
+        status: ChatStatus | None,
+        limit: int,
+        start_key: dict[str, Any] | None,
+    ) -> Page[ChatMetadataRecord]:
+        """Substring title search on the (user_id, title_search) index, in title order.
+
+        The key condition pins the read to the caller's partition of the title index; DynamoDB has no substring
+        key condition, so `contains` filters it. Index pages are read until `limit` matches are found (bounded by
+        _SEARCH_MAX_READS), and the cursor is the last *returned* row so no match is skipped between pages.
+        """
+        from boto3.dynamodb.conditions import Attr, Key
+
+        condition = Attr(TITLE_SEARCH_ATTRIBUTE).contains(needle)
+        if status is not None:
+            condition = condition & Attr("status").eq(status.value)
+        matches: list[dict[str, Any]] = []
+        exclusive_start = start_key
+        for _ in range(_SEARCH_MAX_READS):
+            kwargs: dict[str, Any] = {
+                "IndexName": TITLE_INDEX,
+                "KeyConditionExpression": Key("user_id").eq(user_id),
+                "FilterExpression": condition,
+                "ScanIndexForward": True,  # A -> Z
+                "Limit": max(limit, 100),
+            }
+            if exclusive_start is not None:
+                kwargs["ExclusiveStartKey"] = exclusive_start
+            response = self._table.query(**kwargs)
+            matches.extend(response.get("Items", []))
+            exclusive_start = response.get("LastEvaluatedKey")
+            if len(matches) >= limit or exclusive_start is None:
+                break
+
+        next_key: dict[str, Any] | None
+        if len(matches) > limit or (len(matches) == limit and exclusive_start is not None):
+            matches = matches[:limit]
+            last = matches[-1]
+            next_key = from_dynamo(
+                {
+                    "user_id": last["user_id"],
+                    "session_id": last["session_id"],
+                    TITLE_SEARCH_ATTRIBUTE: last[TITLE_SEARCH_ATTRIBUTE],
+                }
+            )
+        else:
+            next_key = from_dynamo(exclusive_start)  # read bound hit: resume after the rows already scanned
+        return Page(items=[ChatMetadataRecord(**from_dynamo(item)) for item in matches], next_key=next_key)
+
     def _update(
         self,
         user_id: str,
@@ -203,10 +292,15 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
         condition: str | None = None,
         condition_values: dict[str, Any] | None = None,
     ) -> ChatMetadataRecord:
+        now = _now()
         names = {"#updated_at": "updated_at"}
-        values: dict[str, Any] = {":updated_at": _now(), **(condition_values or {})}
+        values: dict[str, Any] = {":updated_at": now, **(condition_values or {})}
         parts = ["#updated_at = :updated_at"]
+        if "title" in sets:  # keep the search index in step with every title write
+            sets = {**sets, TITLE_SEARCH_ATTRIBUTE: normalize_title(str(sets["title"]))}
         for attr, value in sets.items():
+            if value is _NOW:
+                value = now
             names[f"#{attr}"] = attr
             values[f":{attr}"] = value
             parts.append(f"#{attr} = :{attr}")
@@ -266,9 +360,13 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
             return False
         return True
 
-    def increment_message_count(self, user_id: str, session_id: str) -> int:
-        """Atomically bump message_count (and updated_at); the new count is the next sequence number."""
-        return self._update(user_id, session_id, {}, add_count=True).message_count
+    def increment_message_count(self, user_id: str, session_id: str, *, user_activity: bool = False) -> int:
+        """Atomically bump message_count (and updated_at); the new count is the next sequence number.
+
+        `user_activity=True` (a message the user sent) also moves the chat to the top of the "last used" order.
+        """
+        sets: dict[str, Any] = {"last_activity_at": _NOW} if user_activity else {}
+        return self._update(user_id, session_id, sets, add_count=True).message_count
 
     def archive(self, user_id: str, session_id: str) -> None:
         self._update(user_id, session_id, {"status": ChatStatus.ARCHIVED.value})

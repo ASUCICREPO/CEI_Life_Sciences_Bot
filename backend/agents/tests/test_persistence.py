@@ -48,6 +48,8 @@ def session(monkeypatch):
                 {"AttributeName": "session_id", "AttributeType": "S"},
                 {"AttributeName": "created_at", "AttributeType": "S"},
                 {"AttributeName": "updated_at", "AttributeType": "S"},
+                {"AttributeName": "last_activity_at", "AttributeType": "S"},
+                {"AttributeName": "title_search", "AttributeType": "S"},
             ],
             GlobalSecondaryIndexes=[
                 {
@@ -58,7 +60,12 @@ def session(monkeypatch):
                     ],
                     "Projection": {"ProjectionType": "ALL"},
                 }
-                for name, sk in (("by_created", "created_at"), ("by_updated", "updated_at"))
+                for name, sk in (
+                    ("by_created", "created_at"),
+                    ("by_updated", "updated_at"),
+                    ("by_activity", "last_activity_at"),
+                    ("by_title", "title_search"),
+                )
             ],
             BillingMode="PAY_PER_REQUEST",
         )
@@ -219,10 +226,10 @@ def test_list_by_user_pages_newest_first_and_isolates_users(session):
         t = NOW + timedelta(minutes=i)
         repo.create(_meta(session_id=f"s{i}").model_copy(update={"created_at": t, "updated_at": t}))
     repo.create(_meta(user_id="u2", session_id="other"))
-    first = repo.list_by_user("u1", limit=2)
+    first = repo.list_by_user("u1", limit=2)  # default order: last activity
     assert [r.session_id for r in first.items] == ["s4", "s3"]
     assert first.next_key == {
-        "user_id": "u1", "session_id": "s3", "updated_at": to_iso(NOW + timedelta(minutes=3))
+        "user_id": "u1", "session_id": "s3", "last_activity_at": to_iso(NOW + timedelta(minutes=3))
     }
     second = repo.list_by_user("u1", limit=10, start_key=first.next_key)
     assert [r.session_id for r in second.items] == ["s2", "s1", "s0"]
@@ -238,10 +245,57 @@ def test_list_by_user_sorts_by_created_or_updated(session):
         update={"created_at": NOW, "updated_at": NOW + timedelta(hours=2)}))
     repo.create(_meta(session_id="new").model_copy(
         update={"created_at": NOW + timedelta(hours=1), "updated_at": NOW + timedelta(hours=1)}))
-    by_updated = repo.list_by_user("u1")  # default
+    by_updated = repo.list_by_user("u1", sort=SortKey.UPDATED)
     assert [r.session_id for r in by_updated.items] == ["old", "new"]
     by_created = repo.list_by_user("u1", sort=SortKey.CREATED)
     assert [r.session_id for r in by_created.items] == ["new", "old"]
+
+
+def test_user_message_moves_old_chat_to_top_of_activity_order(session):
+    from datetime import timedelta
+
+    repo = ChatMetadataRepository(session)
+    repo.create(_meta(session_id="old"))
+    later = NOW + timedelta(hours=1)
+    repo.create(_meta(session_id="new").model_copy(update={"created_at": later, "updated_at": later}))
+    assert [r.session_id for r in repo.list_by_user("u1").items] == ["new", "old"]
+
+    repo.increment_message_count("u1", "old", user_activity=True)  # the user writes in the old chat
+    assert [r.session_id for r in repo.list_by_user("u1").items] == ["old", "new"]
+
+    repo.increment_message_count("u1", "new")  # an AI answer is not user activity
+    repo.update("u1", "new", title="Renamed")  # neither is a rename
+    assert [r.session_id for r in repo.list_by_user("u1").items] == ["old", "new"]
+
+
+def test_title_search_is_case_insensitive_substring_and_owner_scoped(session):
+    repo = ChatMetadataRepository(session)
+    repo.create(_meta(session_id="a").model_copy(update={"title": "KRAS G12C resistance"}))
+    repo.create(_meta(session_id="b").model_copy(update={"title": "Grant draft"}))
+    repo.create(_meta(user_id="u2", session_id="c").model_copy(update={"title": "kras for u2"}))
+    assert [r.session_id for r in repo.list_by_user("u1", query="  Kras ").items] == ["a"]
+    assert [r.session_id for r in repo.list_by_user("u1", query="RESIST").items] == ["a"]
+    assert repo.list_by_user("u1", query="nothing").items == []
+
+    repo.update("u1", "b", title="Pitch deck")  # renames keep the search attribute in step
+    assert [r.session_id for r in repo.list_by_user("u1", query="pitch").items] == ["b"]
+    assert repo.list_by_user("u1", query="grant").items == []
+
+
+def test_title_search_pages_without_skipping_matches(session):
+    repo = ChatMetadataRepository(session)
+    for i in range(7):
+        repo.create(_meta(session_id=f"m{i}").model_copy(update={"title": f"match {i}"}))
+        repo.create(_meta(session_id=f"x{i}").model_copy(update={"title": f"other {i}"}))
+    seen: list[str] = []
+    page = repo.list_by_user("u1", query="match", limit=3)
+    while True:
+        assert len(page.items) <= 3
+        seen.extend(r.session_id for r in page.items)
+        if page.next_key is None:
+            break
+        page = repo.list_by_user("u1", query="match", limit=3, start_key=page.next_key)
+    assert seen == [f"m{i}" for i in range(7)]
 
 
 def test_load_page_cursor_and_chronological_order(session):
@@ -358,6 +412,61 @@ def test_append_persists_trimmed_oversized_item(session):
     repo.append(rec)
     got = repo.load_page("u1", "s1").items[0]
     assert got.truncated is True and got.content_blocks[0].body.endswith("[truncated]")
+
+
+def _recorder(session):
+    from shared.persistence.conversation import ConversationRecorder
+
+    return ConversationRecorder(ChatMetadataRepository(session), ChatHistoryRepository(session))
+
+
+def test_recorder_human_turn_advances_activity_and_ai_turn_does_not(session):
+    import asyncio
+    from datetime import timedelta
+
+    past = datetime(2020, 1, 1, tzinfo=UTC)
+    repo = ChatMetadataRepository(session)
+    repo.create(_meta(session_id="old").model_copy(
+        update={"created_at": past, "updated_at": past, "last_activity_at": past}))
+    later = past + timedelta(hours=1)
+    repo.create(_meta(session_id="new").model_copy(
+        update={"created_at": later, "updated_at": later, "last_activity_at": later}))
+    assert [r.session_id for r in repo.list_by_user("u1", sort=SortKey.ACTIVITY).items] == ["new", "old"]
+    rec = _recorder(session)
+
+    asyncio.run(rec.record_human_action(user_id="u1", session_id="old", text="approve"))  # HUMAN turn
+    old = repo.get("u1", "old")
+    assert old.last_activity_at > later
+    assert [r.session_id for r in repo.list_by_user("u1", sort=SortKey.ACTIVITY).items] == ["old", "new"]
+
+    seq = asyncio.run(rec.finish_turn(user_id="u1", session_id="new", text="answer"))  # AI turn
+    assert seq == 1
+    new = repo.get("u1", "new")
+    assert new.last_activity_at == later
+    assert new.updated_at > later  # the AI write did land
+    assert [r.session_id for r in repo.list_by_user("u1", sort=SortKey.ACTIVITY).items] == ["old", "new"]
+
+
+def test_recorder_foreign_owner_refused_before_any_write(session):
+    import asyncio
+
+    rec = _recorder(session)
+    asyncio.run(rec.start_turn(user_id="u1", session_id="s1", prompt="mine"))
+    history = ChatHistoryRepository(session)
+    before = history.load_recent("u1", "s1", 50)
+    assert len(before) == 1
+
+    with pytest.raises(SessionNotFoundError):
+        asyncio.run(rec.start_turn(user_id="u2", session_id="s1", prompt="intruder"))
+    with pytest.raises(SessionNotFoundError):
+        asyncio.run(rec.record_human_action(user_id="u2", session_id="s1", text="intruder"))
+    with pytest.raises(SessionNotFoundError):
+        asyncio.run(rec.assert_owner(user_id="u2", session_id="s1"))
+
+    items = session.resource("dynamodb").Table(config.chat_history_table).scan()["Items"]
+    assert len(items) == 1 and items[0]["user_id"] == "u1"
+    assert ChatMetadataRepository(session).get("u2", "s1") is None  # no metadata row stamped for u2
+    assert ChatMetadataRepository(session).get("u1", "s1").message_count == 1
 
 
 def test_delete_session_still_not_implemented(session):

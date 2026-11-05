@@ -27,6 +27,7 @@ from shared.persistence.chat_metadata import (
     SessionNotFoundError,
     TitleSource,
 )
+from shared.persistence.ownership import verify_session_owner
 
 if TYPE_CHECKING:
     from langchain_core.messages import BaseMessage
@@ -167,6 +168,13 @@ class ConversationRecorder:
             blocks.append(ContentBlock(block_type="ui", body=ui_surface))
         await asyncio.to_thread(self._append, user_id, session_id, MessageRole.HUMAN, blocks, [])
 
+    async def assert_owner(self, *, user_id: str, session_id: str) -> None:
+        """Fail-closed ownership check, run before any other session work.
+
+        Raises SessionNotFoundError (someone else's session) or OwnershipCheckError (owner lookup failed).
+        """
+        await asyncio.to_thread(self._assert_owner, user_id, session_id)
+
     async def rehydrate(self, *, user_id: str, session_id: str, n_turns: int = 20) -> list[BaseMessage]:
         """The last `n_turns` stored messages as LangChain messages (oldest first). Empty on any failure."""
         try:
@@ -186,10 +194,11 @@ class ConversationRecorder:
     def _assert_owner(self, user_id: str, session_id: str) -> None:
         # The metadata row is keyed (user_id, session_id), so it cannot see a colliding id owned by someone
         # else; the history partition's stamped owner can.
-        owner = self._history.owner_of(session_id)
-        if owner is not None and owner != user_id:
+        try:
+            verify_session_owner(self._history, user_id, session_id)
+        except SessionNotFoundError:
             log.warning("chat history: refused foreign session session=%s", session_id)
-            raise SessionNotFoundError(session_id)
+            raise
 
     def _start_turn_sync(
         self,
@@ -219,6 +228,7 @@ class ConversationRecorder:
                 mode=ChatMode(mode) if mode in ChatMode._value2member_map_ else None,
                 created_at=now,
                 updated_at=now,
+                last_activity_at=now,
             )
         )
         self._append(user_id, session_id, MessageRole.HUMAN, [ContentBlock(block_type="text", body=prompt)], [])
@@ -234,7 +244,9 @@ class ConversationRecorder:
     ) -> int:
         """Allocate the next sequence number from the metadata counter and write one message item."""
         for _ in range(_SEQUENCE_RETRIES):
-            sequence = self._metadata.increment_message_count(user_id, session_id)
+            sequence = self._metadata.increment_message_count(
+                user_id, session_id, user_activity=role == MessageRole.HUMAN
+            )
             record = ChatHistoryRecord(
                 session_id=session_id,
                 message_id=uuid.uuid4().hex,
