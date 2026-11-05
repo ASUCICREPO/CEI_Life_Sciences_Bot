@@ -63,6 +63,8 @@ class JobRecord:
     job_id: str
     session_id: str
     agent_type: str
+    # Verified Cognito sub of the user who started the job; job_status answers only that user.
+    user_id: str | None = None
     status: JobStatus = JobStatus.PENDING
     steps: list[JobStep] = field(default_factory=list)
     final_ui: dict[str, Any] | None = None
@@ -105,11 +107,13 @@ class JobRegistry:
         agent_type: str,
         steps: Iterable[tuple[str, str, str]] = (),
         job_id: str | None = None,
+        user_id: str | None = None,
     ) -> JobRecord:
         record = JobRecord(
             job_id=job_id or f"job-{uuid.uuid4().hex[:12]}",
             session_id=session_id,
             agent_type=agent_type,
+            user_id=user_id,
             steps=[JobStep(step_id=s, agent=a, description=d) for s, a, d in steps],
         )
         with self._lock:
@@ -121,6 +125,15 @@ class JobRegistry:
     def get(self, job_id: str) -> JobRecord | None:
         with self._lock:
             return self._jobs.get(job_id)
+
+    def get_owned(self, job_id: str, *, user_id: str, session_id: str) -> JobRecord | None:
+        """The job only if it was started by `user_id` in `session_id`; a job without an owner is never returned."""
+        record = self.get(job_id)
+        if record is None or not record.user_id:
+            return None
+        if record.user_id != user_id or record.session_id != session_id:
+            return None
+        return record
 
     def _touch(self, record: JobRecord) -> None:
         record.revision += 1

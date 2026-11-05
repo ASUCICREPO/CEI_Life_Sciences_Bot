@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from shared.config import config
 from shared.persistence.chat_metadata import SessionNotFoundError
 from shared.persistence.conversation import ConversationRecorder
+from shared.persistence.ownership import OwnershipCheckError
 from shared.runtime import checkpointing
 
 if TYPE_CHECKING:
@@ -70,8 +71,9 @@ async def begin_turn(
     On a cold thread with a `saver`, the stored checkpoint is restored into it first; then no text history is
     returned because the restored state already holds the conversation.
 
-    Raises SessionNotFoundError when the session belongs to someone else. Any other persistence failure is logged
-    and the turn proceeds without history (local dev without tables, transient DynamoDB errors).
+    Raises SessionNotFoundError when the session belongs to someone else, and OwnershipCheckError when the owner
+    cannot be read: the ownership check never fails open. Any other persistence failure (recording the prompt) is
+    logged and the turn proceeds without history — ownership was already proven by the session guard.
     """
     rec = recorder or get_recorder()
     try:
@@ -85,7 +87,7 @@ async def begin_turn(
             document_type=document_type,
             analysis_type=analysis_type,
         )
-    except SessionNotFoundError:
+    except (SessionNotFoundError, OwnershipCheckError):
         raise
     except Exception:  # noqa: BLE001
         log.exception("chat history: could not record prompt session=%s", session_id)
@@ -149,12 +151,13 @@ def describe_action(action: ActionRequest) -> str:
 async def record_resume(
     *, user_id: str, session_id: str, action: ActionRequest, recorder: ConversationRecorder | None = None
 ) -> None:
-    """Record a HITL answer as a HUMAN turn. Raises SessionNotFoundError for a session the caller doesn't own."""
+    """Record a HITL answer as a HUMAN turn. Raises SessionNotFoundError for a session the caller doesn't own and
+    OwnershipCheckError when the owner cannot be read (never fails open)."""
     try:
         await (recorder or get_recorder()).record_human_action(
             user_id=user_id, session_id=session_id, text=describe_action(action)
         )
-    except SessionNotFoundError:
+    except (SessionNotFoundError, OwnershipCheckError):
         raise
     except Exception:  # noqa: BLE001
         log.exception("chat history: could not record HITL answer session=%s", session_id)
