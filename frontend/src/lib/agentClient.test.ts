@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildRunPayload, getOrCreateSessionId, invokeAgent, setAgentTokenProvider } from './agentClient';
+import {
+  buildRunPayload,
+  getOrCreateSessionId,
+  invokeAgent,
+  isSessionUuid,
+  setAgentTokenProvider,
+  startNewSessionId,
+} from './agentClient';
 import { loadRuntimeConfig, resetRuntimeConfigForTests } from './auth/config';
 
 describe('buildRunPayload', () => {
@@ -113,10 +120,37 @@ describe('agentClient', () => {
     }
   });
 
-  it('creates plain UUID session ids that match the backend session-id contract', () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  it('creates UUID session ids that match the backend session-id contract', () => {
     const id = getOrCreateSessionId('thread-a');
-    expect(id).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    expect(id).toMatch(UUID);
     expect(id.startsWith('cei-demo-')).toBe(false);
     expect(getOrCreateSessionId('thread-a')).toBe(id);
+  });
+
+  it('replaces a stored non-UUID (legacy or default) session id with a fresh UUID', () => {
+    for (const legacy of ['session-1', 'default', 'cei-demo-123', '']) {
+      sessionStorage.setItem('cei-session:thread-legacy', legacy);
+      const id = getOrCreateSessionId('thread-legacy');
+      expect(id).toMatch(UUID);
+      expect(sessionStorage.getItem('cei-session:thread-legacy')).toBe(id);
+    }
+  });
+
+  it('starts a distinct UUID session id for every new chat on the same thread', () => {
+    const first = startNewSessionId('research');
+    const second = startNewSessionId('research');
+    expect(first).toMatch(UUID);
+    expect(second).toMatch(UUID);
+    expect(second).not.toBe(first);
+    expect(sessionStorage.getItem('cei-session:research')).toBe(second);
+  });
+
+  it('isSessionUuid accepts only 8-4-4-4-12 hex ids', () => {
+    expect(isSessionUuid(crypto.randomUUID())).toBe(true);
+    for (const bad of ['default', 'session-1', '', null, undefined, '{12345678-1234-1234-1234-123456789abc}']) {
+      expect(isSessionUuid(bad)).toBe(false);
+    }
   });
 });

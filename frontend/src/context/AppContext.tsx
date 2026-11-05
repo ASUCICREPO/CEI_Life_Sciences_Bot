@@ -20,7 +20,8 @@ const AppContext = createContext<AppState | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<ViewModeType>(ViewMode.SCIENCE);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>('session-1');
+  // No default session: a chat gets its own UUID when it starts (agentClient.startNewSessionId) or resumes
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [evidencePanelOpen, setEvidencePanelOpen] = useState(false);
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);

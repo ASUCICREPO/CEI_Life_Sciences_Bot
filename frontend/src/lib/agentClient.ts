@@ -222,20 +222,29 @@ export async function getJob(jobId: string, sessionId: string): Promise<JobEnvel
 
 // ADR: one sessionStorage-backed id per chat thread | the backend contract
 // ties HITL resume and job polling to one AgentCore runtime session id.
+// Every entry point (agent proxy, runtimes, sessions API) accepts only a UUID (8-4-4-4-12 hex) and never
+// substitutes a default, so a stored value in any other shape (e.g. a pre-UUID id) is replaced.
+const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isSessionUuid(value: unknown): value is string {
+  return typeof value === 'string' && SESSION_UUID.test(value);
+}
+
 export function getOrCreateSessionId(threadKey: string): string {
   const storageKey = `cei-session:${threadKey}`;
   const existing = sessionStorage.getItem(storageKey);
-  if (existing) return existing;
-  // Plain uuid: matches the backend's `^[A-Za-z0-9_-]{1,64}$` session-id contract.
+  if (isSessionUuid(existing)) return existing;
   const created = crypto.randomUUID();
   sessionStorage.setItem(storageKey, created);
   return created;
 }
 
-// Continue an existing chat (e.g. opened from the history list): later turns on this thread reuse its
-// session id, so the runtime rehydrates that conversation instead of starting a new one.
-export function adoptSessionId(threadKey: string, sessionId: string): void {
-  sessionStorage.setItem(`cei-session:${threadKey}`, sessionId);
+// ADR: a fresh session id per new chat | reusing one id per task merged every chat on that task into a
+// single History thread. A resumed chat passes its own id instead and never writes it back here.
+export function startNewSessionId(threadKey: string): string {
+  const created = crypto.randomUUID();
+  sessionStorage.setItem(`cei-session:${threadKey}`, created);
+  return created;
 }
 
 // ADR: carry the session id to /pipeline?job=... via sessionStorage | the

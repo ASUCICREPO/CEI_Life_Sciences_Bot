@@ -3,7 +3,8 @@ import { safeParseCEIUISurface, type CEIUISurface } from './cei-ui/schema';
 // Typed client for the Session REST API (session-metadata / session-history Lambdas behind API Gateway).
 // Every call carries the Cognito access token; the backend derives the user from the token's `sub` only.
 
-export type SessionSort = 'updated' | 'created';
+/** `activity` = last time the user sent a message in the chat (the default history order). */
+export type SessionSort = 'activity' | 'updated' | 'created';
 export type TitleSource = 'prompt' | 'generated' | 'user';
 export type SessionMode = 'science' | 'business';
 export type SessionStatus = 'active' | 'archived';
@@ -24,6 +25,8 @@ export interface SessionSummary {
   message_count: number;
   created_at: string;
   updated_at: string;
+  /** Last time the user sent a message here; moves an old chat back to the top of the history list. */
+  last_activity_at?: string | null;
 }
 
 export interface CreatedSession {
@@ -84,6 +87,8 @@ export interface ListSessionsOptions {
   sort?: SessionSort;
   limit?: number;
   cursor?: string | null;
+  /** Title search (case-insensitive substring; results in title order). Max 100 characters. */
+  q?: string | null;
 }
 
 export interface LoadHistoryOptions {
@@ -274,8 +279,9 @@ export function createSessionsClient(getToken: TokenProvider, options: SessionsC
   const sessionPath = (sessionId: string) => `/sessions/${encodeURIComponent(sessionId)}`;
 
   return {
-    async listSessions({ sort = 'updated', limit, cursor } = {}) {
-      return toPage(await request('GET', `/sessions${query({ sort, limit, cursor })}`), toSessionSummary);
+    async listSessions({ sort = 'activity', limit, cursor, q } = {}) {
+      const search = q?.trim() || null;
+      return toPage(await request('GET', `/sessions${query({ sort, limit, q: search, cursor })}`), toSessionSummary);
     },
     async getSession(sessionId) {
       return toSessionSummary(await request('GET', sessionPath(sessionId)));

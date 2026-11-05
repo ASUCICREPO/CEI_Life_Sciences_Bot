@@ -23,6 +23,20 @@ describe('createSessionsClient', () => {
     expect(url).not.toContain('user_id');
   });
 
+  it('sends sort=activity and a url-encoded q, and drops a blank q', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ items: [], next_cursor: null }));
+    const client = createSessionsClient(async () => 'tok', { fetchImpl, baseUrl: 'https://api.example/v1' });
+    await client.listSessions({ sort: 'activity', limit: 25, q: 'gene & cell/✓' });
+    await client.listSessions({ sort: 'activity', limit: 25, q: '   ' });
+    await client.listSessions({ sort: 'activity', limit: 25, q: null });
+    const urls = (fetchImpl.mock.calls as unknown as [string][]).map(([u]) => new URL(u));
+    expect(urls[0].searchParams.get('sort')).toBe('activity');
+    expect(urls[0].searchParams.get('limit')).toBe('25');
+    expect(urls[0].searchParams.get('q')).toBe('gene & cell/✓');
+    expect(urls[0].search).not.toContain(' & ');
+    for (const u of urls.slice(1)) expect(u.searchParams.has('q')).toBe(false);
+  });
+
   it('maps the api.md error envelope to SessionsClientError', async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ error: { code: 'not_found', message: 'Chat not found.', retriable: false, request_id: 'r1' } }, 404),

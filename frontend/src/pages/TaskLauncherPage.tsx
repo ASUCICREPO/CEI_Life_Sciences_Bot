@@ -76,6 +76,8 @@ export function TaskLauncherPage() {
   const resumeTaskId = resumeTarget?.kind === 'resume' ? resumeTarget.taskId : undefined;
   const initialTask = routeState?.taskId ?? resumeTaskId ?? null;
   const [activeTask, setActiveTask] = useState<string | null>(initialTask);
+  // The resume applies only to the chat opened from History; leaving it or picking a task starts a new session.
+  const [resumeSession, setResumeSession] = useState<string | undefined>(resumeSessionId);
   const [unresumable, setUnresumable] = useState(
     resumeTarget?.kind === 'unresumable' && !routeState?.taskId ? resumeTarget : null,
   );
@@ -124,11 +126,13 @@ export function TaskLauncherPage() {
     reportTourEvent({ type: 'TASK_SELECTED', taskId });
     setExtraMessages([]);
     setInputValue('');
+    setResumeSession(undefined);
     setActiveTask(taskId);
   };
 
   const handleBack = () => {
     setActiveTask(null);
+    setResumeSession(undefined);
     setExtraMessages([]);
     setInputValue('');
   };
@@ -223,6 +227,7 @@ export function TaskLauncherPage() {
     const documentType = liveDraftingTaskIds[activeTask];
     const taskDef = mockTaskGroups.flatMap((group) => group.tasks).find((task) => task.id === activeTask);
     const agentMode = mode === ViewMode.BUSINESS ? 'business' : 'science';
+    const chatResumeId = activeTask === resumeTaskId ? resumeSession : undefined;
     return (
       <div className="h-full flex flex-col">
         <div className="border-b border-border-subtle px-6 py-2.5 bg-surface-elevated flex items-center gap-3 flex-shrink-0">
@@ -236,12 +241,13 @@ export function TaskLauncherPage() {
         </div>
         <div className="flex-1 overflow-hidden">
           <LiveAgentChat
+            key={`${activeTask}:${chatResumeId ?? 'new'}`}
             agent={liveAgent}
             mode={agentMode}
             analysisType={analysisType}
             documentType={documentType}
             threadKey={activeTask}
-            resumeSessionId={activeTask === resumeTaskId ? resumeSessionId : undefined}
+            resumeSessionId={chatResumeId}
             title={taskDef?.title ?? 'Live agent'}
             description={taskDef?.description ?? ''}
             examples={taskDef?.examples ?? []}

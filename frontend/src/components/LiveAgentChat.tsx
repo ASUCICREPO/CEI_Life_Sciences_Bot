@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Bot, Loader2, Send, User } from 'lucide-react';
@@ -6,11 +6,10 @@ import { CEIUISurface } from './cei-ui/cei-ui-surface';
 import { SafeMarkdown } from './cei-ui/markdown';
 import {
   AgentClientError,
-  adoptSessionId,
   buildRunPayload,
-  getOrCreateSessionId,
   invokeAgent,
   setJobSession,
+  startNewSessionId,
   type AgentEnvelope,
   type AgentMode,
   type AgentName,
@@ -69,14 +68,9 @@ function toLiveMessages(items: HistoryMessage[]): LiveMessage[] {
 export function LiveAgentChat({ agent, mode, analysisType, documentType, threadKey, resumeSessionId, title, description, examples, placeholder }: LiveAgentChatProps) {
   const navigate = useNavigate();
   const sessionsClient = useSessionsClient();
-  const sessionId = useMemo(() => {
-    if (resumeSessionId) {
-      // New turns on this thread continue the resumed session.
-      adoptSessionId(threadKey, resumeSessionId);
-      return resumeSessionId;
-    }
-    return getOrCreateSessionId(threadKey);
-  }, [threadKey, resumeSessionId]);
+  // One session per mounted chat: a resumed chat continues its own session, anything else starts a new one.
+  // Lazy state so the id is fixed for this chat's lifetime; the parent remounts via `key`.
+  const [sessionId] = useState(() => resumeSessionId ?? startNewSessionId(threadKey));
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isRunning, setIsRunning] = useState(false);
