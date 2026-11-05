@@ -6,11 +6,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
 from pydantic import BaseModel, Field
 
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, DataSourceTool
+from shared.tools import retrying_http as http
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +22,16 @@ _BASE = "https://api.fda.gov"
 # labels, and device clearances (B97) without a per-source endpoint parameter.
 # Each template is applied per search term; openFDA reads spaces between clauses as OR.
 _ENDPOINTS: tuple[tuple[str, str, str], ...] = (
-    ("drug/drugsfda.json", 'openfda.brand_name:"{q}" openfda.generic_name:"{q}" sponsor_name:"{q}"', "drug_approval"),
-    ("drug/label.json", 'openfda.brand_name:"{q}" openfda.generic_name:"{q}" indications_and_usage:"{q}"', "drug_label"),
+    (
+        "drug/drugsfda.json",
+        'openfda.brand_name:"{q}" openfda.generic_name:"{q}" sponsor_name:"{q}"',
+        "drug_approval",
+    ),
+    (
+        "drug/label.json",
+        'openfda.brand_name:"{q}" openfda.generic_name:"{q}" indications_and_usage:"{q}"',
+        "drug_label",
+    ),
     ("device/510k.json", 'device_name:"{q}" applicant:"{q}"', "device_510k"),
 )
 _MAX_TERMS = 6
@@ -67,7 +75,9 @@ def _citation_url(kind: str, item: dict[str, Any], application_number: str) -> s
 class OpenFDATool(DataSourceTool):
     function_name = "cei-data-source-openfda"
     source_type = SourceType.OPENFDA
-    description = "Search openFDA for drug approvals (drugsfda), drug labels, and device 510(k) clearances."
+    description = (
+        "Search openFDA for drug approvals (drugsfda), drug labels, and device 510(k) clearances."
+    )
 
     class InputSchema(BaseModel):
         query: str
@@ -80,7 +90,7 @@ class OpenFDATool(DataSourceTool):
         api_key = os.environ.get("CEI_OPENFDA_API_KEY", "").strip()
         return {"api_key": api_key} if api_key else {}
 
-    def _direct_invoke(self, query: str, max_results: int = 10, **_: Any) -> DataSourceResult:
+    def fetch(self, query: str, max_results: int = 10, **_: Any) -> DataSourceResult:
         retrieved_at = datetime.now(timezone.utc)
         per_endpoint_limit = max(1, max_results // len(_ENDPOINTS))
         results: list[dict[str, Any]] = []
@@ -97,7 +107,7 @@ class OpenFDATool(DataSourceTool):
 
         for path, search_template, kind in _ENDPOINTS:
             try:
-                resp = requests.get(
+                resp = http.get(
                     f"{_BASE}/{path}",
                     params={
                         "search": _search_expression(search_template, terms),
@@ -112,7 +122,9 @@ class OpenFDATool(DataSourceTool):
                     continue
                 resp.raise_for_status()
                 for item in resp.json().get("results", [])[:per_endpoint_limit]:
-                    openfda = item.get("openfda", {}) if isinstance(item.get("openfda"), dict) else {}
+                    openfda = (
+                        item.get("openfda", {}) if isinstance(item.get("openfda"), dict) else {}
+                    )
                     brand_names = openfda.get("brand_name") or []
                     generic_names = openfda.get("generic_name") or []
                     title = (
@@ -129,7 +141,9 @@ class OpenFDATool(DataSourceTool):
                         or _first(openfda.get("application_number"))
                         or ""
                     )
-                    submissions = item.get("submissions") if isinstance(item.get("submissions"), list) else []
+                    submissions = (
+                        item.get("submissions") if isinstance(item.get("submissions"), list) else []
+                    )
                     original = next(
                         (sub for sub in submissions if sub.get("submission_type") == "ORIG"),
                         submissions[0] if submissions else {},
@@ -149,7 +163,9 @@ class OpenFDATool(DataSourceTool):
                         "kind": kind,
                         "title": title,
                         "application_number": application_number,
-                        "sponsor": item.get("sponsor_name") or item.get("applicant") or _first(openfda.get("manufacturer_name")),
+                        "sponsor": item.get("sponsor_name")
+                        or item.get("applicant")
+                        or _first(openfda.get("manufacturer_name")),
                         "date": str(year_source),
                     }
                     indications = _first(item.get("indications_and_usage"))[:_INDICATION_CHARS]
@@ -157,26 +173,35 @@ class OpenFDATool(DataSourceTool):
                         result_dict["indications"] = indications
                     results.append(result_dict)
                     source_id = f"OPENFDA:{kind}:{application_number or title[:30]}"
-                    citations.append(Citation(
-                        source_id=source_id,
-                        source_type=self.source_type,
-                        url=_citation_url(kind, item, application_number),
-                        title=str(title),
-                        authors=[str(item.get("sponsor_name") or item.get("applicant") or "FDA")],
-                        year=year,
-                        relevant_passage=(
-                            f"{kind} | application={application_number} | date={year_source}"
-                            + (f" | indication: {indications}" if indications else "")
-                        ),
-                        retrieved_at=retrieved_at,
-                    ))
+                    citations.append(
+                        Citation(
+                            source_id=source_id,
+                            source_type=self.source_type,
+                            url=_citation_url(kind, item, application_number),
+                            title=str(title),
+                            authors=[
+                                str(item.get("sponsor_name") or item.get("applicant") or "FDA")
+                            ],
+                            year=year,
+                            relevant_passage=(
+                                f"{kind} | application={application_number} | date={year_source}"
+                                + (f" | indication: {indications}" if indications else "")
+                            ),
+                            retrieved_at=retrieved_at,
+                        )
+                    )
             except Exception as exc:
-                logger.error({"event": "openfda_direct_invoke_error", "endpoint": path, "error": str(exc)})
+                logger.error({"event": "openfda_fetch_error", "endpoint": path, "error": str(exc)})
                 errors.append(f"{kind}: {exc!s}")
 
         return DataSourceResult(
             source_type=self.source_type,
             results=results[:max_results],
             citations=citations[:max_results],
-            query_metadata={"query": query, "terms": terms, "total": len(results), "errors": errors},
+            query_metadata={
+                "query": query,
+                "terms": terms,
+                "total": len(results),
+                "errors": errors,
+            },
         )

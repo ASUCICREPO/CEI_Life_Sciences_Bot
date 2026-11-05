@@ -32,7 +32,7 @@ def test_openfda_direct_invoke_parses_drug_and_device_records(monkeypatch) -> No
     ]})
 
     calls = iter([drugsfda_resp, label_resp, device_resp])
-    monkeypatch.setattr("shared.tools.data_sources.openfda.requests.get", lambda *a, **k: next(calls))
+    monkeypatch.setattr("shared.tools.data_sources.openfda.http.get", lambda *a, **k: next(calls))
 
     tool = OpenFDATool(direct_mode=True)
     result = tool.invoke(query="acmezolamide")
@@ -50,7 +50,7 @@ def test_openfda_direct_invoke_never_raises_on_http_error(monkeypatch) -> None:
     def _raise(*_a, **_k):
         raise RuntimeError("network down")
 
-    monkeypatch.setattr("shared.tools.data_sources.openfda.requests.get", _raise)
+    monkeypatch.setattr("shared.tools.data_sources.openfda.http.get", _raise)
     tool = OpenFDATool(direct_mode=True)
     result = tool.invoke(query="acmezolamide")
 
@@ -80,7 +80,7 @@ def test_patentsview_direct_invoke_parses_patents_with_key(monkeypatch) -> None:
             "assignees": [{"assignee_organization": "Acme Biotech"}],
         }
     ]})
-    monkeypatch.setattr("shared.tools.data_sources.patentsview.requests.get", lambda *a, **k: resp)
+    monkeypatch.setattr("shared.tools.data_sources.patentsview.http.get", lambda *a, **k: resp)
 
     tool = PatentsViewTool(direct_mode=True)
     result = tool.invoke(query="CRISPR gene editing")
@@ -97,7 +97,7 @@ def test_patentsview_direct_invoke_never_raises_on_http_error(monkeypatch) -> No
     def _raise(*_a, **_k):
         raise RuntimeError("network down")
 
-    monkeypatch.setattr("shared.tools.data_sources.patentsview.requests.get", _raise)
+    monkeypatch.setattr("shared.tools.data_sources.patentsview.http.get", _raise)
     tool = PatentsViewTool(direct_mode=True)
     result = tool.invoke(query="CRISPR")
 
@@ -121,7 +121,7 @@ def test_openfda_splits_or_terms_and_builds_one_clause_per_term(monkeypatch) -> 
         searches.append(params["search"])
         return _NotFound()
 
-    monkeypatch.setattr("shared.tools.data_sources.openfda.requests.get", _fake_get)
+    monkeypatch.setattr("shared.tools.data_sources.openfda.http.get", _fake_get)
     result = OpenFDATool(direct_mode=True).invoke(query="sotorasib OR adagrasib")
     assert result.results == []
     assert all('"sotorasib"' in s and '"adagrasib"' in s for s in searches)
@@ -132,6 +132,6 @@ def test_openfda_empty_query_makes_no_call(monkeypatch) -> None:
     def _fail(*_a, **_k):  # noqa: ANN002, ANN003
         raise AssertionError("no HTTP call expected")
 
-    monkeypatch.setattr("shared.tools.data_sources.openfda.requests.get", _fail)
+    monkeypatch.setattr("shared.tools.data_sources.openfda.http.get", _fail)
     result = OpenFDATool(direct_mode=True).invoke(query='""')
     assert result.results == [] and result.query_metadata["errors"] == ["empty query"]

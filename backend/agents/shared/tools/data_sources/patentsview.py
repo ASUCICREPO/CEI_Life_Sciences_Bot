@@ -6,11 +6,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
 from pydantic import BaseModel, Field
 
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, DataSourceTool
+from shared.tools import retrying_http as http
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class PatentsViewTool(DataSourceTool):
     def _build_payload(self, query: str, max_results: int = 10) -> dict[str, Any]:
         return {"query": query, "max_results": max_results}
 
-    def _direct_invoke(self, query: str, max_results: int = 10, **_: Any) -> DataSourceResult:
+    def fetch(self, query: str, max_results: int = 10, **_: Any) -> DataSourceResult:
         retrieved_at = datetime.now(timezone.utc)
         api_key = os.environ.get("CEI_PATENTSVIEW_API_KEY", "").strip()
         if not api_key:
@@ -59,7 +59,7 @@ class PatentsViewTool(DataSourceTool):
                 "patent_abstract",
                 "assignees.assignee_organization",
             ]
-            resp = requests.get(
+            resp = http.get(
                 _API,
                 params={
                     "q": json.dumps(search_query),
@@ -116,5 +116,5 @@ class PatentsViewTool(DataSourceTool):
                 query_metadata={"query": query, "total": len(results)},
             )
         except Exception as exc:
-            logger.error({"event": "patentsview_direct_invoke_error", "error": str(exc)})
+            logger.error({"event": "patentsview_fetch_error", "error": str(exc)})
             return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": str(exc)})
