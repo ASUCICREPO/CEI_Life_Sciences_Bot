@@ -226,7 +226,7 @@ def plan_research(state: DraftingState) -> dict[str, Any]:
         input_tokens=in_tok,
         output_tokens=out_tok,
     )
-    logger.info({"event": "plan_research_complete", "questions": questions})
+    logger.info({"event": "plan_research_complete", "question_count": len(questions)})
     return {"research_questions": questions, "trace": [trace]}
 
 
@@ -268,7 +268,7 @@ def research_subagent(state: DraftingState) -> dict[str, Any]:
     trace_entries: list[TraceEntry] = []
     for i, (question, result) in enumerate(zip(questions, results), start=1):
         if isinstance(result, Exception):
-            logger.error({"event": "research_subagent_error", "question": question, "error": repr(result)})
+            logger.error({"event": "research_subagent_error", "error_type": type(result).__name__})
             trace_entries.append(TraceEntry(stage="RESEARCH_SUBAGENT", detail=f"#{i} {question!r} — ERROR: {result!r}"))
             continue
         messages = result.get("messages", [])

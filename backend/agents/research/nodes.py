@@ -147,12 +147,12 @@ def retrieve(state: ResearchState) -> dict[str, Any]:
                     f"| citations={len(result.citations)}"
                 ),
             )
-            logger.info({"event": "retrieve_pubmed_fallback", "query": fallback_query, "count": len(result.results)})
+            logger.info({"event": "retrieve_pubmed_fallback", "count": len(result.results)})
             return {"retrieved_results": [result], "trace": [trace]}
         except GatewayUnavailableError:
             raise
         except Exception:
-            logger.exception({"event": "retrieve_pubmed_fallback_error", "query": fallback_query})
+            logger.error({"event": "retrieve_pubmed_fallback_error"})
             trace = TraceEntry(
                 stage="TOOL_CALL",
                 detail=f"Fallback behavior: PubMed invoked after triage selected no sources | query={fallback_query!r} | ERROR",
@@ -175,7 +175,7 @@ def retrieve(state: ResearchState) -> dict[str, Any]:
                 stage="TOOL_CALL",
                 detail=f"{source.value} | query={search_query!r} | results={len(result.results)} | citations={len(result.citations)}",
             ))
-            logger.info({"event": "retrieve_success", "source": source, "query": search_query, "count": len(result.results)})
+            logger.info({"event": "retrieve_success", "source": source, "count": len(result.results)})
         except GatewayUnavailableError:
             raise
         except Exception:

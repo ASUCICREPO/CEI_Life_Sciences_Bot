@@ -101,7 +101,7 @@ class InProcessDispatcher:
                 return await self._run_analysis(prompt, mode, sub_session_id, step.step_id, step.analysis_type, step.scope)
             return StepOutcome(status="failed", error=f"unknown agent {step.agent!r}")
         except Exception as exc:  # ADR: catch-all | one bad step must not crash the pipeline run
-            logger.error({"event": "dispatch_step_error", "step_id": step.step_id, "agent": step.agent, "error": repr(exc)})
+            logger.error({"event": "dispatch_step_error", "step_id": step.step_id, "agent": step.agent, "error_type": type(exc).__name__})
             return StepOutcome(status="failed", error=repr(exc))
 
     async def _run_research(

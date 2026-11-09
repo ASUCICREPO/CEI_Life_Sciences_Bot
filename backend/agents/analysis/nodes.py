@@ -258,7 +258,7 @@ def gather(state: AnalysisState) -> dict[str, Any]:
                 stage="TOOL_CALL",
                 detail=f"{source.value} | query={search_query!r} | results={len(result.results)} | citations={len(result.citations)}",
             ))
-            logger.info({"event": "gather_success", "source": source, "query": search_query, "count": len(result.results)})
+            logger.info({"event": "gather_success", "source": source, "count": len(result.results)})
         except Exception:
             logger.exception({"event": "gather_error", "source": source})
             trace_entries.append(TraceEntry(
