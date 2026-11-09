@@ -30,6 +30,14 @@ def test_parent_first_tabs_and_children_reconstruction_order():
     assert "children" not in events[2][2]["component"]
 
 
+def test_nested_surface_respects_existing_root_children():
+    stream = ResearchEventStream()
+    surface = {"root_id": "content", "components": [{"id": "content", "type": "Markdown", "content": "answer"}]}
+    _, _, body = decode(stream.components(surface, parent_id="root", index=2)[0])
+    assert body["parent_id"] == "root"
+    assert body["index"] == 2
+
+
 def test_invalid_graph_does_not_consume_sequence_numbers():
     stream = ResearchEventStream()
     with pytest.raises(ValueError):

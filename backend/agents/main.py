@@ -321,7 +321,10 @@ async def _stream_research(graph, initial_state, graph_config, context, session,
             component for component in surface["components"]
             if component["id"] not in ("root", "stream-preview") and not component["id"].startswith("stream-ground-")
         ]}
-        for frame in events.components(content, parent_id="root"):
+        # The preview and surviving pending blocks have already been appended to
+        # root. Insert the final content after them, matching the stored graph.
+        root = next(component for component in surface["components"] if component["id"] == "root")
+        for frame in events.components(content, parent_id="root", index=len(root["children"]) - 1):
             yield frame
         fields = {"surface_id": surface_id, "revision": 1, "root_id": "root", "final": True}
         if message_id:
