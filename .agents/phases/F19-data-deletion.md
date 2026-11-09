@@ -58,6 +58,6 @@ Let a user delete one chat, or their whole account, and have every trace of that
 
 ## Handoff notes
 
-- F5/F6 replay uses separate `sse#<user_sub>#<session_id>#<run_id>` partitions in the Chat History Store. The deletion cascade must discover and delete every replay partition for a deleted chat, including run headers and event items; deleting the ordinary session partition alone is insufficient. F5/F6 must provide a bounded, durable way to enumerate the run IDs before this deletion phase is considered complete.
+- F5/F6 replay uses separate `sse#<user_sub>#<session_id>#<run_id>` partitions in the Chat History Store. Query the Active-run table with `user_id` and the sort-key prefix `replay#<session_id>#` to enumerate the durable run index, delete each referenced history partition (including its run header and all events), and delete the index records. Deleting only the ordinary session partition is insufficient.
 - F20 (Alarms) may want a DynamoDB-throttling alarm to also cover the delete-worker's batch-delete calls (already covered generically by B75's "DynamoDB throttled requests" alarm — no new alarm needed).
 - F21 (Hardening) should specifically test the deletion cascade under load (many sessions, many attachments) as part of its load-test pass.
