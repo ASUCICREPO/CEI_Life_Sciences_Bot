@@ -7,6 +7,7 @@ import { NagSuppressions } from 'cdk-nag';
 import { aws_bedrockagentcore as agentcore } from 'aws-cdk-lib';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -67,6 +68,9 @@ export interface ToolGatewayProps {
   policyMode: ToolPolicyMode;
   /** B67: roles allowed to call POST /internal/token-refresh. Empty until F5 adds the agent runtime role. */
   refreshCallerRoleArns?: string[];
+  activeRunsTable?: dynamodb.ITable;
+  metadataTable?: dynamodb.ITable;
+  spaClientId?: string;
 }
 
 /**
@@ -116,16 +120,16 @@ export class ToolGateway extends Construct {
     // machine client has no user sign-in, and CDK omitting the property leaves Cognito's SRP/custom defaults on
     (this.routerClient.node.defaultChild as cognito.CfnUserPoolClient).explicitAuthFlows = ['ALLOW_REFRESH_TOKEN_AUTH'];
 
-    // ADR: placeholder Router role, trusted by Lambda and the account | Rationale: B30 — the real Session Router
-    // Lambda arrives in F5; this role holds the M2M secret until then, and account trust lets the F4 integration
-    // script (S2 pattern) mint scoped tokens | Alternative: no role until F5 rejected — task 2 needs the secret
-    // boundary now. F5 must point the secret at the real Router role and drop the account trust
+    // Keep the logical ID stable, but remove the former test-only account trust. Only Lambda may assume it.
     this.routerRole = new iam.Role(this, 'RouterPlaceholderRole', {
-      assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com'), new iam.AccountPrincipal(stack.account)),
-      description: 'F4 placeholder for the Session Router (F5). With the token-refresh Lambda, the only reader of the Router M2M secret.',
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      description: 'Session Router Lambda role. With token-refresh, the only reader of the Router M2M secret.',
     });
 
     const refreshRole = new iam.Role(this, 'TokenRefreshRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
+    if (props.activeRunsTable && props.metadataTable) {
+      refreshRole.addToPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [props.activeRunsTable.tableArn, props.metadataTable.tableArn] }));
+    }
 
     this.routerSecret = new secretsmanager.Secret(this, 'RouterM2MSecret', {
       description: 'Router M2M app client secret (F4, B30). Readable only by the Router and token-refresh roles.',
@@ -166,8 +170,9 @@ export class ToolGateway extends Construct {
     for (const sourceId of sourceIds) {
       this.sourceFunctions[sourceId] = this.pythonFunction(`DataSource-${sourceId}`, `data-source-${sourceId}`, {
         layers: [dataSourceLayer.layer],
-        // ADR: 90 s | Rationale: retrying_http allows 3 attempts x 10 s plus capped sleeps per upstream call, and PubMed/PubChem make two calls
-        timeout: Duration.seconds(90),
+        // openFDA queries three endpoints sequentially; each may consume the full retry budget.
+        // The other sources make at most two sequential requests (CMS detail requests are concurrent).
+        timeout: Duration.seconds(sourceId === 'openfda' ? 150 : 90),
         memorySize: 256,
         environment: {
           // The source Lambdas only call tool.fetch() (the real upstream call); no direct-mode switch is involved
@@ -298,6 +303,10 @@ export class ToolGateway extends Construct {
         TOKEN_ENDPOINT: `${props.cognitoDomainUrl}/oauth2/token`,
         ALLOWED_SCOPES: this.scopeNames.map(fullScope).join(','),
         ALLOWED_CALLER_ROLE_ARNS: (props.refreshCallerRoleArns ?? []).join(','),
+        ACTIVE_RUNS_TABLE: props.activeRunsTable?.tableName ?? '',
+        METADATA_TABLE: props.metadataTable?.tableName ?? '',
+        USER_POOL_ID: props.userPool.userPoolId,
+        SPA_CLIENT_ID: props.spaClientId ?? '',
       },
     });
     this.tokenRefreshFunction.node.addDependency(props.userPoolDomain);
@@ -330,7 +339,7 @@ export class ToolGateway extends Construct {
     out('ToolGatewayLogGroup', gatewayLogGroup.logGroupName, 'Tool Gateway APPLICATION_LOGS (policy decisions)');
     out('RouterClientId', this.routerClient.userPoolClientId, 'Router M2M app client id');
     out('RouterSecretArn', this.routerSecret.secretArn, 'Router M2M client secret (Router and token-refresh roles only)');
-    out('RouterRoleArn', this.routerRole.roleArn, 'F4 placeholder Router role (F5 replaces it)');
+    out('RouterRoleArn', this.routerRole.roleArn, 'Session Router Lambda execution role');
     out('ToolTokenEndpoint', `${props.cognitoDomainUrl}/oauth2/token`, 'Cognito OAuth token endpoint for Router tokens');
     out('ToolScopes', this.scopeNames.map(fullScope).join(','), 'Tool scopes on the cei-tools resource server');
 

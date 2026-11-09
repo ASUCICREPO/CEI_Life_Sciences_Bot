@@ -66,7 +66,7 @@ describe('BackendStack REST API + session store', () => {
     const iamMethods = methods.filter((m) => m.AuthorizationType === 'AWS_IAM');
     expect(iamMethods.map((m) => m.HttpMethod)).toEqual(['POST']);
     const real = methods.filter((m) => m.HttpMethod !== 'OPTIONS' && m.AuthorizationType !== 'AWS_IAM');
-    expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'PATCH', 'POST']);
+    expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST']);
     for (const method of real) {
       expect(method.AuthorizationType).toBe('COGNITO_USER_POOLS');
       expect(method.AuthorizerId).toBeDefined();
@@ -157,9 +157,9 @@ describe('BackendStack REST API + session store', () => {
     });
   });
 
-  it('creates both tables with the specified keys, encryption, PITR and no TTL', () => {
+  it('creates the session tables and active-run table with the specified keys', () => {
     const tables = template.findResources('AWS::DynamoDB::Table');
-    expect(Object.keys(tables)).toHaveLength(2);
+    expect(Object.keys(tables)).toHaveLength(3);
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       KeySchema: [
         { AttributeName: 'user_id', KeyType: 'HASH' },

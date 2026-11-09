@@ -7,7 +7,7 @@ import { DeployConfig, DEFAULT_LIMITS } from '../lib/config/deploy-config';
 import { assertNoScopeCollisions, cedarPermit, loadToolSchemas } from '../lib/constructs/tool-gateway';
 
 const FIXTURE_ASSET_PATH = path.join(__dirname, 'fixtures', 'spa');
-const SOURCE_IDS = ['pubmed', 'clinicaltrials', 'biorxiv', 'medrxiv', 'chembl', 'opentargets', 'cmscoverage', 'icd10', 'npi', 'pubchem'];
+const SOURCE_IDS = ['pubmed', 'clinicaltrials', 'biorxiv', 'medrxiv', 'chembl', 'opentargets', 'cmscoverage', 'icd10', 'npi', 'pubchem', 'openfda', 'patentsview'];
 const EXPECTED_SCOPES = [...SOURCE_IDS.map((id) => `src.${id}`), 'src.ncbi', 'common'];
 
 function testConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
@@ -97,7 +97,7 @@ describe('ToolGateway (F4)', () => {
       expect(deny.Action).toBe('secretsmanager:GetSecretValue');
       const allowed = deny.Condition.StringNotEquals['aws:PrincipalArn'];
       expect(allowed).toHaveLength(2);
-      const routerRole = logicalIdOf(template, 'AWS::IAM::Role', (p) => String(p.Description ?? '').startsWith('F4 placeholder for the Session Router'));
+      const routerRole = logicalIdOf(template, 'AWS::IAM::Role', (p) => String(p.Description ?? '').startsWith('Session Router Lambda role'));
       expect(JSON.stringify(allowed)).toContain(routerRole);
     });
   });
@@ -159,19 +159,19 @@ describe('ToolGateway (F4)', () => {
         .filter((p) => p.Roles.some((r: any) => r.Ref === gatewayRole))
         .flatMap((p) => p.PolicyDocument.Statement);
       const invoke = statements.find((s: any) => s.Action === 'lambda:InvokeFunction');
-      expect(invoke.Resource).toHaveLength(10);
+      expect(invoke.Resource).toHaveLength(SOURCE_IDS.length);
     });
   });
 
   describe('source Lambdas', () => {
     const sources = resourcesOf(template, 'AWS::Lambda::Function').filter((f) => f.Environment?.Variables?.CEI_API_KEY_SECRET_PREFIX);
 
-    it('deploys ten on Python 3.14 with a 90 s timeout and no direct-mode switch', () => {
-      expect(sources).toHaveLength(10);
+    it('uses Python 3.14 with bounded source timeouts and no direct-mode switch', () => {
+      expect(sources).toHaveLength(SOURCE_IDS.length);
       for (const fn of sources) {
         expect(fn.Environment.Variables.CEI_DIRECT_MODE).toBeUndefined();
         expect(fn.Runtime).toBe('python3.14');
-        expect(fn.Timeout).toBe(90);
+        expect([90, 150]).toContain(fn.Timeout);
         expect(fn.Layers).toHaveLength(1);
       }
     });

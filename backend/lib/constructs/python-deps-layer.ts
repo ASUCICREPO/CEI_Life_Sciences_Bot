@@ -10,6 +10,7 @@ const BACKEND_DIR = path.join(__dirname, '..', '..');
 const LAYER_DIR = path.join(BACKEND_DIR, 'lambdas', 'layers', 'python-deps');
 const PERSISTENCE_DIR = path.join(BACKEND_DIR, 'agents', 'shared', 'persistence');
 const CONFIG_FILE = path.join(BACKEND_DIR, 'agents', 'shared', 'config.py');
+const IDENTITY_FILE = path.join(BACKEND_DIR, 'agents', 'shared', 'runtime', 'identity.py');
 const HTTP_ERRORS_FILE = path.join(BACKEND_DIR, 'lambdas', 'shared', 'http_errors.py');
 
 const PIP_ARGS = [
@@ -34,6 +35,9 @@ function stageShared(pythonDir: string): void {
   // ADR: minimal shared/__init__.py | Rationale: the real one lazily exposes state.py (langgraph deps); the layer carries only persistence/ and config.py
   fs.writeFileSync(path.join(sharedDir, '__init__.py'), '');
   fs.copyFileSync(CONFIG_FILE, path.join(sharedDir, 'config.py'));
+  fs.mkdirSync(path.join(sharedDir, 'runtime'), { recursive: true });
+  fs.writeFileSync(path.join(sharedDir, 'runtime', '__init__.py'), '');
+  fs.copyFileSync(IDENTITY_FILE, path.join(sharedDir, 'runtime', 'identity.py'));
   copyPythonTree(PERSISTENCE_DIR, path.join(sharedDir, 'persistence'));
   fs.copyFileSync(HTTP_ERRORS_FILE, path.join(pythonDir, 'http_errors.py'));
 }
@@ -59,7 +63,7 @@ class LocalPythonBundling implements cdk.ILocalBundling {
 
 function sourceHash(): string {
   const hash = crypto.createHash('sha256');
-  const files = [path.join(LAYER_DIR, 'requirements.txt'), CONFIG_FILE, HTTP_ERRORS_FILE];
+  const files = [path.join(LAYER_DIR, 'requirements.txt'), CONFIG_FILE, IDENTITY_FILE, HTTP_ERRORS_FILE];
   const walk = (dir: string): void => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const full = path.join(dir, entry.name);
@@ -110,6 +114,7 @@ export class PythonDepsLayer extends Construct {
                 `pip install -r requirements.txt --platform manylinux2014_x86_64 --implementation cp --python-version 3.14 --only-binary=:all: -t /asset-output/python`,
                 'mkdir -p /asset-output/python/shared && : > /asset-output/python/shared/__init__.py',
                 'cp /src/agents-shared/config.py /asset-output/python/shared/config.py',
+                'mkdir -p /asset-output/python/shared/runtime && : > /asset-output/python/shared/runtime/__init__.py && cp /src/agents-shared/runtime/identity.py /asset-output/python/shared/runtime/identity.py',
                 'cp -r /src/agents-shared/persistence /asset-output/python/shared/persistence',
                 'cp /src/lambdas-shared/http_errors.py /asset-output/python/http_errors.py',
                 'find /asset-output/python -name __pycache__ -prune -exec rm -rf {} +',

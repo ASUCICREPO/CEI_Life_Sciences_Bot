@@ -59,7 +59,7 @@ describe.each([
 
   test('the expected session routes exist (list/create, get/rename, history)', () => {
     const verbs = nonOptions.map(([, m]) => (m as any).Properties.HttpMethod).sort();
-    expect(verbs).toEqual(['GET', 'GET', 'GET', 'PATCH', 'POST']);
+    expect(verbs).toEqual(['GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST']);
   });
 
   test('every non-OPTIONS method uses COGNITO_USER_POOLS with scopes and the stack authorizer', () => {

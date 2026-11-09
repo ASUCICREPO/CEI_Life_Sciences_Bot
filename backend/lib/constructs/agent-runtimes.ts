@@ -152,6 +152,13 @@ export class AgentRuntimes extends Construct {
 
     // ADR: JSON list string | Rationale: pydantic-settings parses list[str] env values as JSON (config.cognito_app_client_ids)
     const appClientIds = cdk.Fn.join('', ['["', props.spaClient.userPoolClientId, '"]']);
+    // B82 requires the maximum short-term retention. CloudFormation currently caps
+    // EventExpiryDuration at 365 days; retain checkpoints across stack removal.
+    const researchMemory = new agentcore.CfnMemory(this, 'ResearchMemory', {
+      name: 'CEIResearchMemory', eventExpiryDuration: 365,
+      description: 'Research short-term checkpoints scoped by user and session',
+    });
+    researchMemory.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     const environmentVariables: Record<string, string> = {
       CEI_AWS_REGION: stack.region,
       CEI_COGNITO_USER_POOL_ID: props.userPool.userPoolId,
@@ -182,8 +189,16 @@ export class AgentRuntimes extends Construct {
         authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingCognito(props.userPool, [props.spaClient]),
         // Layer 2 needs the raw bearer token in-process (identity.py verifies it against the JWKS again)
         requestHeaderConfiguration: { allowlistedHeaders: ['Authorization'] },
-        environmentVariables,
+        environmentVariables: def.id === 'Research'
+          ? { ...environmentVariables, CEI_RESEARCH_MEMORY_ID: researchMemory.attrMemoryId, CEI_REQUIRE_TOOL_GATEWAY: 'true' }
+          : environmentVariables,
       });
+      if (def.id === 'Research') {
+        runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+          actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent'],
+          resources: [researchMemory.attrMemoryArn],
+        }));
+      }
       this.grantData(runtime, props);
       props.codeInterpreter.grantUse(runtime);
       runtime.role.addToPrincipalPolicy(
@@ -215,6 +230,14 @@ export class AgentRuntimes extends Construct {
     }
     this.runtimes = runtimes;
     this.invocationUrls = invocationUrls;
+  }
+
+  /** Connect only Research to the trusted Gateway after both constructs exist. */
+  public configureResearchGateway(clientId: string, gatewayUrl: string): void {
+    const resource = this.runtimes.Research.node.defaultChild as agentcore.CfnRuntime;
+    resource.addPropertyOverride('EnvironmentVariables.CEI_GATEWAY_CLIENT_ID', clientId);
+    resource.addPropertyOverride('EnvironmentVariables.CEI_TOOL_GATEWAY_URL', gatewayUrl);
+    resource.addPropertyOverride('RequestHeaderConfiguration.RequestHeaderAllowlist', ['Authorization', 'X-Cei-Gateway-Token']);
   }
 
   /** Exactly the DynamoDB actions ConversationRecorder / ChatHistoryStore / checkpoint writer call. */
