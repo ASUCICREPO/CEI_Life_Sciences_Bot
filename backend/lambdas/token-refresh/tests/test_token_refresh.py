@@ -36,6 +36,7 @@ def env(monkeypatch):
     monkeypatch.setenv(
         "TOKEN_ENDPOINT", "https://cei-ls.auth.us-east-2.amazoncognito.com/oauth2/token"
     )
+    monkeypatch.setattr(refresh, "_user_verifier", lambda token: SUB)
 
 
 @pytest.fixture
@@ -43,7 +44,7 @@ def active(monkeypatch):
     """Make session s-1 an active run and record every token request."""
     minted: list = []
 
-    def lookup(session_id, job_id):
+    def lookup(user_id, session_id, run_id, job_id):
         return (
             refresh.ActiveRun(user_sub=SUB, session_id=session_id, scopes=SCOPES)
             if session_id == "s-1"
@@ -60,6 +61,8 @@ def active(monkeypatch):
 
 
 def event(body, caller=CALLER, method="POST", resource="/internal/token-refresh"):
+    if body and "session_id" in body:
+        body = {"run_id": "run-1", "user_token": "user-jwt", **body}
     return {
         "httpMethod": method,
         "resource": resource,
@@ -85,6 +88,22 @@ def test_inactive_run_is_refused(active):
     status, body = call(event({"session_id": "s-2"}))
     assert status == 404 and body["error"]["code"] == "not_found"
     assert active == []
+
+
+def test_invalid_user_token_is_refused_before_run_lookup(active, monkeypatch):
+    def reject(_token):
+        raise refresh.UnauthenticatedError("invalid")
+    monkeypatch.setattr(refresh, "_user_verifier", reject)
+    status, body = call(event({"session_id": "s-1"}))
+    assert status == 401 and body["error"]["code"] == "unauthorized"
+    assert active == []
+
+
+def test_verified_user_and_run_reach_lookup(monkeypatch):
+    calls = []
+    monkeypatch.setattr(refresh, "_run_lookup", lambda u, s, r, j: calls.append((u, s, r, j)))
+    status, _ = call(event({"session_id": "s-1", "run_id": "run-2"}))
+    assert status == 404 and calls == [(SUB, "s-1", "run-2", None)]
 
 
 def test_f4_default_fails_closed(monkeypatch):
@@ -144,7 +163,7 @@ def test_caller_cannot_choose_scopes(active):
 
 def test_run_scopes_outside_the_allowed_set_are_refused(monkeypatch):
     monkeypatch.setattr(
-        refresh, "_run_lookup", lambda s, j: refresh.ActiveRun(SUB, s, ("cei-tools/admin",))
+        refresh, "_run_lookup", lambda u, s, r, j: refresh.ActiveRun(SUB, s, ("cei-tools/admin",))
     )
     monkeypatch.setattr(refresh, "_token_requester", lambda run: pytest.fail("must not mint"))
     assert call(event({"session_id": "s-1"}))[0] == 500
