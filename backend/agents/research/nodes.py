@@ -16,6 +16,7 @@ from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
+from shared.tools.base import GatewayUnavailableError
 from shared.utils import extract_tokens, get_model, last_human_message
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,26 @@ Answer the scientific question in text. Never claim that you can or cannot gener
 _SYNTHESIS_MAX_TOKENS = 8192
 
 
+def estimate_research_duration_seconds(plan: TriagePlan) -> int:
+    """Conservative source-budget estimate, derived only from the server's triage.
+
+    Retrieval currently runs serially. Gateway source Lambdas have 90-second
+    timeouts except openFDA (150); allow another 60 seconds for model stages.
+    It is an estimate, not a guarantee about model or upstream latency.
+    """
+    sources = set(plan.selected_sources) or {SourceType.PUBMED}
+    return 60 + sum(150 if source == SourceType.OPENFDA else 90 for source in sources)
+
+
+def _source_query_args(source: SourceType, query: str) -> dict[str, str]:
+    # These source APIs use distinct names for their primary search field.
+    if source == SourceType.OPEN_TARGETS:
+        return {"target": query}
+    if source == SourceType.NPI_REGISTRY:
+        return {"name": query}
+    return {"query": query}
+
+
 def _fallback_pubmed_query(query: str) -> str:
     cleaned_query = _PRESENTATION_ONLY_PHRASES.sub("", query)
     cleaned_query = re.sub(r"\b(?:and|or)\b\s*(?=$|[.,;:])", "", cleaned_query, flags=re.IGNORECASE)
@@ -128,6 +149,8 @@ def retrieve(state: ResearchState) -> dict[str, Any]:
             )
             logger.info({"event": "retrieve_pubmed_fallback", "query": fallback_query, "count": len(result.results)})
             return {"retrieved_results": [result], "trace": [trace]}
+        except GatewayUnavailableError:
+            raise
         except Exception:
             logger.exception({"event": "retrieve_pubmed_fallback_error", "query": fallback_query})
             trace = TraceEntry(
@@ -146,13 +169,15 @@ def retrieve(state: ResearchState) -> dict[str, Any]:
             continue
         search_query = plan.source_queries.get(source.value, state["query"])
         try:
-            result = tool.invoke(query=search_query)
+            result = tool.invoke(**_source_query_args(source, search_query))
             results.append(result)
             trace_entries.append(TraceEntry(
                 stage="TOOL_CALL",
                 detail=f"{source.value} | query={search_query!r} | results={len(result.results)} | citations={len(result.citations)}",
             ))
             logger.info({"event": "retrieve_success", "source": source, "query": search_query, "count": len(result.results)})
+        except GatewayUnavailableError:
+            raise
         except Exception:
             logger.exception({"event": "retrieve_error", "source": source})
             trace_entries.append(TraceEntry(
@@ -197,6 +222,11 @@ def synthesize(state: ResearchState) -> dict[str, Any]:
         "Lead with graphics and structured blocks; use prose only where explanation is required."
     ) if context else f"Query: {query}"
     structured_system_prompt = loader.system_prompt(mode, structured_blocks=True)
+    on_prose_delta = None
+    if state.get("stream"):
+        from langgraph.config import get_stream_writer
+        writer = get_stream_writer()
+        on_prose_delta = lambda delta: writer({"type": "prose_delta", "delta": delta})
     parsed, raw, error = invoke_structured(
         get_model(max_tokens=_SYNTHESIS_MAX_TOKENS),
         ResponseDocument,
@@ -204,11 +234,18 @@ def synthesize(state: ResearchState) -> dict[str, Any]:
             {"role": "system", "content": structured_system_prompt},
             {"role": "user", "content": structured_user_prompt},
         ],
+        **({"on_prose_delta": on_prose_delta} if on_prose_delta is not None else {}),
     )
 
     trace_entries: list[TraceEntry] = []
     if parsed is not None:
         try:
+            if state.get("stream"):
+                in_tok, out_tok = extract_tokens(raw) if raw is not None else (0, 0)
+                return {"synthesis": render_document_markdown(parsed), "response_document": parsed,
+                        "grounding_pending": True,
+                        "trace": [TraceEntry(stage="SYNTHESIS", detail=f"mode={mode} | structured=true",
+                                             input_tokens=in_tok, output_tokens=out_tok)]}
             corpus = build_corpus(query, *context_parts, *evidence_texts)
             doc, notes = ground_document(parsed, corpus)
             synthesis_text = render_document_markdown(doc)
@@ -260,6 +297,23 @@ def synthesize(state: ResearchState) -> dict[str, Any]:
         "messages": [AIMessage(content=synthesis_text)],
         "trace": trace_entries,
     }
+
+
+def ground_synthesis(state: ResearchState) -> dict[str, Any]:
+    """Ground the structured streaming draft after its pending blocks are emitted."""
+    if not state.get("grounding_pending"):
+        return {}
+    context_parts: list[str] = []
+    for result in state.get("retrieved_results", []):
+        context_parts.extend(str(item) for item in result.results)
+        for citation in result.citations:
+            context_parts.extend([citation.title, citation.relevant_passage or ""])
+    corpus = build_corpus(state["query"], *context_parts)
+    doc, notes = ground_document(state["response_document"], corpus)
+    synthesis_text = render_document_markdown(doc)
+    return {"synthesis": synthesis_text, "response_document": doc, "grounding_pending": False,
+            "messages": [AIMessage(content=synthesis_text)],
+            "trace": [TraceEntry(stage="GROUNDING", detail=note) for note in notes]}
 
 
 def cite(state: ResearchState) -> dict[str, Any]:

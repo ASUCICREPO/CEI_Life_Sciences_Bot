@@ -16,6 +16,8 @@ class TriagePlan(BaseModel):
 
 
 class ResearchState(BaseAgentState):
+    stream: bool
+    grounding_pending: bool
     query: str
     triage_plan: TriagePlan | None
     retrieved_results: list[DataSourceResult]
