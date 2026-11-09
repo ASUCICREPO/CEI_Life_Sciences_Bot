@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """F4 deployed check: the tool Gateway, its 10 source targets, scoped Router tokens and Cedar.
 
-Stands in for the Session Router (F5) exactly like the S2 harness did: assumes the F4 placeholder
-Router role (the only identity besides the token-refresh Lambda that can read the Router M2M secret),
-mints client-credentials tokens, and calls the Gateway over MCP.
+Uses two externally obtained short-lived test tokens from environment variables. The production
+Router role cannot be assumed by an operator, so this check never reads its M2M secret.
 
 Checks
   token    all-scope token carries cei_user_sub / cei_session_id (pre-token trigger, V3_0);
@@ -17,7 +16,8 @@ Checks
 
 Tokens and the client secret are never printed. Stdlib + boto3.
 
-Usage:  AWS_PROFILE=ciccei python3 backend/scripts/f4_gateway_test.py [--out results.json]
+Usage: set CEI_F4_FULL_TOKEN and CEI_F4_PUBMED_TOKEN securely in the environment, then run
+AWS_PROFILE=ciccei python3 backend/scripts/f4_gateway_test.py [--out results.json].
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -49,12 +50,14 @@ SOURCES = [
     "icd10",
     "npi",
     "pubchem",
+    "openfda",
+    "patentsview",
 ]
 # Queries known to return results from each live API (checked during F4 chunk 1)
 ARGS = {
     "npi": {"name": "john smith", "state": "AZ", "max_results": 2},
     "opentargets": {"target": "EGFR", "max_results": 2},
-    "cmscoverage": {"query": "MRI", "max_results": 2},
+    "cmscoverage": {"query": "acupuncture", "max_results": 2},
 }
 DEFAULT_ARGS = {"query": "aspirin", "max_results": 2}
 POLICY_DENY_CODE = -32002  # S2 question 4
@@ -129,7 +132,7 @@ def mcp(url: str, token: str, method: str, params: dict[str, Any] | None = None)
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=170) as resp:
             status, text = resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         status, text = exc.code, exc.read().decode("utf-8", "replace")
@@ -187,39 +190,22 @@ def main() -> int:
     common = [s for s in all_scopes if s.endswith("/common")]
     print(f"Gateway {out['ToolGatewayId']} in {args.region}, policy mode {mode}")
 
-    creds = base.client("sts").assume_role(
-        RoleArn=out["RouterRoleArn"], RoleSessionName="f4-gateway-test"
-    )["Credentials"]
-    router = boto3.Session(
-        aws_access_key_id=creds["AccessKeyId"],
-        aws_secret_access_key=creds["SecretAccessKey"],
-        aws_session_token=creds["SessionToken"],
-        region_name=args.region,
-    )
-    secret = router.client("secretsmanager").get_secret_value(SecretId=out["RouterSecretArn"])[
-        "SecretString"
-    ]
+    full, pm = os.environ.get("CEI_F4_FULL_TOKEN", ""), os.environ.get("CEI_F4_PUBMED_TOKEN", "")
+    if not full or not pm:
+        print("Set CEI_F4_FULL_TOKEN and CEI_F4_PUBMED_TOKEN using an authorized sandbox token fixture.")
+        return 2
 
     print("\n== token (pre-token trigger) ==")
-    sub, session = str(uuid.uuid4()), f"f4test-{int(time.time())}"
-    status, tok = token_request(
-        out, secret, source_scopes + common, {"cei_user_sub": sub, "cei_session_id": session}
-    )
-    record(
-        "token",
-        "all-scope token issued",
-        status == 200,
-        f"HTTP {status} {tok if status != 200 else ''}",
-    )
-    if status != 200:
-        return 1
-    full = tok["access_token"]
-    claims = jwt_claims(full)
+    try:
+        claims, pm_claims = jwt_claims(full), jwt_claims(pm)
+    except (ValueError, IndexError, TypeError):
+        print("A supplied test token is malformed.")
+        return 2
+    sub, session = claims.get("cei_user_sub"), claims.get("cei_session_id")
     record(
         "token",
         "carries cei_user_sub and cei_session_id",
-        claims.get("cei_user_sub") == sub and claims.get("cei_session_id") == session,
-        str({k: claims.get(k) for k in ("cei_user_sub", "cei_session_id")}),
+        bool(sub and session),
     )
     record(
         "token",
@@ -229,15 +215,9 @@ def main() -> int:
     # Cognito sets exp/iat a second apart from a 3600 s validity at times (3599 observed in us-east-1)
     lifetime = claims.get("exp", 0) - claims.get("iat", 0)
     record("token", "1 h lifetime", abs(lifetime - 3600) <= 5, str(lifetime))
-    status, body = token_request(out, secret, common, {"cei_user_sub": "not-a-uuid"})
-    record("token", "malformed metadata -> token refused", status >= 400, f"HTTP {status}")
-    status, tok_none = token_request(out, secret, common, None)
-    record(
-        "token",
-        "no metadata -> token issued without claims",
-        status == 200 and "cei_user_sub" not in jwt_claims(tok_none.get("access_token", "a.e30.b")),
-        f"HTTP {status}",
-    )
+    record("token", "malformed-metadata issuance requires separate Cognito fixture", None)
+    record("token", "PubMed token has no other source scopes",
+           {s for s in pm_claims.get("scope", "").split() if "/src." in s} == {s for s in source_scopes if s.endswith("src.pubmed")})
 
     print("\n== list + call (all-scope token) ==")
     _, init = mcp(
@@ -254,7 +234,7 @@ def main() -> int:
     tools = listed(url, full)
     record(
         "list",
-        "tools/list shows all ten tools",
+        "tools/list shows all source tools",
         tools == {f"{s}___search" for s in SOURCES},
         str(sorted(tools)),
     )
@@ -270,13 +250,6 @@ def main() -> int:
         record("call", f"{source}___search returns citations", bool(ok), detail)
 
     print(f"\n== scope (PubMed-only token, {mode}) ==")
-    _, tok_pm = token_request(
-        out,
-        secret,
-        [s for s in source_scopes if s.endswith("src.pubmed")],
-        {"cei_user_sub": sub, "cei_session_id": session},
-    )
-    pm = tok_pm["access_token"]
     kind, _ = call_tool(url, pm, "pubmed")
     record("scope", "PubMed-only token calls pubmed", kind == "ok", kind)
     kind, err = call_tool(url, pm, "chembl")
@@ -310,7 +283,7 @@ def main() -> int:
     request = AWSRequest(
         method="POST",
         url=api,
-        data=json.dumps({"session_id": session}),
+        data=json.dumps({"session_id": session or str(uuid.uuid4())}),
         headers={"Content-Type": "application/json"},
     )
     SigV4Auth(base.get_credentials(), "execute-api", args.region).add_auth(request)

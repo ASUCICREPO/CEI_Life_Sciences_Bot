@@ -196,16 +196,14 @@ describe('BackendStack', () => {
       template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 1);
     });
 
-    it('has the SPA fallback custom error responses', () => {
+    it('uses a viewer-request SPA fallback without rewriting API errors', () => {
       const app = new cdk.App();
       const stack = testStack(app, 'TestStack');
       const template = Template.fromStack(stack);
       template.hasResourceProperties('AWS::CloudFront::Distribution', {
         DistributionConfig: Match.objectLike({
-          CustomErrorResponses: Match.arrayWith([
-            Match.objectLike({ ErrorCode: 403, ResponseCode: 200, ResponsePagePath: '/index.html' }),
-            Match.objectLike({ ErrorCode: 404, ResponseCode: 200, ResponsePagePath: '/index.html' }),
-          ]),
+          CustomErrorResponses: Match.absent(),
+          DefaultCacheBehavior: Match.objectLike({ FunctionAssociations: Match.arrayWith([Match.objectLike({ EventType: 'viewer-request' })]) }),
         }),
       });
     });
@@ -362,9 +360,9 @@ describe('BackendStack', () => {
       );
     });
 
-    it('enables PITR, retains, and sets no TTL on both tables', () => {
+    it('enables PITR, retains, and sets no TTL on the tables', () => {
       const { all } = tables();
-      expect(all).toHaveLength(2);
+      expect(all).toHaveLength(3);
       for (const t of all) {
         expect(t.Properties.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
         expect(t.Properties.BillingMode).toBe('PAY_PER_REQUEST');
@@ -433,11 +431,11 @@ describe('BackendStack', () => {
       expect(grants.filter((g) => onHistoryTable(g.resource)).map((g) => g.action)).toEqual(['dynamodb:Query']);
     });
 
-    it('gives the history Lambda only GetItem on metadata and Query on history', () => {
+    it('grants history and trace reads on the correct tables', () => {
       const grants = dynamoGrants(/^SessionHistoryHandlerRole/);
       const metadataActions = grants.filter((g) => g.resource.includes('ChatMetadataStore')).map((g) => g.action);
       expect(metadataActions).toEqual(['dynamodb:GetItem']);
-      expect(grants.filter((g) => onHistoryTable(g.resource)).map((g) => g.action)).toEqual(['dynamodb:Query']);
+      expect(grants.filter((g) => onHistoryTable(g.resource)).map((g) => g.action).sort()).toEqual(['dynamodb:BatchGetItem', 'dynamodb:GetItem', 'dynamodb:Query']);
     });
   });
 });

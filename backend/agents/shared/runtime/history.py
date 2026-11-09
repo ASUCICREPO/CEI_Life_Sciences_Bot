@@ -122,7 +122,8 @@ async def end_turn(
     recorder: ConversationRecorder | None = None,
     saver: BaseCheckpointSaver | None = None,
     trace: Sequence[object] | None = None,
-) -> None:
+    stream_trace_events: list[dict[str, Any]] | None = None,
+) -> str | None:
     """Record the answer from a runtime response envelope (`text` + optional `ui`); with a `saver`, snapshot the
     thread's checkpoint in the background under the AI turn's sequence. With `trace` (the run's TraceEntry list),
     persist its REDACTED events under the AI turn (F6, B7/B9) — best-effort. Never raises."""
@@ -141,11 +142,17 @@ async def end_turn(
         )
     except Exception:  # noqa: BLE001
         log.exception("chat history: could not record answer session=%s", session_id)
-        return
+        return None
     if saver is not None and isinstance(sequence, int):
         checkpointing.schedule_checkpoint_save(user_id=user_id, session_id=session_id, saver=saver, version=sequence)
-    if trace and isinstance(sequence, int):
+    if stream_trace_events and isinstance(sequence, int):
+        try:
+            await asyncio.to_thread(get_trace_repository().save, user_id, session_id, sequence, message_id, stream_trace_events)
+        except Exception:
+            log.exception("chat history: could not record streamed trace session=%s turn=%s", session_id, sequence)
+    elif trace and isinstance(sequence, int):
         await save_trace(user_id=user_id, session_id=session_id, turn_seq=sequence, message_id=message_id, trace=trace)
+    return message_id if isinstance(sequence, int) else None
 
 
 @lru_cache(maxsize=1)

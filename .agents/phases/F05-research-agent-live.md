@@ -1,6 +1,6 @@
 # F05 — Research agent live
 
-Status: not started | Depends on: F3, F4, S1 | Decisions: B3, B15, B17, B22, B23/B79 (10-minute threshold, decided), B26, B28, B30, B85 | Specs: [`../specs/agents.md`](../specs/agents.md) §1 (Research Agent), §6 (cross-agent mechanisms), §7 (gap table), [`../specs/architecture.md`](../specs/architecture.md) §2.1, [`../specs/api.md`](../specs/api.md) (`/chat/stream`), [`../specs/streaming-protocol.md`](../specs/streaming-protocol.md) (base transport, not yet the full 1.2 UI wiring — that's F6)
+Status: in progress (isolated foundations; production route and live validation pending) | Depends on: F3, F4, S1 | Decisions: B3, B15, B17, B22, B23/B79 (10-minute threshold, decided), B26, B28, B30, B85, B100 | Specs: [`../specs/agents.md`](../specs/agents.md) §1 (Research Agent), §6 (cross-agent mechanisms), §7 (gap table), [`../specs/architecture.md`](../specs/architecture.md) §2.1, [`../specs/api.md`](../specs/api.md) (`/chat/stream`), [`../specs/streaming-protocol.md`](../specs/streaming-protocol.md) (base transport, not yet the full 1.2 UI wiring — that's F6)
 
 ## Goal
 
@@ -30,7 +30,7 @@ Deploy the existing Research agent graph to AgentCore Runtime, build the real No
 - [ ] 5. Re-point F4's Router-M2M-client IAM restriction (task 2 of F04) from its placeholder role to this Router Lambda's real execution role.
 - [ ] 6. Write the Session Runner Lambda (Node.js): accept `POST /chat/stream`, call the Router, relay the Router/Runtime's streamed chunks as SSE using S1's confirmed event framing (this phase can emit a minimal event set — `surface_begin`/`text_delta`-equivalent/`surface_end`/`error` — full 1.2 catalog is F6).
 - [ ] 7. Add the `/chat/stream` STREAM route to the existing `RestApi`, reusing the same Cognito authorizer as every other route (per S1's confirmed combination).
-- [ ] 8. Implement the async-threshold check: the `triage` step estimate (source count/step count) compared against B79's decided `async_threshold_seconds` (600s); if exceeded, emit a `job_handoff`-shaped event pointing at a `/jobs/{id}` path that does not resolve to anything real yet — mark this explicitly in code comments and in this phase's Risks section, not silently. This decision happens once, before any streaming starts; there is no mechanism to switch a run already streaming over to async mid-run (B79).
+- [ ] 8. Implement the async-threshold check: compare the `triage` step estimate (source count/step count) against 600 seconds. Until F16 provides jobs, return a recoverable explanation that background processing is unavailable, without a job handoff or broken link (B100). Decide once before streaming; there is no mid-run handoff (B79).
 - [ ] 9. Implement the per-user real-time concurrency limit: increment/decrement the Active-run counters table (`data-model.md` §6) around each run, rejecting a third concurrent real-time run with `concurrency_limit` per `api.md`'s error table.
 - [ ] 10. End-to-end manual test: a logged-in user submits a dashboard research task, sees a real answer streamed back, backed by real Gateway tool calls.
 

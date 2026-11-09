@@ -12,11 +12,13 @@ export type StreamingSurfaceProps = {
   agent: AgentName;
   /** Request body for POST /chat/stream (prompt, agent, mode, ...). */
   body: Record<string, unknown>;
-  /** Stream URL; defaults to `${apiBaseUrl ?? '/api'}/chat/stream`. */
+  /** Stream URL; defaults to the same-origin CloudFront streaming route. */
   url?: string;
   /** The AI turn's message id, once known (enables the lazy trace fetch after the stream ends). */
   messageId?: string;
   onStateChange?: (state: StreamState) => void;
+  /** Called on a terminal protocol event or unrecoverable connection failure. */
+  onFinished?: (state: StreamState, connectionError: string | null) => void;
   /** Injected for tests. */
   openStreamImpl?: (options: OpenStreamOptions) => AsyncIterable<StreamEvent>;
 };
@@ -28,17 +30,20 @@ const PROGRESS_LABEL: Record<NonNullable<StreamState['progress']>['status'], str
   finalizing: 'Finalizing',
 };
 
-export function StreamingSurface({ sessionId, agent, body, url, messageId, onStateChange, openStreamImpl }: StreamingSurfaceProps) {
-  const { getAccessToken, config } = useAuth();
+export function StreamingSurface({ sessionId, agent, body, url, messageId, onStateChange, onFinished, openStreamImpl }: StreamingSurfaceProps) {
+  const { getAccessToken } = useAuth();
   const [state, dispatch] = useReducer(reduceEvent, initialStreamState);
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const streamUrl = url ?? `${(config?.apiBaseUrl ?? '/api').replace(/\/+$/, '')}/chat/stream`;
+  const streamUrl = url ?? '/chat/stream';
   const bodyKey = JSON.stringify(body);
   // Latest token getter / opener in refs: a new identity must not abort and re-open a live stream.
   const tokenRef = useRef(getAccessToken);
   tokenRef.current = getAccessToken;
   const openRef = useRef(openStreamImpl ?? defaultOpenStream);
   openRef.current = openStreamImpl ?? defaultOpenStream;
+  const finishedRef = useRef(false);
+  const finishedCallback = useRef(onFinished);
+  finishedCallback.current = onFinished;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -67,6 +72,23 @@ export function StreamingSurface({ sessionId, agent, body, url, messageId, onSta
     onStateChange?.(state);
   }, [state, onStateChange]);
 
+  useEffect(() => {
+    if (finishedRef.current || (!connectionError && (state.status === 'idle' || state.status === 'streaming'))) return;
+    finishedRef.current = true;
+    finishedCallback.current?.(state, connectionError);
+  }, [state, connectionError]);
+
+  return <StreamView state={state} connectionError={connectionError} sessionId={sessionId} agent={agent} messageId={messageId} />;
+}
+
+/** Render a saved stream state without opening another network request. */
+export function StreamView({ state, connectionError, sessionId, agent, messageId }: {
+  state: StreamState;
+  connectionError?: string | null;
+  sessionId: string;
+  agent: AgentName;
+  messageId?: string;
+}) {
   const tree = selectTree(state);
   const pendingGrounding = Object.values(state.grounding).filter((detail) => detail.status === 'pending').length;
   const streaming = state.status === 'streaming' || state.status === 'idle';
@@ -82,7 +104,7 @@ export function StreamingSurface({ sessionId, agent, body, url, messageId, onSta
             : ''}
         </p>
       )}
-      <ThinkingBlock traceEvents={state.traceEvents} status={state.status} sessionId={sessionId} messageId={messageId} />
+      <ThinkingBlock traceEvents={state.traceEvents} status={state.status} sessionId={sessionId} messageId={messageId ?? state.messageId ?? undefined} />
       {tree && <CEIUISurface surface={tree} agent={agent} sessionId={sessionId} disabled={streaming} />}
       {pendingGrounding > 0 && (
         <p className="text-xs text-text-tertiary" role="status" data-testid="grounding-pending">

@@ -19,6 +19,10 @@ import {
 import type { CEIUISurface as CEIUISurfaceType } from '../lib/cei-ui/schema';
 import { SessionsClientError, type HistoryMessage } from '../lib/sessionsClient';
 import { useSessionsClient } from '../lib/useSessions';
+import { useAuth } from '../lib/auth/AuthProvider';
+import { StreamingSurface, StreamView } from './streaming/StreamingSurface';
+import { ThinkingBlock } from './streaming/ThinkingBlock';
+import type { StreamState } from '../lib/stream/reducer';
 
 interface LiveMessage {
   id: string;
@@ -28,6 +32,8 @@ interface LiveMessage {
   uiError?: string;
   answered?: boolean;
   isError?: boolean;
+  historyMessageId?: string;
+  stream?: { state: StreamState; connectionError: string | null };
 }
 
 interface LiveAgentChatProps {
@@ -59,6 +65,7 @@ function toLiveMessages(items: HistoryMessage[]): LiveMessage[] {
       surface: item.ui,
       uiError: item.ui_error,
       answered: true,
+      historyMessageId: item.role === 'ai' ? item.message_id : undefined,
     }));
 }
 
@@ -68,9 +75,13 @@ function toLiveMessages(items: HistoryMessage[]): LiveMessage[] {
 export function LiveAgentChat({ agent, mode, analysisType, documentType, threadKey, resumeSessionId, title, description, examples, placeholder }: LiveAgentChatProps) {
   const navigate = useNavigate();
   const sessionsClient = useSessionsClient();
+  const { config } = useAuth();
+  const useResearchStream = agent === 'research' && config?.researchStreamingEnabled === true;
   // One session per mounted chat: a resumed chat continues its own session, anything else starts a new one.
   // Lazy state so the id is fixed for this chat's lifetime; the parent remounts via `key`.
-  const [sessionId] = useState(() => resumeSessionId ?? startNewSessionId(threadKey));
+  const [sessionId, setSessionId] = useState(() => resumeSessionId ?? startNewSessionId(threadKey));
+  const createdSessionId = useRef<string | undefined>(resumeSessionId);
+  const [activeStream, setActiveStream] = useState<{ sessionId: string; body: Record<string, unknown> } | null>(null);
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isRunning, setIsRunning] = useState(false);
@@ -189,17 +200,44 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
     setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', text: trimmed }]);
     setInputValue('');
     setIsRunning(true);
+    let streamStarted = false;
     try {
+      if (useResearchStream) {
+        let currentSessionId = createdSessionId.current;
+        if (!currentSessionId) {
+          const created = await sessionsClient.createSession({ title: trimmed.slice(0, 100), mode });
+          currentSessionId = created.session_id;
+          createdSessionId.current = currentSessionId;
+          setSessionId(currentSessionId);
+        }
+        setActiveStream({
+          sessionId: currentSessionId,
+          body: { session_id: currentSessionId, run_id: crypto.randomUUID(), message: trimmed, task_type: threadKey, mode },
+        });
+        streamStarted = true;
+        return;
+      }
       const payload = buildRunPayload(agent, { prompt: trimmed, mode, analysisType, documentType });
       const envelope = await invokeAgent(agent, payload, sessionId);
       appendFromEnvelope(envelope);
     } catch (error) {
-      const message = error instanceof AgentClientError ? error.message : 'The agent could not be reached. Try again in a moment.';
+      const message = error instanceof AgentClientError || error instanceof SessionsClientError ? error.message : 'The agent could not be reached. Try again in a moment.';
       setMessages((prev) => [...prev, { id: `error-${Date.now()}`, role: 'assistant', text: message, isError: true }]);
     } finally {
-      setIsRunning(false);
+      // Streaming completion owns the running state; setup failures must still unlock the form.
+      if (!streamStarted) setIsRunning(false);
     }
   }
+
+  const finishStream = useCallback((state: StreamState, connectionError: string | null) => {
+    setMessages((prev) => [...prev, {
+      id: `stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      role: 'assistant',
+      stream: { state, connectionError },
+    }]);
+    setActiveStream(null);
+    setIsRunning(false);
+  }, []);
 
   function handleAction(messageId: string, envelope: AgentEnvelope) {
     // ADR: disable the answered gate, then append the resumed surface as a new
@@ -232,7 +270,12 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
             {message.uiError && (
               <p className="text-xs text-evidence-moderate mb-1.5">{message.uiError} Showing the plain-text answer instead.</p>
             )}
-            {message.surface ? (
+            {useResearchStream && message.historyMessageId && (
+              <ThinkingBlock traceEvents={[]} status="ended" sessionId={sessionId} messageId={message.historyMessageId} />
+            )}
+            {message.stream ? (
+              <StreamView state={message.stream.state} connectionError={message.stream.connectionError} sessionId={sessionId} agent={agent} />
+            ) : message.surface ? (
               <CEIUISurface
                 surface={message.surface}
                 agent={agent}
@@ -316,7 +359,17 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
           </div>
         )}
 
-        {isRunning && (
+        {activeStream && (
+          <div className="flex items-start gap-3 pb-5">
+            <div className="w-6 h-6 rounded-full bg-cei-blue flex items-center justify-center flex-shrink-0 mt-0.5">
+              <Bot size={12} className="text-white" />
+            </div>
+            <div className="flex-1 min-w-0 max-w-3xl">
+              <StreamingSurface sessionId={activeStream.sessionId} agent={agent} body={activeStream.body} onFinished={finishStream} />
+            </div>
+          </div>
+        )}
+        {isRunning && !activeStream && (
           <div className="flex items-start gap-3">
             <div className="w-6 h-6 rounded-full bg-cei-blue flex items-center justify-center flex-shrink-0 mt-0.5">
               <Bot size={12} className="text-white" />

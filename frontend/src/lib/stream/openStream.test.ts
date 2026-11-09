@@ -95,15 +95,55 @@ describe('openStream', () => {
     expect(events.map((event) => event.type)).toEqual(['surface_begin', 'component_add', 'component_add', 'surface_end']);
   });
 
-  it('retries 5xx with backoff and gives up after maxReconnects', async () => {
+  it('does not retry an initial 503 before the first event', async () => {
     const delays: number[] = [];
     const { calls, impl } = fakeFetch(Array.from({ length: 5 }, () => () => new Response('x', { status: 503 })));
     await expect(collect(openStream({
       url: '/s', body: {}, getToken: async () => 'tok', fetchImpl: impl, maxReconnects: 2,
       sleep: async (ms) => { delays.push(ms); },
     }))).rejects.toBeInstanceOf(StreamError);
+    expect(calls).toHaveLength(1);
+    expect(delays).toEqual([]);
+  });
+
+  it('retries replay failures with backoff and preserves the run and sequence', async () => {
+    const delays: number[] = [];
+    const { calls, impl } = fakeFetch([
+      () => new Response(streamOf([BEGIN, ROOT], { fail: true })),
+      () => new Response('unavailable', { status: 503 }),
+      () => new Response('unavailable', { status: 503 }),
+    ]);
+    await expect(collect(openStream({
+      url: '/chat/stream', body: { session_id: 'session', run_id: 'run' },
+      getToken: async () => 'tok', fetchImpl: impl, maxReconnects: 2,
+      sleep: async (ms) => { delays.push(ms); },
+    }))).rejects.toMatchObject({ message: 'The connection was lost and could not be resumed.' });
     expect(calls).toHaveLength(3);
     expect(delays).toEqual([500, 1000]);
+    for (const call of calls.slice(1)) {
+      expect(JSON.parse(call.init.body as string)).toEqual({ session_id: 'session', run_id: 'run', resume_from_seq: 1 });
+    }
+  });
+
+  it('does not retry an actual network failure before the first event', async () => {
+    let calls = 0;
+    const fetchImpl = (async () => { calls++; throw new TypeError('offline'); }) as unknown as typeof fetch;
+    await expect(collect(openStream({ url: '/chat/stream', body: { run_id: 'run' }, getToken: async () => 'tok', fetchImpl })))
+      .rejects.toMatchObject({ message: 'The connection was lost before the response began. Check the chat history before retrying.' });
+    expect(calls).toBe(1);
+  });
+
+  it('surfaces the safe API error message for unavailable background processing', async () => {
+    const { impl } = fakeFetch([() => new Response(JSON.stringify({ error: { code: 'service_unavailable', message: 'Background processing is not available yet.' } }), { status: 400 })]);
+    await expect(collect(openStream({ url: '/s', body: {}, getToken: async () => 'tok', fetchImpl: impl })))
+      .rejects.toMatchObject({ status: 400, message: 'Background processing is not available yet.' });
+  });
+
+  it('shows the server concurrency-limit message without starting a second run', async () => {
+    const { calls, impl } = fakeFetch([() => new Response(JSON.stringify({ error: { code: 'concurrency_limit', message: 'Too many active runs.' } }), { status: 429 })]);
+    await expect(collect(openStream({ url: '/s', body: {}, getToken: async () => 'tok', fetchImpl: impl })))
+      .rejects.toMatchObject({ status: 429, message: 'Too many active runs.' });
+    expect(calls).toHaveLength(1);
   });
 
   it('does not retry a 4xx and requires a token', async () => {

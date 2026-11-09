@@ -28,6 +28,8 @@ TOOLS_BY_SOURCE_ID: dict[str, type[DataSourceTool]] = {
     "icd10": ICD10Tool,
     "npi": NPIRegistryTool,
     "pubchem": PubChemTool,
+    "openfda": OpenFDATool,
+    "patentsview": PatentsViewTool,
 }
 
 ALL_DATA_SOURCE_TOOLS: list[DataSourceTool] = [

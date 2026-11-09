@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -15,6 +16,10 @@ if TYPE_CHECKING:
     from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger(__name__)
+
+
+class GatewayUnavailableError(RuntimeError):
+    """A deployed agent cannot use a data source without the Gateway transport."""
 
 
 class DataSourceResult(BaseModel):
@@ -46,6 +51,29 @@ class DataSourceTool(ABC):
         self._lambda_client: Any = None
 
     def invoke(self, **params: Any) -> DataSourceResult:
+        if os.environ.get("CEI_REQUIRE_TOOL_GATEWAY", "").lower() == "true":
+            # The context is populated only after checking the M2M token against the
+            # authenticated user and session. Never fall back to local HTTP or Lambda.
+            from shared.tools.gateway_context import current_gateway_token
+            from shared.tools.gateway_mcp import GatewayCallError, call_gateway_tool
+
+            token = current_gateway_token()
+            endpoint = os.environ.get("CEI_TOOL_GATEWAY_URL", "")
+            source_ids = {
+                SourceType.PUBMED: "pubmed", SourceType.CLINICAL_TRIALS: "clinicaltrials",
+                SourceType.BIORXIV: "biorxiv", SourceType.MEDRXIV: "medrxiv",
+                SourceType.CHEMBL: "chembl", SourceType.OPEN_TARGETS: "opentargets",
+                SourceType.CMS_COVERAGE: "cmscoverage", SourceType.ICD10: "icd10",
+                SourceType.NPI_REGISTRY: "npi", SourceType.PUBCHEM: "pubchem",
+                SourceType.OPENFDA: "openfda", SourceType.PATENTSVIEW: "patentsview",
+            }
+            source_id = source_ids.get(self.source_type)
+            if not token or not endpoint or not source_id:
+                raise GatewayUnavailableError("The data source gateway is unavailable.")
+            try:
+                return DataSourceResult.model_validate(call_gateway_tool(endpoint, token, source_id, self._build_payload(**params)))
+            except GatewayCallError:
+                raise GatewayUnavailableError("The data source gateway could not complete the request.") from None
         if self._direct_mode:
             return self.fetch(**params)
         if self._lambda_client is None:

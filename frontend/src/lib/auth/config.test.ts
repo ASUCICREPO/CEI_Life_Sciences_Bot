@@ -41,6 +41,14 @@ describe('loadRuntimeConfig', () => {
     expect((await loadRuntimeConfig()).apiBaseUrl).toBeUndefined();
   });
 
+  it('enables Research streaming only for an explicit boolean true', async () => {
+    serve({ ...BASE, researchStreamingEnabled: 'true' });
+    expect((await loadRuntimeConfig()).researchStreamingEnabled).toBeUndefined();
+    resetRuntimeConfigForTests();
+    serve({ ...BASE, researchStreamingEnabled: true });
+    expect((await loadRuntimeConfig()).researchStreamingEnabled).toBe(true);
+  });
+
   it('rejects a non-https absolute apiBaseUrl', async () => {
     serve({ ...BASE, apiBaseUrl: 'http://abc.execute-api.us-east-1.amazonaws.com/prod' });
     await expect(loadRuntimeConfig()).rejects.toThrow(/apiBaseUrl/);

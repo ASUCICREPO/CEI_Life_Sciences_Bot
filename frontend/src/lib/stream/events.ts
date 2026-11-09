@@ -116,6 +116,7 @@ export const SurfaceEndEventSchema = z.object({
   surface_id: z.string().optional(),
   revision: z.int().positive().optional(),
   root_id: z.string().optional(),
+  message_id: z.string().min(1).max(128).optional(),
   final: z.boolean().default(true),
 });
 

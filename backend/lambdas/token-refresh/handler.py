@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import boto3
+from shared.persistence.active_runs import ActiveRunRepository
+from shared.runtime.identity import CognitoAccessTokenVerifier, UnauthenticatedError
 
 from http_errors import ApiError, api_handler, get_logger, invalid_request, json_response, not_found, parse_json_body
 
@@ -47,20 +49,38 @@ class ActiveRun:
     scopes: tuple[str, ...]
 
 
-def lookup_active_run(session_id: str, job_id: str | None) -> ActiveRun | None:
+def lookup_active_run(user_id: str, session_id: str, run_id: str, job_id: str | None) -> ActiveRun | None:
     """The active run for this session/job, or None.
 
-    ADR: always None in F4 | Rationale: B67 — the active-run record (real-time runs, F5) and the Job ID Store
-    (background jobs, F16) do not exist yet; failing closed means no token can be refreshed for a run nobody
-    can prove is active | Alternative: trusting the caller's session id rejected — any allowed role could then
-    mint tokens for any session
+    User id is derived from a verified user token. Background jobs remain unsupported
+    until F16 provides their separately authenticated job store.
     """
-    return None
+    if job_id or not os.environ.get("ACTIVE_RUNS_TABLE") or not os.environ.get("METADATA_TABLE"):
+        return None
+    dynamo = boto3.resource("dynamodb")
+    owner = dynamo.Table(os.environ["METADATA_TABLE"]).get_item(
+        Key={"user_id": user_id, "session_id": session_id}, ConsistentRead=True).get("Item")
+    if not owner:
+        return None
+    lease = ActiveRunRepository(dynamo.Table(os.environ["ACTIVE_RUNS_TABLE"])).find(user_id, session_id)
+    if not lease or lease.run_id != run_id:
+        return None
+    return ActiveRun(user_sub=user_id, session_id=session_id, scopes=lease.scopes)
 
 
-RunLookup = Callable[[str, "str | None"], "ActiveRun | None"]
+RunLookup = Callable[[str, str, str, "str | None"], "ActiveRun | None"]
 _run_lookup: RunLookup = lookup_active_run
 _client_secret: str | None = None
+
+
+def verify_user(token: str) -> str:
+    pool, client = os.environ.get("USER_POOL_ID", ""), os.environ.get("SPA_CLIENT_ID", "")
+    if not pool or not client:
+        raise UnauthenticatedError("verification not configured")
+    return str(CognitoAccessTokenVerifier(pool, os.environ["AWS_REGION"], [client]).verify(token)["sub"])
+
+
+_user_verifier: Callable[[str], str] = verify_user
 
 
 def _env_list(name: str) -> list[str]:
@@ -124,7 +144,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     _check_caller(event)
 
     body = parse_json_body(event)
-    unknown = sorted(set(body) - {"session_id", "job_id"})
+    unknown = sorted(set(body) - {"session_id", "run_id", "user_token", "job_id"})
     if unknown:
         raise invalid_request(f"Unknown field: {unknown[0]}.")
     session_id = body.get("session_id")
@@ -134,7 +154,16 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     if job_id is not None and (not isinstance(job_id, str) or not _JOB_ID_PATTERN.match(job_id)):
         raise invalid_request("The job_id field is not valid.")
 
-    run = _run_lookup(session_id, job_id)
+    run_id, token = body.get("run_id"), body.get("user_token")
+    if not isinstance(run_id, str) or not _SESSION_ID_PATTERN.match(run_id):
+        raise invalid_request("The run_id field is not valid.")
+    if not isinstance(token, str) or not token or len(token) > 8192:
+        raise ApiError(401, "unauthorized", "Authentication is required.")
+    try:
+        user_id = _user_verifier(token)
+    except UnauthenticatedError:
+        raise ApiError(401, "unauthorized", "Authentication is required.") from None
+    run = _run_lookup(user_id, session_id, run_id, job_id)
     if run is None or run.session_id != session_id:
         logger.info(json.dumps({"event": "token_refresh_refused", "reason": "run_not_active"}))
         raise not_found("The run is not active.")

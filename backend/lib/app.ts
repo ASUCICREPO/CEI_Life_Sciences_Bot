@@ -4,6 +4,8 @@ import { EdgeWafStack } from './edge-waf-stack';
 import { DeployConfig } from './config/deploy-config';
 // FIXME: remove after S2 validation (B92)
 import { ToolScopeSpikeStack } from './spikes/tool-scope-spike-stack';
+// FIXME: remove after S1 validation (B92)
+import { StreamingSpikeStack } from './spikes/streaming-spike-stack';
 
 export interface BuiltStacks {
   /** Only present when `config` is supplied — the CLOUDFRONT-scope WAF stack (always us-east-1, B88). */
@@ -11,6 +13,8 @@ export interface BuiltStacks {
   backend: BackendStack;
   /** FIXME: remove after S2 validation (B92). Only present when `-c ceiSpikes=tool-scope` is set. */
   toolScopeSpike?: ToolScopeSpikeStack;
+  /** FIXME: remove after S1 validation (B92). */
+  streamingSpike?: StreamingSpikeStack;
 }
 
 /**
@@ -32,6 +36,12 @@ export function buildStacks(app: cdk.App, config: DeployConfig | undefined, fron
       // ADR: Region from deploy config | Rationale: B45 — same env rule as BackendStack; env-agnostic when no config exists yet
       env: config ? { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region } : undefined,
       policyMode: app.node.tryGetContext('ceiSpikePolicyMode') || undefined,
+    });
+  }
+  // FIXME: remove after S1 validation (B92)
+  if (spikes.includes('streaming')) {
+    built.streamingSpike = new StreamingSpikeStack(app, 'StreamingSpikeStack', {
+      env: config ? { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region } : undefined,
     });
   }
 

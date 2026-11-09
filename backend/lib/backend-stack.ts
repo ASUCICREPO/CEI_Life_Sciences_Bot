@@ -17,7 +17,8 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { DeployConfig, DEFAULT_LIMITS, DEFAULT_TOOL_POLICY_MODE } from './config/deploy-config';
 import { PythonDepsLayer } from './constructs/python-deps-layer';
 import { AgentRuntimes } from './constructs/agent-runtimes';
-import { ToolGateway } from './constructs/tool-gateway';
+import { ToolGateway, fullScope } from './constructs/tool-gateway';
+import { SessionRouter } from './constructs/session-router';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export interface BackendStackProps extends cdk.StackProps {
@@ -265,17 +266,29 @@ export class BackendStack extends cdk.Stack {
       },
     });
 
+    // SPA fallback belongs to the static origin only: distribution-wide 403/404 rewrites
+    // would turn authenticated API errors into a 200 HTML document.
+    const spaFallback = new cloudfront.Function(this, 'SpaFallback', {
+      code: cloudfront.FunctionCode.fromInline("function handler(event) { var r=event.request; if (r.uri.indexOf('.') === -1) r.uri='/index.html'; return r; }"),
+    });
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       defaultRootObject: 'index.html',
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         responseHeadersPolicy,
+        functionAssociations: [{ function: spaFallback, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
       },
-      errorResponses: [
-        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: '/index.html' },
-        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html' },
-      ],
+      additionalBehaviors: {
+        'chat/stream': {
+          origin: new origins.HttpOrigin(`${api.restApiId}.execute-api.${this.region}.${this.urlSuffix}`, { originPath: '/v1' }),
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          compress: false,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        },
+      },
       enableLogging: true,
       logBucket: logsBucket,
       logFilePrefix: 'cloudfront-access-logs/',
@@ -652,7 +665,15 @@ export class BackendStack extends cdk.Stack {
     // F4: tool Gateway — 10 data-source targets, Router M2M scopes, Cedar (LOG_ONLY -> ENFORCE), token refresh
     // ---------------------------------------------------------------
 
-    new ToolGateway(this, 'ToolGateway', {
+    const activeRunsTable = new dynamodb.Table(this, 'ActiveRunsStore', {
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'record', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    const gateway = new ToolGateway(this, 'ToolGateway', {
       userPool,
       cognitoDomainUrl,
       userPoolDomain,
@@ -660,7 +681,61 @@ export class BackendStack extends cdk.Stack {
       requestValidator,
       pythonDepsLayer: pythonDeps.layer,
       policyMode: this.config?.toolPolicyMode ?? DEFAULT_TOOL_POLICY_MODE,
+      activeRunsTable,
+      metadataTable: chatMetadataTable,
+      spaClientId: spaClient.userPoolClientId,
+      refreshCallerRoleArns: [agentRuntimes.runtimes.Research.role.roleArn],
     });
+    agentRuntimes.configureResearchGateway(gateway.routerClient.userPoolClientId, gateway.gateway.attrGatewayUrl);
+    // B67: only the Research runtime may invoke the internal IAM-authenticated
+    // refresh method; the refresh handler also verifies the caller and active run.
+    agentRuntimes.runtimes.Research.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['execute-api:Invoke'],
+      resources: [api.arnForExecuteApi('POST', '/internal/token-refresh', 'v1')],
+    }));
+
+    const router = new SessionRouter(this, 'SessionRouter', {
+      role: gateway.routerRole,
+      pythonDepsLayer: pythonDeps.layer,
+      metadataTable: chatMetadataTable,
+      activeRunsTable,
+      userPoolId: userPool.userPoolId,
+      spaClientId: spaClient.userPoolClientId,
+      tokenEndpoint: `${cognitoDomainUrl}/oauth2/token`,
+      clientId: gateway.routerClient.userPoolClientId,
+      secretArn: gateway.routerSecret.secretArn,
+      scopes: gateway.scopeNames.filter((name) => name !== 'src.ncbi').map(fullScope),
+      runtimeUrl: agentRuntimes.invocationUrls.research,
+    });
+    const runnerLogs = new logs.LogGroup(this, 'SessionRunnerLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY });
+    const runnerRole = new iam.Role(this, 'SessionRunnerRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
+    runnerLogs.grantWrite(runnerRole);
+    runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }));
+    runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:TransactWriteItems'], resources: [chatHistoryTable.tableArn] }));
+    runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:PutItem', 'dynamodb:TransactWriteItems'], resources: [activeRunsTable.tableArn] }));
+    runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [router.function.functionArn] }));
+    const runner = new lambda.Function(this, 'SessionRunner', {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', 'session-runner'), { exclude: ['*.test.js'] }),
+      role: runnerRole,
+      logGroup: runnerLogs,
+      timeout: Duration.minutes(14),
+      memorySize: 512,
+      environment: { CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName, CEI_CHAT_HISTORY_TABLE: chatHistoryTable.tableName, CEI_ACTIVE_RUNS_TABLE: activeRunsTable.tableName, CEI_ROUTER_FUNCTION: router.function.functionName, ALLOWED_ORIGINS: allowedOrigins.join(',') },
+    });
+    const chatResource = api.root.addResource('chat', { defaultCorsPreflightOptions: corsOptions });
+    const streamResource = chatResource.addResource('stream', { defaultCorsPreflightOptions: corsOptions });
+    streamResource.addMethod('POST', new apigw.LambdaIntegration(runner, { responseTransferMode: apigw.ResponseTransferMode.STREAM, timeout: Duration.minutes(14) }), methodOptions);
+    for (const child of chatResource.node.findAll()) {
+      if (child instanceof apigw.CfnMethod && child.httpMethod === 'OPTIONS') {
+        child.requestValidatorId = requestValidator.requestValidatorId;
+        NagSuppressions.addResourceSuppressions(child, [
+          { id: 'AwsSolutions-APIG4', reason: 'ADR: CORS preflight without authorizer | Rationale: browsers do not send credentials on preflight | Alternative: authenticated preflight rejected because browsers cannot satisfy it' },
+          { id: 'AwsSolutions-COG4', reason: 'ADR: CORS preflight without Cognito | Rationale: browsers do not send credentials on preflight | Alternative: authenticated preflight rejected because browsers cannot satisfy it' },
+        ]);
+      }
+    }
 
     // ---------------------------------------------------------------
     // BucketDeployment — SPA assets, then config.json (no-cache) in a second
@@ -686,6 +761,8 @@ export class BackendStack extends cdk.Stack {
           userPoolClientId: spaClient.userPoolClientId,
           cognitoDomain: cognitoDomainUrl,
           apiBaseUrl,
+          // The streaming Research path relies on Cedar to enforce source scopes.
+          researchStreamingEnabled: (this.config?.toolPolicyMode ?? DEFAULT_TOOL_POLICY_MODE) === 'ENFORCE',
           // Agent proxy function URL per agent (the proxy forwards to the AgentCore invocation URL)
           agentUrls: agentProxyUrls,
         }),

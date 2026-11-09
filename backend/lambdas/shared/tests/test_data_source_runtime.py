@@ -37,6 +37,8 @@ SOURCES = [
     ("icd10", "ICD10Tool", None),
     ("npi", "NPIRegistryTool", None),
     ("pubchem", "PubChemTool", None),
+    ("openfda", "OpenFDATool", None),
+    ("patentsview", "PatentsViewTool", None),
 ]
 
 
@@ -131,7 +133,7 @@ def test_only_pubmed_takes_a_user_key():
 
 @pytest.mark.parametrize("source_id,class_name,_key", SOURCES)
 def test_every_source_goes_through_the_retry_helper(monkeypatch, source_id, class_name, _key):
-    """An upstream outage becomes a DataSourceResult error, never an exception, for all ten sources."""
+    """Every configured source uses retrying HTTP and reports an upstream outage."""
     calls: list[str] = []
 
     def down(method, url, **kwargs):
@@ -139,6 +141,8 @@ def test_every_source_goes_through_the_retry_helper(monkeypatch, source_id, clas
         raise requests.ConnectionError("upstream down")
 
     monkeypatch.setattr(retrying_http, "request", down)
+    if source_id == "patentsview":
+        monkeypatch.setenv("CEI_PATENTSVIEW_API_KEY", "test-only-key")
     handler = load_handler_module(source_id).handler
     args = {"npi": {"name": "smith"}, "opentargets": {"target": "EGFR"}}.get(
         source_id, {"query": "aspirin"}
@@ -147,7 +151,14 @@ def test_every_source_goes_through_the_retry_helper(monkeypatch, source_id, clas
     assert calls, f"{class_name} did not call retrying_http"
     parsed = DataSourceResult.model_validate(payload)
     assert parsed.results == [] and parsed.citations == []
-    assert "upstream down" in parsed.query_metadata["error"]
+    if source_id == "cmscoverage":
+        assert parsed.query_metadata["error"] == "CMS Coverage API unavailable or returned an invalid response."
+        assert "upstream down" not in str(parsed.query_metadata)
+    elif source_id == "openfda":
+        assert len(parsed.query_metadata["errors"]) == 3
+        assert all("upstream down" in error for error in parsed.query_metadata["errors"])
+    else:
+        assert "upstream down" in parsed.query_metadata["error"]
 
 
 # ---------------------------------------------------------------- request handling

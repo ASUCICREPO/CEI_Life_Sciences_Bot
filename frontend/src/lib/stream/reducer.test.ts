@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CEIUISurfaceSchema } from '../cei-ui/schema';
 import { STREAM_EVENT_TYPES, parseStreamEvent } from './events';
 import { initialStreamState, reduceEvent, reduceEvents, selectTree, type StreamState } from './reducer';
 import { ADD_EVIDENCE, ADD_ROOT, ADD_STATS, ADD_TEXT, BEGIN, CITATION, END, FULL_RUN, START } from './__fixtures__/events';
@@ -64,7 +65,25 @@ describe('surface_begin', () => {
   });
 });
 
+describe('surface_end', () => {
+  it('keeps the persisted message id for loading this turn\'s trace', () => {
+    const state = reduceEvents([...START, { ...END, message_id: 'turn-123' }]);
+    expect(state.messageId).toBe('turn-123');
+  });
+});
+
 describe('component_add', () => {
+  it('accepts children declared by a Tabs parent without losing its labels', () => {
+    const root = { seq: 1, type: 'component_add', parent_id: null, component: { id: 'root', type: 'Tabs', tabs: [{ label: 'Answer', child_id: 'answer' }] } };
+    expect(selectTree(reduceEvents([BEGIN, root]))).toBeNull();
+    const state = reduceEvents([
+      BEGIN, root,
+      { seq: 2, type: 'component_add', parent_id: 'root', component: { id: 'answer', type: 'Markdown', content: 'Hello' } },
+    ]);
+    expect(component(state, 'root')).toMatchObject({ tabs: [{ label: 'Answer', child_id: 'answer' }] });
+    expect(component(state, 'answer')).toMatchObject({ content: 'Hello' });
+    expect(state.warnings).toEqual([]);
+  });
   it('splices components into the parent at index', () => {
     const state = reduceEvents([...START, ADD_EVIDENCE, { ...ADD_TEXT, seq: 4 }]);
     expect(rootChildren(state)).toEqual(['answer', 'evidence']);
@@ -263,6 +282,12 @@ describe('ordering rules', () => {
     const replayed = reduceEvents([...FULL_RUN.slice(0, 8), ...FULL_RUN.slice(2, 8), ...FULL_RUN.slice(8)]);
     expect(selectTree(replayed)).toEqual(selectTree(clean));
     expect(replayed.traceEvents).toEqual(clean.traceEvents);
+  });
+
+  it('reconstructs a final surface accepted by the complete 1.1 graph validator', () => {
+    const finalTree = selectTree(reduceEvents(FULL_RUN));
+    const result = CEIUISurfaceSchema.safeParse(finalTree);
+    expect(result.success, result.success ? '' : JSON.stringify(result.error.issues)).toBe(true);
   });
 
   it('skips invalid and unknown events', () => {

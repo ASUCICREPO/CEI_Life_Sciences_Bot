@@ -25,6 +25,8 @@ out/
 # Compiled JavaScript files
 *.js
 !jest.config.js
+!backend/lambdas/session-runner/*.js
+!backend/lambdas/spike-streaming-runner/*.js
 *.d.ts
 
 # TypeScript cache

@@ -57,5 +57,7 @@ Let a user delete one chat, or their whole account, and have every trace of that
 - KB chunk deletion by metadata filter (S3 Vectors + Bedrock KB) depends on the exact deletion API S5/F10 settle on — this phase assumes a filter-based delete call exists; if F10 only supports a full-reindex-style deletion, this phase's per-session/per-user chunk deletion may need to change.
 
 ## Handoff notes
+
+- F5/F6 replay uses separate `sse#<user_sub>#<session_id>#<run_id>` partitions in the Chat History Store. Query the Active-run table with `user_id` and the sort-key prefix `replay#<session_id>#` to enumerate the durable run index, delete each referenced history partition (including its run header and all events), and delete the index records. Deleting only the ordinary session partition is insufficient.
 - F20 (Alarms) may want a DynamoDB-throttling alarm to also cover the delete-worker's batch-delete calls (already covered generically by B75's "DynamoDB throttled requests" alarm — no new alarm needed).
 - F21 (Hardening) should specifically test the deletion cascade under load (many sessions, many attachments) as part of its load-test pass.
