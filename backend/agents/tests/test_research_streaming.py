@@ -65,3 +65,30 @@ async def test_heartbeats_do_not_cancel_slow_update():
     values = [item async for item in with_heartbeats(source(), interval=0.005)]
     assert any(not present for present, _ in values)
     assert values[-1] == (True, "done")
+
+
+@pytest.mark.asyncio
+async def test_long_research_stops_before_retrieval_and_has_no_fake_job(monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    import main
+    from research.state import TriagePlan
+    from shared.schemas.citation import SourceType
+
+    plan = TriagePlan(selected_sources=list(SourceType)[:8], reasoning="wide search")
+    reached_retrieval = False
+
+    class Graph:
+        async def astream(self, *_args, **_kwargs):
+            nonlocal reached_retrieval
+            yield "values", {"triage_plan": plan, "trace": []}
+            reached_retrieval = True
+            yield "values", {"retrieved_results": []}
+
+    monkeypatch.setattr(main, "gateway_request_context", lambda *_args: nullcontext())
+    session = SimpleNamespace(user_id="user", session_id="session")
+    frames = [decode(frame) async for frame in main._stream_research(Graph(), {}, {}, None, session, "query", None, True)]
+    assert not reached_retrieval
+    assert frames[-1][1] == "error"
+    assert "background processing" in frames[-1][2]["message"]
+    assert not any(kind == "job_handoff" for _, kind, _ in frames)
