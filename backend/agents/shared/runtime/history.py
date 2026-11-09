@@ -92,8 +92,8 @@ async def begin_turn(
         )
     except (SessionNotFoundError, OwnershipCheckError):
         raise
-    except Exception:  # noqa: BLE001
-        log.exception("chat history: could not record prompt session=%s", session_id)
+    except Exception as exc:  # noqa: BLE001
+        log.error("chat history: could not record prompt session=%s error_type=%s", session_id, type(exc).__name__)
         return []
     if warm:
         return []
@@ -140,16 +140,16 @@ async def end_turn(
             first_prompt=prompt,
             message_id=message_id,
         )
-    except Exception:  # noqa: BLE001
-        log.exception("chat history: could not record answer session=%s", session_id)
+    except Exception as exc:  # noqa: BLE001
+        log.error("chat history: could not record answer session=%s error_type=%s", session_id, type(exc).__name__)
         return None
     if saver is not None and isinstance(sequence, int):
         checkpointing.schedule_checkpoint_save(user_id=user_id, session_id=session_id, saver=saver, version=sequence)
     if stream_trace_events and isinstance(sequence, int):
         try:
             await asyncio.to_thread(get_trace_repository().save, user_id, session_id, sequence, message_id, stream_trace_events)
-        except Exception:
-            log.exception("chat history: could not record streamed trace session=%s turn=%s", session_id, sequence)
+        except Exception as exc:
+            log.error("chat history: could not record streamed trace session=%s turn=%s error_type=%s", session_id, sequence, type(exc).__name__)
     elif trace and isinstance(sequence, int):
         await save_trace(user_id=user_id, session_id=session_id, turn_seq=sequence, message_id=message_id, trace=trace)
     return message_id if isinstance(sequence, int) else None
@@ -178,8 +178,8 @@ async def save_trace(
         events = trace_events_from_entries(trace)
         repo = repository or get_trace_repository()
         return await asyncio.to_thread(repo.save, user_id, session_id, turn_seq, message_id, events)
-    except Exception:  # noqa: BLE001
-        log.exception("chat history: could not record trace session=%s turn=%s", session_id, turn_seq)
+    except Exception as exc:  # noqa: BLE001
+        log.error("chat history: could not record trace session=%s turn=%s error_type=%s", session_id, turn_seq, type(exc).__name__)
         return False
 
 
@@ -203,5 +203,5 @@ async def record_resume(
         )
     except (SessionNotFoundError, OwnershipCheckError):
         raise
-    except Exception:  # noqa: BLE001
-        log.exception("chat history: could not record HITL answer session=%s", session_id)
+    except Exception as exc:  # noqa: BLE001
+        log.error("chat history: could not record HITL answer session=%s error_type=%s", session_id, type(exc).__name__)

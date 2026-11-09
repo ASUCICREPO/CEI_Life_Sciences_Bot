@@ -92,7 +92,7 @@ def test_begin_turn_refuses_foreign_session(session):  # noqa: F811
         asyncio.run(scenario())
 
 
-def test_begin_turn_survives_persistence_outage():
+def test_begin_turn_survives_persistence_outage(caplog):
     class Broken(ConversationRecorder):
         def __init__(self):
             pass
@@ -103,6 +103,8 @@ def test_begin_turn_survives_persistence_outage():
     out = asyncio.run(begin_turn(user_id="u", session_id="s", prompt="q", agent_type="x", mode=None,
                                  warm=False, recorder=Broken()))
     assert out == []
+    assert "ConnectionError" in caplog.text
+    assert "dynamodb down" not in caplog.text
 
 
 # -- entrypoint wiring (pipeline: run -> HITL resume -> async job) ----------------------------------------------
@@ -227,7 +229,7 @@ def test_foreign_session_is_refused_before_any_session_work(pipeline_env):
     assert ChatMetadataRepository(pipeline_env).get("mallory", sid) is None
 
 
-def test_owner_lookup_failure_returns_generic_500_and_logs_the_real_cause(pipeline_env, monkeypatch, caplog):
+def test_owner_lookup_failure_returns_generic_500_and_logs_cause_type(pipeline_env, monkeypatch, caplog):
     from shared.persistence.ownership import GENERIC_INTERNAL_ERROR
 
     def broken_owner_of(self, session_id):
@@ -244,7 +246,8 @@ def test_owner_lookup_failure_returns_generic_500_and_logs_the_real_cause(pipeli
         assert _status_and_body(response) == (500, {"status": "error", "message": GENERIC_INTERNAL_ERROR})
     assert sid not in pipeline_main._thread_prompts
     assert "ownership check failed" in caplog.text
-    assert "ProvisionedThroughputExceededException" in caplog.text  # the chained real cause is in the log
+    assert "ConnectionError" in caplog.text
+    assert "ProvisionedThroughputExceededException" not in caplog.text
 
 
 def test_begin_turn_never_fails_open_on_owner_lookup_errors(session):  # noqa: F811

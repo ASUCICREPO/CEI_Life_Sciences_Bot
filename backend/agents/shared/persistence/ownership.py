@@ -24,7 +24,7 @@ _SESSION_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a
 class OwnershipCheckError(Exception):
     """The session owner could not be determined (store failure). Always mapped to a generic HTTP 500.
 
-    The underlying exception is chained as ``__cause__`` so the caller's ``log.exception`` records it.
+    The underlying exception is chained as ``__cause__`` so the caller can record its type safely.
     """
 
 

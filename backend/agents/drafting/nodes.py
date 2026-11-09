@@ -155,8 +155,8 @@ def research_guidelines(state: DraftingState) -> dict[str, Any]:
                 detail=f"{source.value} | query={search_query!r} | results={len(result.results)}",
             ))
             logger.info({"event": "guideline_retrieve_success", "source": source.value, "count": len(result.results)})
-        except Exception:
-            logger.exception({"event": "guideline_retrieve_error", "source": source.value})
+        except Exception as exc:
+            logger.error({"event": "guideline_retrieve_error", "source": source.value, "error_type": type(exc).__name__})
             trace_entries.append(TraceEntry(
                 stage="TOOL_CALL",
                 detail=f"{source.value} | query={search_query!r} | ERROR",
@@ -442,8 +442,8 @@ def draft(state: DraftingState) -> dict[str, Any]:
                 "trace": trace_entries,
             }
         except Exception as exc:  # ADR: any render/grounding failure falls back to prose | never lose the draft
-            logger.exception({"event": "draft_structured_render_error"})
-            error = repr(exc)
+            logger.error({"event": "draft_structured_render_error", "error_type": type(exc).__name__})
+            error = type(exc).__name__
 
     trace_entries.append(TraceEntry(
         stage="DRAFT_FALLBACK",
@@ -539,8 +539,8 @@ def revise(state: DraftingState) -> dict[str, Any]:
                 "trace": trace_entries,
             }
         except Exception as exc:  # ADR: any render/grounding failure falls back to prose | never lose the revision
-            logger.exception({"event": "revise_structured_render_error"})
-            error = repr(exc)
+            logger.error({"event": "revise_structured_render_error", "error_type": type(exc).__name__})
+            error = type(exc).__name__
 
     trace_entries.append(TraceEntry(stage="REVISE_FALLBACK", detail=f"feedback_length={len(feedback)} | error={error}"))
 
@@ -726,7 +726,7 @@ Only identify genuinely valuable charts — not decorative ones. Return an empty
             "Please provide the data or indicate whether to skip these charts:\n"
             + "\n".join(f"  - {d}" for d in missing_data_descriptions)
         )
-        logger.info({"event": "chart_data_missing", "charts": missing_data_descriptions})
+        logger.info({"event": "chart_data_missing", "count": len(missing_data_descriptions)})
 
     logger.info({"event": "plan_visuals_complete", "charts_ready": len(chart_specs), "missing": len(missing_data_descriptions)})
     return {
@@ -800,8 +800,8 @@ def _fetch_chart_data_from_tools(data_needed: str, tool_map: dict) -> dict[str, 
         if len(years) >= 2:
             sorted_years = sorted(years.items())
             return {"x": [y for y, _ in sorted_years], "Publications": [c for _, c in sorted_years]}
-    except Exception:
-        logger.exception({"event": "fetch_chart_data_error"})
+    except Exception as exc:
+        logger.error({"event": "fetch_chart_data_error", "error_type": type(exc).__name__})
     return None
 
 
@@ -866,8 +866,8 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
                     trace_entries.append(TraceEntry(stage="CHART_RENDER", detail=f"'{spec.title}' — {len(png_bytes)} bytes"))
                 else:
                     trace_entries.append(TraceEntry(stage="CHART_RENDER", detail=f"'{spec.title}' — failed"))
-            except Exception:
-                logger.exception({"event": "chart_render_error", "title": spec_dict.get("title")})
+            except Exception as exc:
+                logger.error({"event": "chart_render_error", "error_type": type(exc).__name__})
 
     # Determine output directory
     results_dir = Path(__file__).parents[2] / "results"

@@ -238,8 +238,8 @@ def gather(state: AnalysisState) -> dict[str, Any]:
             {"role": "user", "content": f"User request: {query}"},
         ])
         parsed = raw_result.get("parsed")
-    except Exception:
-        logger.exception({"event": "gather_query_planning_error"})
+    except Exception as exc:
+        logger.error({"event": "gather_query_planning_error", "error_type": type(exc).__name__})
 
     tool_map = {t.source_type: t for t in ALL_DATA_SOURCE_TOOLS}
     results = []
@@ -259,8 +259,8 @@ def gather(state: AnalysisState) -> dict[str, Any]:
                 detail=f"{source.value} | query={search_query!r} | results={len(result.results)} | citations={len(result.citations)}",
             ))
             logger.info({"event": "gather_success", "source": source, "count": len(result.results)})
-        except Exception:
-            logger.exception({"event": "gather_error", "source": source})
+        except Exception as exc:
+            logger.error({"event": "gather_error", "source": source, "error_type": type(exc).__name__})
             trace_entries.append(TraceEntry(
                 stage="TOOL_CALL",
                 detail=f"{source.value} | query={search_query!r} | ERROR",
@@ -455,8 +455,8 @@ def report(state: AnalysisState) -> dict[str, Any]:
                 "trace": trace_entries,
             }
         except Exception as exc:  # ADR: any render/grounding failure falls back to prose | never lose the answer
-            logger.exception({"event": "report_structured_render_error"})
-            error = repr(exc)
+            logger.error({"event": "report_structured_render_error", "error_type": type(exc).__name__})
+            error = type(exc).__name__
 
     trace_entries.append(TraceEntry(stage="REPORT_FALLBACK", detail=f"mode={mode} | error={error}"))
 

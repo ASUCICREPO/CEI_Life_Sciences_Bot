@@ -124,8 +124,23 @@ def test_ownership_check_error_is_generic_500_and_logged(monkeypatch, events):
     assert response.status_code == 500
     assert _body(response) == {"status": "error", "message": GENERIC_INTERNAL_ERROR}
     assert "secret-cause" not in response.body.decode()
-    fake_log.exception.assert_called_once()
+    fake_log.error.assert_called_once()
+    assert "secret-cause" not in str(fake_log.error.call_args)
     assert calls == []
+
+
+def test_ownership_error_logs_safe_aws_code(monkeypatch, events):
+    from botocore.exceptions import ClientError
+
+    error = OwnershipCheckError("private wrapper")
+    error.__cause__ = ClientError({"Error": {"Code": "ThrottlingException", "Message": "private details"}}, "Query")
+    _install(monkeypatch, events, error)
+    fake_log = MagicMock()
+    monkeypatch.setattr(session_guard, "log", fake_log)
+    handler, _ = _guarded(events)
+    assert asyncio.run(handler({}, _Context(SESSION))).status_code == 500
+    assert "ThrottlingException" in str(fake_log.error.call_args)
+    assert "private details" not in str(fake_log.error.call_args)
 
 
 def test_success_calls_handler_once_with_authorized_session_after_ownership(monkeypatch, events):

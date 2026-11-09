@@ -115,7 +115,7 @@ class ReplayHub:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
-            logger.warning({"event": "replay_load_error", "key": key, "error": repr(error)})
+            logger.warning({"event": "replay_load_error", "error_type": type(error).__name__})
             return None
 
     def _save(self, key: str, data: dict[str, Any]) -> None:

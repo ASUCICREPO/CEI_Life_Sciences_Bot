@@ -68,8 +68,8 @@ def invoke_structured(
         else:
             result = _stream_structured(structured_model, messages, on_prose_delta)
     except Exception as exc:  # ADR: catch-all | callers need a guaranteed fallback, never a crash
-        logger.warning({"event": "invoke_structured_error", "schema": schema.__name__, "error": repr(exc)})
-        return None, None, repr(exc)
+        logger.warning({"event": "invoke_structured_error", "schema": schema.__name__, "error_type": type(exc).__name__})
+        return None, None, type(exc).__name__
 
     if not isinstance(result, dict):
         return None, None, f"unexpected structured result type: {type(result).__name__}"
@@ -84,9 +84,9 @@ def invoke_structured(
         logger.warning({
             "event": "invoke_structured_parsing_error",
             "schema": schema.__name__,
-            "error": repr(parsing_error),
+            "error_type": type(parsing_error).__name__,
         })
-        return None, raw, repr(parsing_error)
+        return None, raw, type(parsing_error).__name__
 
     parsed = result.get("parsed")
     if parsed is None:

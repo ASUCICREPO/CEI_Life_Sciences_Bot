@@ -53,6 +53,14 @@ def test_bad_json_string_is_not_repaired() -> None:
     assert parsed is None and error is not None
 
 
+def test_model_error_log_omits_exception_content(caplog) -> None:
+    model = Mock()
+    model.with_structured_output.side_effect = ValueError("private model content")
+    invoke_structured(model, _Doc, [])
+    assert "ValueError" in caplog.text
+    assert "private model content" not in caplog.text
+
+
 def test_streamed_prose_is_emitted_incrementally_without_other_block_data() -> None:
     from langchain_core.messages import AIMessageChunk
 

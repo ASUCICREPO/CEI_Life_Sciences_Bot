@@ -61,8 +61,8 @@ async def restore_checkpoint(
         repository = repo or get_checkpoint_repository()
         async with _lock_for(session_id):  # never read a snapshot that is mid-write in this process
             restored = await asyncio.to_thread(repository.restore, user_id, session_id, saver)
-    except Exception:  # noqa: BLE001 — a cold start with text rehydration beats a failed turn
-        log.exception("checkpoint: restore failed session=%s", session_id)
+    except Exception as exc:  # noqa: BLE001 — a cold start with text rehydration beats a failed turn
+        log.error("checkpoint: restore failed session=%s error_type=%s", session_id, type(exc).__name__)
         return False
     if restored:
         log.info("checkpoint: restored short-term memory session=%s", session_id)
@@ -80,8 +80,8 @@ def schedule_checkpoint_save(
     """Snapshot the thread now and write it in the background under `version` (the AI turn's sequence)."""
     try:
         tup = saver.get_tuple(_root_config(session_id))
-    except Exception:  # noqa: BLE001
-        log.exception("checkpoint: could not read in-process checkpoint session=%s", session_id)
+    except Exception as exc:  # noqa: BLE001
+        log.error("checkpoint: could not read in-process checkpoint session=%s error_type=%s", session_id, type(exc).__name__)
         return None
     if tup is None:
         return None
@@ -91,8 +91,8 @@ def schedule_checkpoint_save(
             repository = repo or get_checkpoint_repository()
             async with _lock_for(session_id):
                 await asyncio.to_thread(repository.save, user_id, session_id, tup, version)
-        except Exception:  # noqa: BLE001 — logged, never surfaced to the user
-            log.exception("checkpoint: background save failed session=%s v=%s", session_id, version)
+        except Exception as exc:  # noqa: BLE001 — logged, never surfaced to the user
+            log.error("checkpoint: background save failed session=%s v=%s error_type=%s", session_id, version, type(exc).__name__)
 
     task = asyncio.create_task(_write())
     _background.add(task)
@@ -133,6 +133,6 @@ async def restore_for_resume(
         surface = extract_interrupt_surface({"__interrupt__": interrupts})
         if isinstance(surface, Mapping):
             pending.register(session_id, surface)
-    except Exception:  # noqa: BLE001
-        log.exception("checkpoint: could not re-register pending interrupt session=%s", session_id)
+    except Exception as exc:  # noqa: BLE001
+        log.error("checkpoint: could not re-register pending interrupt session=%s error_type=%s", session_id, type(exc).__name__)
     return True

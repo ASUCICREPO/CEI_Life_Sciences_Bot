@@ -102,5 +102,5 @@ class PubMedTool(DataSourceTool):
         except Exception as exc:
             # requests puts the full URL (query string included) in HTTPError messages: never leak the key
             error = str(exc).replace(api_key, "[REDACTED]") if api_key else str(exc)
-            logger.error({"event": "pubmed_fetch_error", "error": error})
+            logger.error({"event": "pubmed_fetch_error", "error_type": type(exc).__name__})
             return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": error})

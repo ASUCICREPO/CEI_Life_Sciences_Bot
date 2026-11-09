@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import functools
 import logging
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from botocore.exceptions import ClientError
 from starlette.responses import JSONResponse
 
 from shared.persistence.chat_metadata import SessionNotFoundError
@@ -87,9 +89,12 @@ def guarded_entrypoint(fn: Handler) -> Callable[[Mapping[str, Any], Any], Awaita
         except SessionNotFoundError:
             log.warning("session guard: refused session not owned by the caller session=%s", session_id)
             return error_response(404, "Session not found.")
-        except OwnershipCheckError:
-            # The real reason (with the chained store exception) goes to CloudWatch; the caller sees nothing of it.
-            log.exception("session guard: ownership check failed, request refused session=%s", session_id)
+        except OwnershipCheckError as exc:
+            # Preserve the cause type for diagnosis without logging service exception messages.
+            cause = type(exc.__cause__).__name__ if exc.__cause__ is not None else type(exc).__name__
+            code = exc.__cause__.response.get("Error", {}).get("Code") if isinstance(exc.__cause__, ClientError) else None
+            safe_code = code if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_]{1,80}", code) else "none"
+            log.error("session guard: ownership check failed, request refused session=%s error_type=%s aws_error_code=%s", session_id, cause, safe_code)
             return error_response(500, GENERIC_INTERNAL_ERROR)
 
     return wrapper

@@ -239,7 +239,7 @@ def _artifact_block_to_components(
                 ids.append(table.id)
             return components, ids, True
         except ValidationError:
-            logger.warning({"event": "artifact_degraded", "title": block.title})
+            logger.warning({"event": "artifact_degraded"})
 
     fallback = CalloutComponent(
         id=f"{prefix}-artifact",

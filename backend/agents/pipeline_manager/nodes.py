@@ -368,8 +368,8 @@ def synthesize(state: PipelineState) -> dict[str, Any]:
                 "trace": trace,
             }
         except Exception as exc:  # ADR: any render/grounding failure falls back to prose | never lose the answer
-            logger.exception({"event": "synthesize_structured_render_error"})
-            error = repr(exc)
+            logger.error({"event": "synthesize_structured_render_error", "error_type": type(exc).__name__})
+            error = type(exc).__name__
 
     trace.append(TraceEntry(stage="SYNTHESIZE_FALLBACK", detail=f"mode={mode} | error={error}"))
     model = get_model()

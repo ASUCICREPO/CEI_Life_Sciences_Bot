@@ -98,8 +98,8 @@ class ExportTool:
                     byte_size=byte_size,
                 ))
                 logger.info({"event": "export_complete", "format": fmt, "path": str(out_path), "bytes": byte_size})
-            except Exception:
-                logger.exception({"event": "export_error", "format": fmt})
+            except Exception as exc:
+                logger.error({"event": "export_error", "format": fmt, "error_type": type(exc).__name__})
 
         return artifacts
 
@@ -201,7 +201,7 @@ class ExportTool:
 
         result = self._ci._run(code, Language.PYTHON)
         if result.get("is_error"):
-            logger.error({"event": "ci_export_error", "format": fmt, "stderr": result.get("stderr", "")})
+            logger.error({"event": "ci_export_error", "format": fmt})
             return None
 
         stdout = result.get("stdout", "")

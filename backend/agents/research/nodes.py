@@ -178,8 +178,8 @@ def retrieve(state: ResearchState) -> dict[str, Any]:
             logger.info({"event": "retrieve_success", "source": source, "count": len(result.results)})
         except GatewayUnavailableError:
             raise
-        except Exception:
-            logger.exception({"event": "retrieve_error", "source": source})
+        except Exception as exc:
+            logger.error({"event": "retrieve_error", "source": source, "error_type": type(exc).__name__})
             trace_entries.append(TraceEntry(
                 stage="TOOL_CALL",
                 detail=f"{source.value} | query={search_query!r} | ERROR",
@@ -265,8 +265,8 @@ def synthesize(state: ResearchState) -> dict[str, Any]:
                 "trace": trace_entries,
             }
         except Exception as exc:  # ADR: any render/grounding failure falls back to prose | never lose the answer
-            logger.exception({"event": "synthesize_structured_render_error"})
-            error = repr(exc)
+            logger.error({"event": "synthesize_structured_render_error", "error_type": type(exc).__name__})
+            error = type(exc).__name__
 
     trace_entries.append(TraceEntry(
         stage="SYNTHESIS_FALLBACK",

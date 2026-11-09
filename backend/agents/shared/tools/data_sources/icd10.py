@@ -70,5 +70,5 @@ class ICD10Tool(DataSourceTool):
                 query_metadata={"query": query, "total": len(results)},
             )
         except Exception as exc:
-            logger.error({"event": "icd10_fetch_error", "error": str(exc)})
+            logger.error({"event": "icd10_fetch_error", "error_type": type(exc).__name__})
             return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": str(exc)})

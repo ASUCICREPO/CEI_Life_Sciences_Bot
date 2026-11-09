@@ -144,8 +144,8 @@ class ConversationRecorder:
                 citations or [],
                 message_id,
             )
-        except Exception:  # noqa: BLE001 — logged, never surfaced to the user
-            log.exception("chat history: failed to record AI turn session=%s", session_id)
+        except Exception as exc:  # noqa: BLE001 — logged, never surfaced to the user
+            log.error("chat history: failed to record AI turn session=%s error_type=%s", session_id, type(exc).__name__)
             return None
         if sequence == 2 and self._title_generator is not None and first_prompt:
             task = asyncio.create_task(self._generate_title(user_id, session_id, first_prompt, text))
@@ -181,8 +181,8 @@ class ConversationRecorder:
         """The last `n_turns` stored messages as LangChain messages (oldest first). Empty on any failure."""
         try:
             records = await asyncio.to_thread(self._history.load_recent, user_id, session_id, n_turns)
-        except Exception:  # noqa: BLE001 — a cold start without memory beats a failed turn
-            log.exception("chat history: rehydrate failed session=%s", session_id)
+        except Exception as exc:  # noqa: BLE001 — a cold start without memory beats a failed turn
+            log.error("chat history: rehydrate failed session=%s error_type=%s", session_id, type(exc).__name__)
             return []
         return to_langchain(records)
 
@@ -284,5 +284,5 @@ class ConversationRecorder:
             title = clean_title(raw or "", GENERATED_TITLE_CHARS)
             if title:
                 await asyncio.to_thread(self._metadata.set_generated_title, user_id, session_id, title)
-        except Exception:  # noqa: BLE001 — the provisional prompt title stays
-            log.exception("chat history: title generation failed session=%s", session_id)
+        except Exception as exc:  # noqa: BLE001 — the provisional prompt title stays
+            log.error("chat history: title generation failed session=%s error_type=%s", session_id, type(exc).__name__)
