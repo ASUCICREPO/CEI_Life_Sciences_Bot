@@ -31,7 +31,8 @@ describe('StreamingSurface', () => {
     const { calls, impl } = scripted(FULL_RUN);
     render(<StreamingSurface sessionId="s-1" agent="research" body={{ prompt: 'hi' }} openStreamImpl={impl} />);
     expect(await screen.findByText('The review is complete.')).toBeTruthy();
-    expect(calls[0].url).toBe('https://api.example.test/prod/chat/stream');
+    // Streaming must pass through the same-origin CloudFront/WAF behavior.
+    expect(calls[0].url).toBe('/chat/stream');
     expect(calls[0].body).toEqual({ prompt: 'hi' });
     await waitFor(() => expect(document.querySelector('[data-status="ended"]')).not.toBeNull());
   });

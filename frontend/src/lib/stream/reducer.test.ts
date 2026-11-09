@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CEIUISurfaceSchema } from '../cei-ui/schema';
 import { STREAM_EVENT_TYPES, parseStreamEvent } from './events';
 import { initialStreamState, reduceEvent, reduceEvents, selectTree, type StreamState } from './reducer';
 import { ADD_EVIDENCE, ADD_ROOT, ADD_STATS, ADD_TEXT, BEGIN, CITATION, END, FULL_RUN, START } from './__fixtures__/events';
@@ -281,6 +282,12 @@ describe('ordering rules', () => {
     const replayed = reduceEvents([...FULL_RUN.slice(0, 8), ...FULL_RUN.slice(2, 8), ...FULL_RUN.slice(8)]);
     expect(selectTree(replayed)).toEqual(selectTree(clean));
     expect(replayed.traceEvents).toEqual(clean.traceEvents);
+  });
+
+  it('reconstructs a final surface accepted by the complete 1.1 graph validator', () => {
+    const finalTree = selectTree(reduceEvents(FULL_RUN));
+    const result = CEIUISurfaceSchema.safeParse(finalTree);
+    expect(result.success, result.success ? '' : JSON.stringify(result.error.issues)).toBe(true);
   });
 
   it('skips invalid and unknown events', () => {
