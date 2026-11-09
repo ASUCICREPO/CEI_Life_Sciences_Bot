@@ -322,7 +322,10 @@ def test_owner_lookup_failure_is_a_generic_500_and_nothing_runs(monkeypatch):
         }
     assert handler._repository().get("user-a", sid).title == "mine"
     logged = "\n".join(records)
-    assert "session ownership check failed" in logged and "ProvisionedThroughputExceededException" in logged
+    assert "session ownership check failed" in logged
+    assert '"exception_type": "OwnershipCheckError"' in logged
+    assert '"cause_type": "RuntimeError"' in logged
+    assert "ProvisionedThroughputExceededException" not in logged
 
 
 def test_unexpected_errors_use_the_generic_message(monkeypatch):

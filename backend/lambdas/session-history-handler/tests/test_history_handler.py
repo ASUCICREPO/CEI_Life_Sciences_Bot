@@ -201,7 +201,10 @@ def test_owner_lookup_failure_is_a_generic_500_and_the_cause_is_logged(monkeypat
     assert body["error"]["code"] == "internal_error" and body["error"]["message"] == GENERIC_500
     assert "AccessDenied" not in json.dumps(body)  # never leaked to the caller
     logged = "\n".join(records)
-    assert "session ownership check failed" in logged and "AccessDeniedException" in logged
+    assert "session ownership check failed" in logged
+    assert '"exception_type": "OwnershipCheckError"' in logged
+    assert '"cause_type": "RuntimeError"' in logged
+    assert "AccessDeniedException" not in logged
 
 
 def test_history_cursor_round_trip_and_trace_items_skipped():
