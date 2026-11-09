@@ -124,15 +124,25 @@ def make_handler(
         return secrets_client
 
     def handler(event: Any, context: Any) -> dict[str, Any]:
+        def log_failure(stage: str, outcome: str, exc: Exception | None = None) -> None:
+            record = {"event": "data_source_failure", "source": source_id, "stage": stage,
+                      "outcome": outcome, "request_id": getattr(context, "aws_request_id", "unknown")}
+            if exc is not None:
+                record["error_type"] = type(exc).__name__
+            logger.warning(json.dumps(record))
+
         tool_name = tool_name_from_context(context)
         if tool_name is not None and not tool_name.endswith(TOOL_SUFFIX):
+            log_failure("validate", "unknown_tool")
             return _error_result(tool, "unknown_tool", f"This target only serves a '{TOOL_SUFFIX[3:]}' tool.")
         if not isinstance(event, dict):
+            log_failure("validate", "invalid_input")
             return _error_result(tool, "invalid_input", "The tool arguments must be a JSON object.")
         try:
             # Extra keys (for example an `api_key` or `user_id` supplied by the agent) are dropped here.
             args = tool.InputSchema.model_validate(event).model_dump()
         except ValidationError as exc:
+            log_failure("validate", "invalid_input")
             fields = sorted({".".join(str(p) for p in err["loc"]) for err in exc.errors()})
             return _error_result(tool, "invalid_input", "The tool arguments are not valid.", fields=fields)
 
@@ -146,9 +156,15 @@ def make_handler(
                     args["api_key"] = api_key
                     used_user_key = True
 
-        result = tool.fetch(**args)
+        try:
+            result = tool.fetch(**args)
+        except Exception as exc:
+            log_failure("fetch", "exception", exc)
+            raise
         payload = result.model_dump(mode="json")
         payload["query_metadata"]["user_api_key"] = used_user_key
+        if "error" in result.query_metadata:
+            log_failure("fetch", "upstream_error")
         logger.info(
             json.dumps(
                 {
