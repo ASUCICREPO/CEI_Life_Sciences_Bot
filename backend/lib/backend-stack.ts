@@ -19,6 +19,7 @@ import { PythonDepsLayer } from './constructs/python-deps-layer';
 import { AgentRuntimes } from './constructs/agent-runtimes';
 import { ToolGateway, fullScope } from './constructs/tool-gateway';
 import { SessionRouter } from './constructs/session-router';
+import { suppressXrayWildcard } from './constructs/tracing';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export interface BackendStackProps extends cdk.StackProps {
@@ -88,6 +89,7 @@ export class BackendStack extends cdk.Stack {
     preSignUpLogGroup.grantWrite(preSignUpRole);
 
     const preSignUpFn = new lambda.Function(this, 'PreSignUpDomainCheckFn', {
+      tracing: lambda.Tracing.ACTIVE,
       // ADR: Python 3.14 | Rationale: cdk-nag's Lambda-latest-runtime rule (L1) compares against the newest runtime this aws-cdk-lib release knows about per family
       runtime: lambda.Runtime.PYTHON_3_14,
       handler: 'handler.handler',
@@ -102,6 +104,7 @@ export class BackendStack extends cdk.Stack {
         ALLOWED_EMAIL_DOMAINS: (this.config?.allowedEmailDomains ?? []).join(','),
       },
     });
+    suppressXrayWildcard(preSignUpRole);
 
     // ---------------------------------------------------------------
     // Cognito User Pool + SPA client (B89: managed login, PKCE)
@@ -188,6 +191,7 @@ export class BackendStack extends cdk.Stack {
       cloudWatchRole: true,
       deployOptions: {
         stageName: 'v1',
+        tracingEnabled: true,
         // ADR: ERROR-level execution logging without request/response bodies | Rationale: satisfies APIG6 and aids debugging without putting user chat data in logs (B7)
         loggingLevel: apigw.MethodLoggingLevel.ERROR,
         dataTraceEnabled: false,
@@ -445,6 +449,7 @@ export class BackendStack extends cdk.Stack {
       const role = new iam.Role(this, `${id}Role`, { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
       logGroup.grantWrite(role);
       const fn = new lambda.Function(this, `${id}Fn`, {
+        tracing: lambda.Tracing.ACTIVE,
         runtime: lambda.Runtime.PYTHON_3_14,
         handler: handlerName,
         code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', dir), {
@@ -457,6 +462,7 @@ export class BackendStack extends cdk.Stack {
         memorySize: 256,
         environment: sessionLambdaEnv,
       });
+      suppressXrayWildcard(role);
       return { fn, role };
     };
 
@@ -532,6 +538,7 @@ export class BackendStack extends cdk.Stack {
     });
     agentProxyLogGroup.grantWrite(agentProxyRole);
     const agentProxyFn = new lambda.Function(this, 'AgentProxyFn', {
+      tracing: lambda.Tracing.ACTIVE,
       runtime: lambda.Runtime.PYTHON_3_14,
       handler: 'handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', 'agent-proxy'), {
@@ -547,6 +554,7 @@ export class BackendStack extends cdk.Stack {
         UPSTREAM_TIMEOUT_SECONDS: '870',
       },
     });
+    suppressXrayWildcard(agentProxyRole);
     const agentProxyUrl = agentProxyFn.addFunctionUrl({
       // ADR: authType NONE | Rationale: the caller authenticates with a Cognito bearer token that AgentCore verifies;
       // AWS_IAM would need SigV4-signed browser requests | Alternative: AWS_IAM rejected (no IAM credentials in the SPA)
@@ -715,6 +723,7 @@ export class BackendStack extends cdk.Stack {
     runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:PutItem', 'dynamodb:TransactWriteItems'], resources: [activeRunsTable.tableArn] }));
     runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [router.function.functionArn] }));
     const runner = new lambda.Function(this, 'SessionRunner', {
+      tracing: lambda.Tracing.ACTIVE,
       runtime: lambda.Runtime.NODEJS_24_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', 'session-runner'), { exclude: ['*.test.js'] }),
@@ -724,6 +733,7 @@ export class BackendStack extends cdk.Stack {
       memorySize: 512,
       environment: { CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName, CEI_CHAT_HISTORY_TABLE: chatHistoryTable.tableName, CEI_ACTIVE_RUNS_TABLE: activeRunsTable.tableName, CEI_ROUTER_FUNCTION: router.function.functionName, ALLOWED_ORIGINS: allowedOrigins.join(',') },
     });
+    suppressXrayWildcard(runnerRole);
     const chatResource = api.root.addResource('chat', { defaultCorsPreflightOptions: corsOptions });
     const streamResource = chatResource.addResource('stream', { defaultCorsPreflightOptions: corsOptions });
     streamResource.addMethod('POST', new apigw.LambdaIntegration(runner, { responseTransferMode: apigw.ResponseTransferMode.STREAM, timeout: Duration.minutes(14) }), methodOptions);

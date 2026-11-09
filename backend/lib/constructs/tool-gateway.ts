@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
+import { suppressXrayWildcard } from './tracing';
 import { NagSuppressions } from 'cdk-nag';
 import { aws_bedrockagentcore as agentcore } from 'aws-cdk-lib';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
@@ -377,7 +378,8 @@ export class ToolGateway extends Construct {
     const logGroup = new logs.LogGroup(this, `${id}Logs`, { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY });
     const role = options.role ?? new iam.Role(this, `${id}Role`, { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
     logGroup.grantWrite(role);
-    return new lambda.Function(this, `${id}Fn`, {
+    const fn = new lambda.Function(this, `${id}Fn`, {
+      tracing: lambda.Tracing.ACTIVE,
       runtime: lambda.Runtime.PYTHON_3_14,
       handler: 'handler.handler',
       code: lambda.Code.fromAsset(path.join(LAMBDAS_DIR, dir), { exclude: ['tests', '__pycache__', '*.pyc'] }),
@@ -388,5 +390,7 @@ export class ToolGateway extends Construct {
       memorySize: options.memorySize ?? 128,
       environment: options.environment,
     });
+    suppressXrayWildcard(role);
+    return fn;
   }
 }

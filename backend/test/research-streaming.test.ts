@@ -11,6 +11,16 @@ describe('Research streaming infrastructure', () => {
   });
   const template = Template.fromStack(stack);
 
+  it('enables X-Ray on the API stage and every application Lambda', () => {
+    template.hasResourceProperties('AWS::ApiGateway::Stage', { TracingEnabled: true });
+    const functions = Object.entries(template.findResources('AWS::Lambda::Function'))
+      .filter(([id]) => !id.startsWith('Custom'));
+    expect(functions.length).toBeGreaterThan(10);
+    for (const [, resource] of functions) {
+      expect((resource as any).Properties.TracingConfig).toEqual({ Mode: 'Active' });
+    }
+  });
+
   it('uses a Cognito-authorized REST streaming integration', () => {
     const resources = template.findResources('AWS::ApiGateway::Resource');
     const stream = Object.entries(resources).find(([, value]: [string, any]) => value.Properties.PathPart === 'stream');

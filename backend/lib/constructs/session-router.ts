@@ -5,6 +5,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
+import { suppressXrayWildcard } from './tracing';
 
 export interface SessionRouterProps {
   role: iam.Role;
@@ -31,6 +32,7 @@ export class SessionRouter extends Construct {
     props.role.addToPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [props.metadataTable.tableArn] }));
     props.role.addToPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'], resources: [props.activeRunsTable.tableArn] }));
     this.function = new lambda.Function(this, 'Function', {
+      tracing: lambda.Tracing.ACTIVE,
       runtime: lambda.Runtime.PYTHON_3_14,
       handler: 'handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', '..', 'lambdas', 'session-router')),
@@ -50,5 +52,6 @@ export class SessionRouter extends Construct {
         RESEARCH_RUNTIME_URL: props.runtimeUrl,
       },
     });
+    suppressXrayWildcard(props.role);
   }
 }
