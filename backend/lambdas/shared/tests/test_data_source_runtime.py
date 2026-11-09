@@ -37,6 +37,8 @@ SOURCES = [
     ("icd10", "ICD10Tool", None),
     ("npi", "NPIRegistryTool", None),
     ("pubchem", "PubChemTool", None),
+    ("openfda", "OpenFDATool", None),
+    ("patentsview", "PatentsViewTool", None),
 ]
 
 

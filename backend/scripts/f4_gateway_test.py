@@ -49,12 +49,14 @@ SOURCES = [
     "icd10",
     "npi",
     "pubchem",
+    "openfda",
+    "patentsview",
 ]
 # Queries known to return results from each live API (checked during F4 chunk 1)
 ARGS = {
     "npi": {"name": "john smith", "state": "AZ", "max_results": 2},
     "opentargets": {"target": "EGFR", "max_results": 2},
-    "cmscoverage": {"query": "MRI", "max_results": 2},
+    "cmscoverage": {"query": "acupuncture", "max_results": 2},
 }
 DEFAULT_ARGS = {"query": "aspirin", "max_results": 2}
 POLICY_DENY_CODE = -32002  # S2 question 4

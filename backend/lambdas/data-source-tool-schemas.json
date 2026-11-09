@@ -153,7 +153,7 @@
     "sourceId": "cmscoverage",
     "tool": {
       "name": "search",
-      "description": "Search CMS National Coverage Determination records for policy titles, decision memos, and effective dates.",
+      "description": "Search CMS National Coverage Determination titles and display IDs, with effective dates for up to ten results.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -238,6 +238,52 @@
           "search_type": {
             "type": "string",
             "description": "Search Type, default name."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "sourceId": "openfda",
+    "tool": {
+      "name": "search",
+      "description": "Search openFDA for drug approvals (drugsfda), drug labels, and device 510(k) clearances.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Max Results, 1 to 100, default 10."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "sourceId": "patentsview",
+    "tool": {
+      "name": "search",
+      "description": "Search USPTO PatentsView for patents by assignee, keyword, and CPC classification.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query."
           },
           "max_results": {
             "type": "integer",
