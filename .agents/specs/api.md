@@ -55,6 +55,7 @@ Request:
 ```json
 {
   "session_id": "session-123",
+  "run_id": "client-generated-uuid",
   "message": "Summarize the evidence for...",
   "attachment_ids": ["file-1"]
 }
@@ -62,17 +63,17 @@ Request:
 
 Response: `text/event-stream` body. Event framing and payloads are defined in `.agents/specs/streaming-protocol.md` (CEI UI 1.2). The Session Runner relays `InvokeAgentRuntime` chunks from the Session Router → AgentCore Runtime path; it does not itself decide the agent (B17).
 
-A run whose plan step estimates more than 10 minutes (B79 — resolves the B23 threshold TBD) does not stream to completion. This is decided once, from the plan step's own estimate, before any component streaming begins; there is no mid-run handoff to async (B79). It emits a `job_handoff` event (see streaming spec) and the client switches to the Jobs routes below.
+A run whose plan step estimates more than 10 minutes (B79) does not stream to completion. Before F16 provides jobs, return a recoverable background-processing-unavailable error instead of a job handoff (B100). This is decided before component streaming begins; there is no mid-run handoff.
 
 When the free-text classifier's confidence is low, the Session Router does not call `/chat/stream` against a chosen agent at all; it instead returns a `ChoicePicker` surface asking the user which of the 4 agents they want (B80). The user's answer (via `POST /ui-actions`) is what actually starts the run against the chosen agent.
 
 **Reconnect/resume (B68 — resolves the earlier resume-route proposal):** the same route, `POST /chat/stream`, takes an optional `resume_from_seq` field instead of a separate route:
 
 ```json
-{ "session_id": "session-123", "resume_from_seq": 12 }
+{ "session_id": "session-123", "run_id": "client-generated-uuid", "resume_from_seq": 12 }
 ```
 
-The Session Runner queries the Chat History Store for SSE-replay items (`.agents/specs/data-model.md`) with `sequence_number` greater than `resume_from_seq` for this `session_id`, replays them over the new connection, then continues live. See `.agents/specs/streaming-protocol.md` "Reconnect/resume behavior".
+The client generates a new UUID `run_id` for each start and retains it for reconnects. The Session Runner validates session ownership and queries the Chat History Store for SSE-replay items for that user, session, and run with `sequence_number` greater than `resume_from_seq`, replays them, then continues live. An unknown run is never interpreted as a new start. See `.agents/specs/streaming-protocol.md` "Reconnect/resume behavior".
 
 **Tool agent chat (B84):** `POST /tools/{source}/chat/stream` is a separate STREAM route for single-source tool-agent chat, handled by the same Session Runner Lambda and the same request/response/reconnect shapes as `/chat/stream` above. The `{source}` path parameter (one of the 10 sources or `ncbi`) tells the Session Router which YAML profile to load and which single source scope to request for the token (see `.agents/specs/auth-and-tool-scope.md` §3, `.agents/specs/agents.md` §5); the Router checks `source` against the allowed source list before dispatch.
 
