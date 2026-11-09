@@ -147,6 +147,10 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         "user_id": user_id,
         "session_id": session_id,
         "query": prompt,
+        # Checkpoints preserve prior state; every invocation must select its own
+        # transport and grounding lifecycle rather than inheriting the last turn.
+        "stream": False,
+        "grounding_pending": False,
         "triage_plan": None,
         "retrieved_results": [],
         "synthesis": "",
@@ -217,7 +221,8 @@ async def _begin_stream_research(context, session, prompt, mode):
             initial = {"messages": [*history, HumanMessage(content=prompt)], "mode": mode,
                        "user_id": session.user_id, "session_id": session.session_id, "query": prompt,
                        "triage_plan": None, "retrieved_results": [], "synthesis": "",
-                       "response_document": None, "trace": [], "stream": True}
+                       "response_document": None, "trace": [], "stream": True,
+                       "grounding_pending": False}
             config = {"configurable": {"thread_id": session.session_id, "actor_id": session.user_id}}
             async for frame in _stream_research(graph, initial, config, context, session, prompt, saver, persistent):
                 yield frame
