@@ -65,8 +65,10 @@ async function* parseEvents(body) {
 /** Dependencies are injectable; production adapter below uses scoped AWS IAM. */
 function createHandler(responseFrom, deps) {
   return async (event, rawStream, context = {}) => {
-    let stream, parsed, started = false, reserved = false, closed = false, timer;
-    const send = (value) => { if (!closed) { try { stream.write(value); } catch { closed = true; } } };
+    let stream, parsed, started = false, reserved = false, closed = false, timer, stage = 'validate';
+    const requestId = event?.requestContext?.requestId || context.awsRequestId || 'unknown';
+    const log = (level, outcome, error) => console[level](JSON.stringify({ event: 'session_runner', request_id: requestId, lambda_request_id: context.awsRequestId, stage, outcome, ...(error ? { error_type: error.name || 'Error' } : {}) }));
+    const send = (value) => { if (!closed) { try { stream.write(value); } catch (error) { closed = true; log('error', 'write_failed', error); } } };
     const respondError = (err) => {
       const e = err instanceof RequestError ? err : new RequestError(500, 'internal_error', 'The request could not be completed.');
       stream = responseFrom(rawStream, { statusCode: e.statusCode, headers: deps.headers(event, false) });
@@ -74,9 +76,11 @@ function createHandler(responseFrom, deps) {
     };
     try {
       parsed = validateRequest(event);
+      stage = 'ownership';
       if (!await deps.owns(parsed.userId, parsed.request.session_id)) throw new RequestError(404, 'not_found', 'Session not found.');
       const key = partition(parsed);
       if (parsed.request.resume_from_seq !== undefined) {
+        stage = 'replay';
         if (!await deps.exists(key)) throw new RequestError(404, 'not_found', 'Response not found.');
         stream = responseFrom(rawStream, { statusCode: 200, headers: deps.headers(event, true) });
         stream.on?.('error', () => { closed = true; });
@@ -95,9 +99,11 @@ function createHandler(responseFrom, deps) {
         return;
       }
       // A run id is reserved before the Router starts. A retry can replay but cannot start it twice.
+      stage = 'reserve';
       await deps.reserve(key, parsed.userId, parsed.request);
       reserved = true;
-      const route = await deps.start(parsed.bearerToken, parsed.request);
+      stage = 'router_start';
+      const route = await deps.start(parsed.bearerToken, parsed.request, requestId);
       started = true;
       if (route.run_id !== parsed.request.run_id || route.session_id !== parsed.request.session_id || route.user_id !== parsed.userId || !route.gateway_token) throw new Error('invalid router response');
       stream = responseFrom(rawStream, { statusCode: 200, headers: deps.headers(event, true) });
@@ -105,27 +111,32 @@ function createHandler(responseFrom, deps) {
       timer = setInterval(() => send(': heartbeat\n\n'), 17000);
       let seq = -1, terminal = false;
       try {
+        stage = 'runtime_open';
         const body = await deps.open(route, parsed);
+        stage = 'runtime_stream';
         for await (const item of parseEvents(body)) {
           if (item.seq !== seq + 1 || (seq === -1 && item.type !== 'surface_begin')) throw new Error('invalid event order');
           await deps.append(key, item); seq = item.seq; send(frame(item));
           if (TERMINAL.has(item.type)) { terminal = true; break; }
         }
         if (!terminal) throw new Error('missing terminal event');
-      } catch {
+      } catch (error) {
+        log('error', 'stream_failed', error);
+        stage = 'persist_terminal_error';
         const item = { seq: seq + 1, type: 'error', code: 'stream_failed', message: 'The response could not be completed.', retriable: true };
         await deps.append(key, item); send(frame(item));
       }
       if (!closed) stream.end();
     } catch (err) {
+      log(err instanceof RequestError && err.statusCode < 500 ? 'warn' : 'error', 'request_failed', err);
       if (reserved && !stream && parsed) {
-        try { await deps.append(partition(parsed), { seq: 0, type: 'error', code: 'service_unavailable', message: 'The research service is unavailable.', retriable: true }); } catch { /* already written or storage unavailable */ }
+        try { await deps.append(partition(parsed), { seq: 0, type: 'error', code: 'service_unavailable', message: 'The research service is unavailable.', retriable: true }); } catch (error) { stage = 'persist_terminal_error'; log('error', 'persistence_failed', error); }
       }
       if (!stream) respondError(err);
       else if (!closed) stream.end();
     } finally {
       if (timer) clearInterval(timer);
-      if (started && parsed) { try { await deps.finish(parsed.bearerToken, parsed.request); } catch { /* lease expires if cleanup fails */ } }
+      if (started && parsed) { try { await deps.finish(parsed.bearerToken, parsed.request); } catch (error) { stage = 'router_finish'; log('error', 'cleanup_failed', error); } }
     }
   };
 }
@@ -168,7 +179,7 @@ function productionDependencies() {
       const r = await db.send(new QueryCommand({ TableName: table, KeyConditionExpression: 'session_id = :pk AND sequence_number > :seq', ExpressionAttributeValues: { ':pk': { S: key }, ':seq': { N: String(seq) } }, ConsistentRead: true, Limit: 100 }));
       return (r.Items || []).map((i) => JSON.parse(i.event.S));
     },
-    async start(bearer, request) { return invoke({ op: 'start', bearer_token: bearer, request }); },
+    async start(bearer, request, requestId) { return invoke({ op: 'start', bearer_token: bearer, request, request_id: requestId }); },
     async finish(bearer, request) { await invoke({ op: 'finish', bearer_token: bearer, session_id: request.session_id, run_id: request.run_id }); },
     async open(route, parsed) {
       const url = new URL(route.runtime_url);

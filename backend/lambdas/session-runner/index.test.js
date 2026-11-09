@@ -58,6 +58,15 @@ test('runtime failures yield a safe persisted terminal error and release the run
   const result = await h.invoke(request()); assert.match(result.text, /event: error/);
   assert.doesNotMatch(result.text, /secret/); assert.equal(h.events[0].type, 'error'); assert.deepEqual(h.calls, ['start', 'finish']);
 });
+test('logs the failed stage without leaking error messages or bearer tokens', async () => {
+  const h = harness(); h.deps.start = async () => { throw new Error('secret token and message'); };
+  const messages = []; const original = console.error;
+  console.error = (message) => messages.push(message);
+  try { await h.invoke(request()); } finally { console.error = original; }
+  const entry = JSON.parse(messages[0]);
+  assert.equal(entry.stage, 'router_start'); assert.equal(entry.request_id, 'request-1');
+  assert.doesNotMatch(messages.join(' '), /secret|token and message/);
+});
 test('parser handles split CRLF, UTF-8 and multiple events', async () => {
   const bytes = Buffer.from('id: 0\r\nevent: text_delta\r\ndata: {"delta":"é"}\r\n\r\n');
   const out = []; for await (const event of parseEvents((async function* () { for (const byte of bytes) yield Buffer.from([byte]); })())) out.push(event);

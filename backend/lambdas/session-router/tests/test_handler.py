@@ -51,12 +51,15 @@ def test_foreign_session_never_gets_token(deps):
     issue.assert_not_called()
 
 
-def test_failed_token_issue_releases_lease(deps):
+def test_failed_token_issue_releases_lease(deps, caplog):
     _, _, leases, issue = deps
     issue.side_effect = ValueError("secret must not escape")
     reply = router.handler(event(), None)
     assert reply["status"] == 503 and "secret" not in str(reply)
     leases.release.assert_called_once_with(leases.acquire.return_value)
+    assert '"stage": "issue_token"' in caplog.text
+    assert '"error_type": "ValueError"' in caplog.text
+    assert "secret must not escape" not in caplog.text
 
 
 def test_finish_cannot_release_a_newer_run(deps):
