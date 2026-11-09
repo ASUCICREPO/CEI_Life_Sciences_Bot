@@ -70,6 +70,7 @@ describe('ToolGateway (F4)', () => {
       expect(router.AccessTokenValidity).toBe(60);
       expect(router.ExplicitAuthFlows).toEqual(['ALLOW_REFRESH_TOKEN_AUTH']);
       expect(router.AllowedOAuthScopes).toHaveLength(EXPECTED_SCOPES.length);
+      for (const scope of EXPECTED_SCOPES) expect(JSON.stringify(router.AllowedOAuthScopes)).toContain(scope);
     });
 
     it('keeps the SPA client off the client-credentials grant (the pre-token trigger relies on it)', () => {
@@ -152,14 +153,16 @@ describe('ToolGateway (F4)', () => {
       expect(cedarPermit('pubmed', 'arn:gw', 'cei-tools/src.pubmed')).toContain('principal.hasTag("scope") && principal.getTag("scope") like "*cei-tools/src.pubmed*"');
     });
 
-    it('lets the Gateway role invoke exactly the ten source Lambdas', () => {
+    it('lets the Gateway role invoke exactly the configured source Lambdas', () => {
       // the Gateway's own RoleArn (the Code Interpreter role also trusts bedrock-agentcore)
       const gatewayRole = resourcesOf(template, 'AWS::BedrockAgentCore::Gateway')[0].RoleArn['Fn::GetAtt'][0];
       const statements = resourcesOf(template, 'AWS::IAM::Policy')
         .filter((p) => p.Roles.some((r: any) => r.Ref === gatewayRole))
         .flatMap((p) => p.PolicyDocument.Statement);
       const invoke = statements.find((s: any) => s.Action === 'lambda:InvokeFunction');
-      expect(invoke.Resource).toHaveLength(SOURCE_IDS.length);
+      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget');
+      const expected = targets.map((target) => JSON.stringify(target.TargetConfiguration.Mcp.Lambda.LambdaArn)).sort();
+      expect(invoke.Resource.map((arn: unknown) => JSON.stringify(arn)).sort()).toEqual(expected);
     });
   });
 
@@ -171,7 +174,8 @@ describe('ToolGateway (F4)', () => {
       for (const fn of sources) {
         expect(fn.Environment.Variables.CEI_DIRECT_MODE).toBeUndefined();
         expect(fn.Runtime).toBe('python3.14');
-        expect([90, 150]).toContain(fn.Timeout);
+        const role = fn.Role['Fn::GetAtt'][0] as string;
+        expect(fn.Timeout).toBe(role.toLowerCase().includes('openfda') ? 150 : 90);
         expect(fn.Layers).toHaveLength(1);
       }
     });
@@ -193,10 +197,15 @@ describe('ToolGateway (F4)', () => {
       template.hasResourceProperties('AWS::ApiGateway::Resource', { PathPart: 'token-refresh' });
     });
 
-    it('fails closed: no caller role is allowed until F5 adds the agent runtime role', () => {
-      const [fn] = resourcesOf(template, 'AWS::Lambda::Function').filter((f) => f.Environment?.Variables?.ROUTER_SECRET_ARN);
-      expect(fn.Environment.Variables.ALLOWED_CALLER_ROLE_ARNS).toBe('');
-      expect(fn.Environment.Variables.ALLOWED_SCOPES.split(',')).toHaveLength(EXPECTED_SCOPES.length);
+    it('restricts refresh to the Research runtime and the configured source scopes', () => {
+      const matches = resourcesOf(template, 'AWS::Lambda::Function').filter((f) => f.Environment?.Variables?.ALLOWED_CALLER_ROLE_ARNS !== undefined);
+      expect(matches).toHaveLength(1);
+      const env = matches[0].Environment.Variables;
+      const research = resourcesOf(template, 'AWS::BedrockAgentCore::Runtime').find((r) => r.AgentRuntimeName === 'CEIResearchAgent');
+      expect(env.ALLOWED_CALLER_ROLE_ARNS).toEqual(research.RoleArn);
+      expect(env.ALLOWED_SCOPES.split(',').sort()).toEqual(EXPECTED_SCOPES.map((scope) => `cei-tools/${scope}`).sort());
+      expect(env.ACTIVE_RUNS_TABLE).not.toBe('');
+      expect(env.METADATA_TABLE).not.toBe('');
     });
   });
 

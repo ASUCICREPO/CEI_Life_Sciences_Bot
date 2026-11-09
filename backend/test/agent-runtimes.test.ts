@@ -36,7 +36,9 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
 
   test.each(runtimes.map(([id, r]) => [id, r] as const))('%s: forwards Authorization and carries CEI_COGNITO_* env', (_id, r) => {
     const props = (r as any).Properties;
-    expect(props.RequestHeaderConfiguration.RequestHeaderAllowlist).toContain('Authorization');
+    expect(props.RequestHeaderConfiguration.RequestHeaderAllowlist).toEqual(
+      props.AgentRuntimeName === 'CEIResearchAgent' ? ['Authorization', 'X-Cei-Gateway-Token'] : ['Authorization'],
+    );
     const env = props.EnvironmentVariables;
     expect(env.CEI_COGNITO_USER_POOL_ID).toEqual({ Ref: userPoolId });
     expect(env.CEI_COGNITO_REGION).toBe('us-east-1');
@@ -85,7 +87,9 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
       Properties: Match.objectLike({ EventExpiryDuration: 365 }), DeletionPolicy: 'Retain',
     });
     const research = runtimes.find(([, r]) => (r as any).Properties.AgentRuntimeName === 'CEIResearchAgent')![1] as any;
-    expect(research.Properties.EnvironmentVariables.CEI_RESEARCH_MEMORY_ID).toBeDefined();
+    const memoryId = Object.keys(template.findResources('AWS::BedrockAgentCore::Memory'))[0];
+    expect(research.Properties.EnvironmentVariables.CEI_RESEARCH_MEMORY_ID).toEqual({ 'Fn::GetAtt': [memoryId, 'MemoryId'] });
+    expect(research.Properties.EnvironmentVariables.CEI_REQUIRE_TOOL_GATEWAY).toBe('true');
   });
 
   test('zero unsuppressed cdk-nag errors after adding the runtimes', () => {

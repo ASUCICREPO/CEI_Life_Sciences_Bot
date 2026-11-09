@@ -431,11 +431,11 @@ describe('BackendStack', () => {
       expect(grants.filter((g) => onHistoryTable(g.resource)).map((g) => g.action)).toEqual(['dynamodb:Query']);
     });
 
-    it('gives the history Lambda only GetItem on metadata and Query on history', () => {
+    it('grants history and trace reads on the correct tables', () => {
       const grants = dynamoGrants(/^SessionHistoryHandlerRole/);
       const metadataActions = grants.filter((g) => g.resource.includes('ChatMetadataStore')).map((g) => g.action);
       expect(metadataActions).toEqual(['dynamodb:GetItem']);
-      expect(grants.filter((g) => onHistoryTable(g.resource)).map((g) => g.action)).toEqual(['dynamodb:Query']);
+      expect(grants.filter((g) => onHistoryTable(g.resource)).map((g) => g.action).sort()).toEqual(['dynamodb:BatchGetItem', 'dynamodb:GetItem', 'dynamodb:Query']);
     });
   });
 });

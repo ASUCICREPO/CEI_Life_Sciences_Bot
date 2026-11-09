@@ -79,13 +79,20 @@ describe('BackendStack REST API + session store', () => {
     }
   });
 
-  it('has no DELETE route and no streaming route yet', () => {
-    const methods = Object.values(template.findResources('AWS::ApiGateway::Method')).map((m: any) => m.Properties.HttpMethod);
-    expect(methods).not.toContain('DELETE');
-    // /sessions, /{sessionId}, /history (F3) + /internal, /token-refresh (F4); still no /chat/stream (F5)
-    template.resourceCountIs('AWS::ApiGateway::Resource', 5);
-    const paths = Object.values(template.findResources('AWS::ApiGateway::Resource')).map((r: any) => r.Properties.PathPart);
-    expect(paths.sort()).toEqual(['history', 'internal', 'sessions', 'token-refresh', '{sessionId}']);
+  it('includes the streaming and trace routes without a DELETE route', () => {
+    const methods = Object.values(template.findResources('AWS::ApiGateway::Method')).map((m: any) => m.Properties);
+    expect(methods.map((method) => method.HttpMethod)).not.toContain('DELETE');
+    template.resourceCountIs('AWS::ApiGateway::Resource', 10);
+    const resources = template.findResources('AWS::ApiGateway::Resource');
+    const paths = Object.values(resources).map((r: any) => r.Properties.PathPart);
+    expect(paths.sort()).toEqual(['chat', 'history', 'internal', 'sessions', 'stream', 'token-refresh', 'trace', 'turns', '{messageId}', '{sessionId}']);
+    const idFor = (part: string) => Object.entries(resources).find(([, resource]: [string, any]) => resource.Properties.PathPart === part)![0];
+    const stream = resources[idFor('stream')] as any;
+    const trace = resources[idFor('trace')] as any;
+    expect(stream.Properties.ParentId).toEqual({ Ref: idFor('chat') });
+    expect(trace.Properties.ParentId).toEqual({ Ref: idFor('{messageId}') });
+    expect(methods.some((method) => method.HttpMethod === 'POST' && method.ResourceId?.Ref === idFor('stream') && method.Integration.ResponseTransferMode === 'STREAM')).toBe(true);
+    expect(methods.some((method) => method.HttpMethod === 'GET' && method.ResourceId?.Ref === idFor('trace') && method.AuthorizationType === 'COGNITO_USER_POOLS')).toBe(true);
   });
 
   it('applies the 20 rps account-wide throttle through a UsagePlan and the stage default', () => {
@@ -234,7 +241,7 @@ describe('BackendStack REST API + session store', () => {
 
     const historyStatements = policyActionsFor(template, 'SessionHistoryHandlerRole');
     const dynamo = historyStatements.filter((s) => s.actions.some((a) => a.startsWith('dynamodb:')));
-    expect(dynamo.map((s) => s.actions.join(',')).sort()).toEqual(['dynamodb:GetItem', 'dynamodb:Query']);
+    expect(dynamo.flatMap((s) => s.actions).sort()).toEqual(['dynamodb:BatchGetItem', 'dynamodb:GetItem', 'dynamodb:GetItem', 'dynamodb:Query']);
 
     for (const statement of [...metadataStatements, ...historyStatements]) {
       const resource = JSON.stringify(statement.resource);

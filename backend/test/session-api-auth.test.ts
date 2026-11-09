@@ -57,9 +57,22 @@ describe.each([
   const authorizerIds = Object.keys(authorizers);
   const userPoolIds = Object.keys(template.findResources('AWS::Cognito::UserPool'));
 
-  test('the expected session routes exist (list/create, get/rename, history)', () => {
-    const verbs = nonOptions.map(([, m]) => (m as any).Properties.HttpMethod).sort();
-    expect(verbs).toEqual(['GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST']);
+  test('the expected authenticated session, trace, and streaming routes exist', () => {
+    const resources = template.findResources('AWS::ApiGateway::Resource') as Record<string, any>;
+    function route(id: string): string {
+      const resource = resources[id];
+      const parentId = resource.Properties.ParentId?.Ref;
+      return `${parentId && resources[parentId] ? route(parentId) : ''}/${resource.Properties.PathPart}`;
+    }
+    const routes = nonOptions.map(([, m]) => {
+      const props = (m as any).Properties;
+      return `${props.HttpMethod} ${route(props.ResourceId.Ref)}`;
+    }).sort();
+    expect(routes).toEqual([
+      'GET /sessions', 'GET /sessions/{sessionId}', 'GET /sessions/{sessionId}/history',
+      'GET /sessions/{sessionId}/turns/{messageId}/trace', 'PATCH /sessions/{sessionId}',
+      'POST /chat/stream', 'POST /sessions',
+    ].sort());
   });
 
   test('every non-OPTIONS method uses COGNITO_USER_POOLS with scopes and the stack authorizer', () => {
