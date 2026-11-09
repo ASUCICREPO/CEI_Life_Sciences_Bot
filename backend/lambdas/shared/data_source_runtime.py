@@ -163,7 +163,10 @@ def make_handler(
             raise
         payload = result.model_dump(mode="json")
         payload["query_metadata"]["user_api_key"] = used_user_key
-        if "error" in result.query_metadata:
+        # Some sources, such as openFDA, return useful results alongside endpoint failures.
+        # An empty `errors` list is a success; do not put the error contents into logs.
+        has_error = bool(result.query_metadata.get("error") or result.query_metadata.get("errors"))
+        if has_error:
             log_failure("fetch", "upstream_error")
         logger.info(
             json.dumps(
@@ -171,7 +174,7 @@ def make_handler(
                     "event": "data_source_call",
                     "source": source_id,
                     "results": len(result.results),
-                    "error": "error" in result.query_metadata,
+                    "error": has_error,
                     "user_api_key": used_user_key,
                 }
             )

@@ -61,6 +61,23 @@ def test_api_handler_logs_traceback_via_real_logger(caplog):
     assert rec.exc_info and "secret detail" in str(rec.exc_info[1])
 
 
+def test_json_formatter_redacts_exception_and_chained_messages(caplog):
+    import logging
+
+    try:
+        try:
+            raise ValueError("secret cause")
+        except ValueError as exc:
+            raise RuntimeError("secret detail") from exc
+    except RuntimeError:
+        logging.getLogger("test_safe_format").exception("request failed", extra={"request_id": "req-1"})
+    payload = json.loads(he.JsonFormatter().format(caplog.records[-1]))
+    assert payload["exception_type"] == "RuntimeError"
+    assert payload["cause_type"] == "ValueError"
+    assert payload["frames"][-1]["function"] == "test_json_formatter_redacts_exception_and_chained_messages"
+    assert "secret" not in json.dumps(payload)
+
+
 def test_api_handler_api_error_passes_through_status_and_code():
     logger = Mock()
 
@@ -74,6 +91,18 @@ def test_api_handler_api_error_passes_through_status_and_code():
     err = json.loads(resp["body"])["error"]
     assert err == {"code": "stale_revision", "message": "Revision is stale.", "request_id": "req-123", "retriable": True}
     logger.exception.assert_not_called()
+
+
+def test_api_handler_logs_handled_server_errors_without_message():
+    logger = Mock()
+
+    @he.api_handler(logger)
+    def route(event, context):
+        raise he.ApiError(503, "service_unavailable", "sensitive detail")
+
+    assert route(_event(), None)["statusCode"] == 503
+    logger.error.assert_called_once_with("handled_api_failure", extra={"request_id": "req-123", "route": None,
+                                                                      "status": 503, "code": "service_unavailable"})
 
 
 def test_api_handler_not_found_helper_is_404():

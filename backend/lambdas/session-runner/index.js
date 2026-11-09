@@ -67,12 +67,14 @@ function createHandler(responseFrom, deps) {
   return async (event, rawStream, context = {}) => {
     let stream, parsed, started = false, reserved = false, closed = false, timer, stage = 'validate';
     const requestId = event?.requestContext?.requestId || context.awsRequestId || 'unknown';
-    const log = (level, outcome, error) => console[level](JSON.stringify({ event: 'session_runner', request_id: requestId, lambda_request_id: context.awsRequestId, stage, outcome, ...(error ? { error_type: error.name || 'Error' } : {}) }));
+    const log = (level, outcome, error) => console[level](JSON.stringify({ event: 'session_runner', request_id: requestId, lambda_request_id: context.awsRequestId, stage, outcome, ...(error ? { error_type: error.name || 'Error' } : {}), ...(error instanceof RequestError ? { code: error.code, status: error.statusCode } : {}) }));
     const send = (value) => { if (!closed) { try { stream.write(value); } catch (error) { closed = true; log('error', 'write_failed', error); } } };
     const respondError = (err) => {
       const e = err instanceof RequestError ? err : new RequestError(500, 'internal_error', 'The request could not be completed.');
       stream = responseFrom(rawStream, { statusCode: e.statusCode, headers: deps.headers(event, false) });
-      stream.end(JSON.stringify({ error: { code: e.code, message: e.message, retriable: e.retriable, request_id: event?.requestContext?.requestId || '' } }));
+      // Lambda writes the HTTP metadata and delimiter on the first write(), not end(body).
+      stream.write(JSON.stringify({ error: { code: e.code, message: e.message, retriable: e.retriable, request_id: event?.requestContext?.requestId || '' } }));
+      stream.end();
     };
     try {
       parsed = validateRequest(event);
@@ -83,7 +85,8 @@ function createHandler(responseFrom, deps) {
         stage = 'replay';
         if (!await deps.exists(key)) throw new RequestError(404, 'not_found', 'Response not found.');
         stream = responseFrom(rawStream, { statusCode: 200, headers: deps.headers(event, true) });
-        stream.on?.('error', () => { closed = true; });
+        stream.on?.('error', (error) => { closed = true; log('error', 'stream_transport_failed', error); });
+        send(': connected\n\n');
         let seq = parsed.request.resume_from_seq, lastHeartbeat = Date.now();
         while (!closed && (context.getRemainingTimeInMillis?.() ?? 900000) > 5000) {
           const events = await deps.after(key, seq);
@@ -95,7 +98,7 @@ function createHandler(responseFrom, deps) {
           if (Date.now() - lastHeartbeat >= 17000) { send(': heartbeat\n\n'); lastHeartbeat = Date.now(); }
           await deps.sleep(500);
         }
-        if (!closed) stream.end();
+        if (!closed) { log('error', 'replay_timeout'); stream.end(); }
         return;
       }
       // A run id is reserved before the Router starts. A retry can replay but cannot start it twice.
@@ -107,7 +110,8 @@ function createHandler(responseFrom, deps) {
       started = true;
       if (route.run_id !== parsed.request.run_id || route.session_id !== parsed.request.session_id || route.user_id !== parsed.userId || !route.gateway_token) throw new Error('invalid router response');
       stream = responseFrom(rawStream, { statusCode: 200, headers: deps.headers(event, true) });
-      stream.on?.('error', () => { closed = true; });
+      stream.on?.('error', (error) => { closed = true; log('error', 'stream_transport_failed', error); });
+      send(': connected\n\n');
       timer = setInterval(() => send(': heartbeat\n\n'), 17000);
       let seq = -1, terminal = false;
       try {
@@ -116,7 +120,10 @@ function createHandler(responseFrom, deps) {
         stage = 'runtime_stream';
         for await (const item of parseEvents(body)) {
           if (item.seq !== seq + 1 || (seq === -1 && item.type !== 'surface_begin')) throw new Error('invalid event order');
-          await deps.append(key, item); seq = item.seq; send(frame(item));
+          stage = 'persist_event'; await deps.append(key, item); seq = item.seq;
+          stage = 'client_stream'; send(frame(item));
+          stage = 'runtime_stream';
+          if (item.type === 'error') log('error', 'agent_error');
           if (TERMINAL.has(item.type)) { terminal = true; break; }
         }
         if (!terminal) throw new Error('missing terminal event');
@@ -128,7 +135,8 @@ function createHandler(responseFrom, deps) {
       }
       if (!closed) stream.end();
     } catch (err) {
-      log(err instanceof RequestError && err.statusCode < 500 ? 'warn' : 'error', 'request_failed', err);
+      const clientError = err instanceof RequestError && err.statusCode < 500;
+      log(clientError ? 'warn' : 'error', clientError ? 'client_rejected' : 'request_failed', err);
       if (reserved && !stream && parsed) {
         try { await deps.append(partition(parsed), { seq: 0, type: 'error', code: 'service_unavailable', message: 'The research service is unavailable.', retriable: true }); } catch (error) { stage = 'persist_terminal_error'; log('error', 'persistence_failed', error); }
       }
@@ -184,7 +192,7 @@ function productionDependencies() {
     async open(route, parsed) {
       const url = new URL(route.runtime_url);
       if (url.protocol !== 'https:' || !/^bedrock-agentcore\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/.test(url.hostname) || url.port || url.username || url.password || !/^\/runtimes\/[^/]+\/invocations$/.test(url.pathname) || url.search !== '?qualifier=DEFAULT') throw new Error('invalid runtime URL');
-      const response = await fetch(url, { method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${parsed.bearerToken}`, 'X-Cei-Gateway-Token': route.gateway_token, 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': parsed.request.session_id, Accept: 'text/event-stream', 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: parsed.request.message, mode: parsed.request.mode, stream: true }), signal: AbortSignal.timeout(850000) });
+      const response = await fetch(url, { method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${parsed.bearerToken}`, 'X-Cei-Gateway-Token': route.gateway_token, 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': parsed.request.session_id, ...(process.env._X_AMZN_TRACE_ID ? { 'X-Amzn-Trace-Id': process.env._X_AMZN_TRACE_ID } : {}), Accept: 'text/event-stream', 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: parsed.request.message, mode: parsed.request.mode, stream: true }), signal: AbortSignal.timeout(850000) });
       if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new Error('runtime unavailable');
       return response.body;
     },

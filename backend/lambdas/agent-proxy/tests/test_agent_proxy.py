@@ -97,6 +97,13 @@ def test_never_adds_cors_headers_itself(captured):
     assert not any(h.lower().startswith("access-control-") for h in result["headers"])
 
 
+def test_forwards_lambda_trace_context(captured, monkeypatch):
+    trace = "Root=1-5759e988-bd862e3fe1be46a994272793;Parent=53995c3f42cd8ad8;Sampled=1"
+    monkeypatch.setenv("_X_AMZN_TRACE_ID", trace)
+    handler.handler(_event(), _Ctx())
+    assert captured[0][0].get_header("X-amzn-trace-id") == trace
+
+
 def test_base64_body_is_decoded(captured):
     handler.handler(_event(b64=True), _Ctx())
     assert captured[0][0].data == b'{"op":"run"}'
@@ -261,3 +268,45 @@ def test_logs_never_contain_token_or_session(captured, caplog):
     text = caplog.text
     assert "abc.def.ghi" not in text
     assert SESSION not in text
+
+
+def test_unexpected_error_log_does_not_include_exception_message(monkeypatch, caplog):
+    def fail(*args, **kwargs):
+        raise RuntimeError("secret request detail")
+    monkeypatch.setattr(handler.urllib.request, "urlopen", fail)
+    assert handler.handler(_event(), _Ctx())["statusCode"] == 502
+    assert "RuntimeError" in caplog.text
+    assert "secret request detail" not in caplog.text
+
+
+def test_success_http_error_envelope_is_logged_without_body(monkeypatch, caplog):
+    monkeypatch.setattr(handler.urllib.request, "urlopen", lambda *_args, **_kwargs: _Upstream(body=b'{"status":"error","message":"private response"}'))
+    result = handler.handler(_event(), _Ctx())
+    assert result["statusCode"] == 200
+    assert json.loads(result["body"])["message"] == "private response"
+    assert "agent_proxy_application_error" in caplog.text
+    assert "private response" not in caplog.text
+
+
+def test_invalid_upstream_json_is_logged_without_body(monkeypatch, caplog):
+    monkeypatch.setattr(handler.urllib.request, "urlopen", lambda *_args, **_kwargs: _Upstream(body=b'{private invalid json'))
+    result = handler.handler(_event(), _Ctx())
+    assert result["statusCode"] == 200
+    assert result["body"] == "{private invalid json"
+    assert "agent_proxy_invalid_json" in caplog.text
+    assert "private invalid json" not in caplog.text
+
+
+def test_deep_upstream_json_still_passes_through(monkeypatch, caplog):
+    body = b'[' * 2000 + b'0' + b']' * 2000
+    original_loads = json.loads
+    def loads(value, *args, **kwargs):
+        if isinstance(value, bytes):
+            raise RecursionError("private response")
+        return original_loads(value, *args, **kwargs)
+    monkeypatch.setattr(handler.json, "loads", loads)
+    monkeypatch.setattr(handler.urllib.request, "urlopen", lambda *_args, **_kwargs: _Upstream(body=body))
+    result = handler.handler(_event(), _Ctx())
+    assert result["statusCode"] == 200
+    assert result["body"] == body.decode()
+    assert "agent_proxy_invalid_json" in caplog.text

@@ -70,7 +70,7 @@ def _log(agent: str | None, status: int, started: float, rid: str) -> None:
     logger.info(
         json.dumps(
             {
-                "event": "agent_proxy",
+                "event": "agent_proxy_failure" if status >= 500 else "agent_proxy",
                 "agent": agent,
                 "status": status,
                 "duration_ms": int((time.monotonic() - started) * 1000),
@@ -154,11 +154,22 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             "Content-Type": "application/json",
             "Accept": "application/json",
             SESSION_HEADER: session_id,
+            **({"X-Amzn-Trace-Id": os.environ["_X_AMZN_TRACE_ID"]} if os.environ.get("_X_AMZN_TRACE_ID") else {}),
         },
     )
     try:
         with urllib.request.urlopen(request, timeout=_upstream_timeout()) as upstream:  # noqa: S310 - https only
-            result = _response(upstream.status, upstream.headers.get("content-type"), upstream.read())
+            payload = upstream.read()
+            content_type = upstream.headers.get("content-type")
+            if 200 <= upstream.status < 300 and content_type and "application/json" in content_type.lower():
+                try:
+                    envelope = json.loads(payload)
+                    if isinstance(envelope, dict) and envelope.get("status") == "error":
+                        # Do not log the response body; it may contain user or model content.
+                        logger.warning(json.dumps({"event": "agent_proxy_application_error", "agent": agent, "request_id": rid}))
+                except (ValueError, UnicodeDecodeError, RecursionError):
+                    logger.warning(json.dumps({"event": "agent_proxy_invalid_json", "agent": agent, "request_id": rid}))
+            result = _response(upstream.status, content_type, payload)
     except urllib.error.HTTPError as exc:
         # AgentCore's own 4xx/5xx (401 bad token, 429 throttled, ...) pass through with their status code.
         payload = exc.read() if exc.fp is not None else b""
@@ -174,8 +185,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             result = _error(504, "service_unavailable", "The agent did not respond in time.", rid, True)
         else:
             result = _error(502, "service_unavailable", "The agent service could not be reached.", rid, True)
-    except Exception:  # noqa: BLE001 - never leak internals to the caller
-        logger.exception("agent proxy failure")
+    except Exception as exc:  # noqa: BLE001 - never leak internals to the caller or logs
+        logger.error(json.dumps({"event": "agent_proxy_exception", "request_id": rid, "error_type": type(exc).__name__}))
         result = _error(502, "service_unavailable", "The agent service could not be reached.", rid, True)
 
     _log(agent, result["statusCode"], started, rid)

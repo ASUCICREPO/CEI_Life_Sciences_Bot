@@ -85,6 +85,22 @@ class FakeKeylessTool(FakeTool):
     supports_api_key = False
 
 
+@pytest.mark.parametrize("errors,expected", [([], False), (["private upstream failure"], True)])
+def test_partial_source_failures_are_logged_without_error_contents(monkeypatch, caplog, errors, expected):
+    def fetch(_self, **_params):
+        return DataSourceResult(source_type=SourceType.PUBMED, results=[{"id": 1}], citations=[],
+                                query_metadata={"errors": errors})
+
+    monkeypatch.setattr(FakeKeylessTool, "fetch", fetch)
+    handler = runtime.make_handler(FakeKeylessTool, source_id="example")
+    with caplog.at_level("INFO"):
+        result = handler({"query": "private query"}, gateway_context())
+    assert result["query_metadata"]["errors"] == errors
+    assert ("upstream_error" in caplog.text) is expected
+    assert "private upstream failure" not in caplog.text
+    assert "private query" not in caplog.text
+
+
 @pytest.fixture(autouse=True)
 def reset_fake():
     FakeTool.received = []

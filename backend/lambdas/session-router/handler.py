@@ -17,6 +17,7 @@ from functools import lru_cache
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
 from shared.persistence.active_runs import ActiveRunRepository, ConcurrencyLimitError
 from shared.persistence.ownership import is_session_uuid
@@ -69,6 +70,10 @@ def handler(event: Any, _context: Any) -> dict[str, Any]:
             record["error_type"] = type(exc).__name__
             if isinstance(exc, urllib.error.HTTPError):
                 record["http_status"] = exc.code
+            if isinstance(exc, ClientError):
+                code = exc.response.get("Error", {}).get("Code")
+                if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_]{1,80}", code):
+                    record["aws_error_code"] = code
         logger.warning(json.dumps(record))
     try:
         if not isinstance(event, dict) or event.get("op") not in ("start", "finish"):

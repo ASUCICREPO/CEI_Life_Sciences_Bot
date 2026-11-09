@@ -10,6 +10,7 @@ import binascii
 import json
 import logging
 import os
+import traceback
 from decimal import Decimal
 from functools import wraps
 from typing import Any, Callable
@@ -41,11 +42,20 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        for key in ("request_id", "route"):
+        for key in ("request_id", "route", "status", "code"):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
         if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
+            exc = record.exc_info[1]
+            # Exception messages can contain upstream bodies, credentials, or user input.
+            # Keep types and source locations for diagnosis without rendering their values.
+            payload["exception_type"] = type(exc).__name__
+            if exc.__cause__ is not None:
+                payload["cause_type"] = type(exc.__cause__).__name__
+            payload["frames"] = [
+                {"file": os.path.basename(frame.filename), "function": frame.name, "line": frame.lineno}
+                for frame in traceback.extract_tb(record.exc_info[2])[-8:]
+            ]
         return json.dumps(payload)
 
 
@@ -213,9 +223,12 @@ def api_handler(logger: logging.Logger) -> Callable[[Callable[..., dict[str, Any
             try:
                 return fn(event, context)
             except ApiError as exc:
+                if exc.status >= 500:
+                    logger.error("handled_api_failure", extra={"request_id": rid, "route": event.get("resource"),
+                                                               "status": exc.status, "code": exc.code})
                 return error_response(exc.status, exc.code, exc.message, rid, exc.retriable, event)
             except Exception:
-                # full traceback (incl. chained causes) to CloudWatch; the caller gets the generic text only
+                # JsonFormatter emits exception types and locations without exception messages.
                 logger.exception("unhandled error", extra={"request_id": rid})
                 return error_response(500, "internal_error", GENERIC_INTERNAL_ERROR, rid, False, event)
 

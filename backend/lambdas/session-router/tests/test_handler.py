@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from botocore.exceptions import ClientError
 
 spec = importlib.util.spec_from_file_location("session_router_handler", Path(__file__).parents[1] / "handler.py")
 router = importlib.util.module_from_spec(spec)
@@ -68,3 +69,11 @@ def test_finish_cannot_release_a_newer_run(deps):
     reply = router.handler({"op": "finish", "bearer_token": "jwt", "session_id": SESSION, "run_id": RUN}, None)
     assert reply["status"] == 200
     leases.release.assert_not_called()
+
+
+def test_aws_error_code_logged_without_service_message(deps, caplog):
+    _, _, _, issue = deps
+    issue.side_effect = ClientError({"Error": {"Code": "AccessDeniedException", "Message": "secret details"}}, "GetSecretValue")
+    assert router.handler(event(), None)["status"] == 503
+    assert '"aws_error_code": "AccessDeniedException"' in caplog.text
+    assert "secret details" not in caplog.text
