@@ -691,7 +691,7 @@ export class BackendStack extends cdk.Stack {
     // refresh method; the refresh handler also verifies the caller and active run.
     agentRuntimes.runtimes.Research.role.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['execute-api:Invoke'],
-      resources: [api.arnForExecuteApi('POST', '/internal/token-refresh', api.deploymentStage.stageName)],
+      resources: [api.arnForExecuteApi('POST', '/internal/token-refresh', 'v1')],
     }));
 
     const router = new SessionRouter(this, 'SessionRouter', {
@@ -713,9 +713,9 @@ export class BackendStack extends cdk.Stack {
     runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }));
     runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:TransactWriteItems'], resources: [chatHistoryTable.tableArn] }));
     runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:PutItem', 'dynamodb:TransactWriteItems'], resources: [activeRunsTable.tableArn] }));
-    router.function.grantInvoke(runnerRole);
+    runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [router.function.functionArn] }));
     const runner = new lambda.Function(this, 'SessionRunner', {
-      runtime: lambda.Runtime.NODEJS_22_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', 'session-runner'), { exclude: ['*.test.js'] }),
       role: runnerRole,

@@ -1,4 +1,5 @@
 from unittest.mock import Mock
+import json
 
 import pytest
 
@@ -20,6 +21,14 @@ def test_policy_denial_is_not_a_success(monkeypatch):
     with pytest.raises(GatewayDeniedError, match="denied") as exc:
         call_gateway_tool("https://abc.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp", "secret-token", "pubmed", {})
     assert "sensitive detail" not in str(exc.value) and "secret-token" not in str(exc.value)
+
+
+def test_all_upstreams_failing_is_not_a_success(monkeypatch):
+    payload = {"results": [], "query_metadata": {"errors": ["upstream failure"]}}
+    response = Mock(status_code=200, text=json.dumps({"jsonrpc": "2.0", "id": "call", "result": {"structuredContent": payload}}))
+    monkeypatch.setattr("shared.tools.gateway_mcp.requests.post", Mock(return_value=response))
+    with pytest.raises(GatewayCallError, match="could not complete"):
+        call_gateway_tool("https://abc.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp", "secret-token", "openfda", {})
 
 
 def test_non_https_endpoint_rejected():

@@ -71,7 +71,7 @@ def call_gateway_tool(url: str, token: str, source_id: str, arguments: dict[str,
         if not isinstance(payload, dict):
             raise GatewayCallError("The data source gateway returned an invalid response.")
         metadata = payload.get("query_metadata")
-        if isinstance(metadata, dict) and metadata.get("error"):
+        if isinstance(metadata, dict) and (metadata.get("error") or (metadata.get("errors") and not payload.get("results"))):
             raise GatewayCallError("The data source could not complete the request.")
         return payload
     except GatewayCallError:

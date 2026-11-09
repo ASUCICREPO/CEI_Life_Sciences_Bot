@@ -35,7 +35,7 @@ describe('Research streaming infrastructure', () => {
       BillingMode: 'PAY_PER_REQUEST',
     });
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'nodejs22.x', Handler: 'index.handler', Timeout: 840,
+      Runtime: 'nodejs24.x', Handler: 'index.handler', Timeout: 840,
       Environment: { Variables: Match.objectLike({ CEI_ROUTER_FUNCTION: Match.anyValue(), CEI_CHAT_HISTORY_TABLE: Match.anyValue() }) },
     });
     const functions = Object.entries(template.findResources('AWS::Lambda::Function')) as [string, any][];
