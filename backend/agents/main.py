@@ -236,6 +236,8 @@ async def _stream_research(graph, initial_state, graph_config, context, session,
     yield events.emit("progress", status="planning", step_label="Planning research")
     final_state = None
     traces_sent = 0
+    input_tokens = 0
+    output_tokens = 0
     preview_started = False
     preview_text = ""
     pending_components = []
@@ -260,6 +262,12 @@ async def _stream_research(graph, initial_state, graph_config, context, session,
                 entries = value.get("trace", [])
                 for entry in entries[traces_sent:]:
                     yield events.trace(entry)
+                    token_input = entry.get("input_tokens", 0) if isinstance(entry, dict) else getattr(entry, "input_tokens", 0)
+                    token_output = entry.get("output_tokens", 0) if isinstance(entry, dict) else getattr(entry, "output_tokens", 0)
+                    if isinstance(token_input, int) and token_input > 0:
+                        input_tokens += token_input
+                    if isinstance(token_output, int) and token_output > 0:
+                        output_tokens += token_output
                 traces_sent = len(entries)
                 if not preview_started and value.get("triage_plan"):
                     from research.nodes import estimate_research_duration_seconds
@@ -298,6 +306,8 @@ async def _stream_research(graph, initial_state, graph_config, context, session,
                     yield events.emit("progress", status="running", step_label="Searching sources")
         if final_state is None:
             raise RuntimeError("research graph returned no state")
+        yield events.emit("usage", input_tokens=input_tokens, output_tokens=output_tokens,
+                          total_tokens=input_tokens + output_tokens)
         text = final_ai_text(final_state.get("messages", [])) or "No response generated."
         retrieved = final_state.get("retrieved_results", [])
         surface = build_research_surface(text, surface_id=surface_id, retrieved_results=retrieved,
