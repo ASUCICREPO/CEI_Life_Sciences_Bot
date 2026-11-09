@@ -304,6 +304,11 @@ async def _stream_research(graph, initial_state, graph_config, context, session,
                                          document=final_state.get("response_document")).model_dump(mode="json")
         surface, preview_final, grounding = _stream_surface(
             surface, final_state.get("response_document"), preview_text, pending_components)
+        # Rewriting the presenter graph must preserve the complete 1.1 contract,
+        # including component/depth limits and all child references, before it is
+        # persisted or exposed as the final surface.
+        from shared.schemas.cei_ui import CEIUISurface
+        CEIUISurface.model_validate(surface)
         # History accepts the 1.1-compatible graph; the streamed transport is 1.2.
         response = {"result": text, "text": text, "ui": surface}
         message_id = await end_turn(saver=None if persistent else saver, user_id=session.user_id,
