@@ -75,7 +75,7 @@ Options:
   --tool-policy-mode <mode>     Cedar policy mode on the tool Gateway (F4/B30):
                                  LOG_ONLY (default) or ENFORCE
   --spike <id>                  Also deploy a throwaway spike stack (B92). Comma-
-                                 separated. Known id: tool-scope (S2). Normal
+                                 separated. Known ids: tool-scope (S2), streaming (S1). Normal
                                  deploys leave this unset.
   --spike-policy-mode <mode>    Policy engine mode for the tool-scope spike:
                                  LOG_ONLY (default) or ENFORCE
@@ -286,7 +286,7 @@ fi
 prompt TOOL_POLICY_MODE "$TOOL_POLICY_MODE_FLAG" "Tool Gateway policy mode (LOG_ONLY or ENFORCE)" "LOG_ONLY" true
 # FIXME: remove after S2 validation (B92)
 # ADR: optional prompt, blank = normal deploy | Rationale: B92 — a spike stack must never deploy unless asked for, so the default is empty and --non-interactive keeps it empty
-prompt SPIKE "$SPIKE_FLAG" "Spike stacks to deploy (comma-separated, blank for none; known: tool-scope)" "" false
+prompt SPIKE "$SPIKE_FLAG" "Spike stacks to deploy (comma-separated, blank for none; known: tool-scope, streaming)" "" false
 SPIKE_POLICY_MODE=""
 case ",$SPIKE," in
   *,tool-scope,*) prompt SPIKE_POLICY_MODE "$SPIKE_POLICY_MODE_FLAG" "tool-scope spike policy mode (LOG_ONLY or ENFORCE)" "LOG_ONLY" true ;;
