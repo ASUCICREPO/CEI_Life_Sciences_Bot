@@ -1,5 +1,6 @@
 import { safeParseCEIUISurface, type CEIUISurface } from './cei-ui/schema';
 import { parseStreamEvent, type TraceEvent } from './stream/events';
+import { reportClientFailure } from './clientDiagnostics';
 
 // Typed client for the Session REST API (session-metadata / session-history Lambdas behind API Gateway).
 // Every call carries the Cognito access token; the backend derives the user from the token's `sub` only.
@@ -205,6 +206,7 @@ function toSessionRef(raw: unknown, sessionId: string): SessionRef {
 function toSessionSummary(raw: unknown): SessionSummary {
   const record = asRecord(raw);
   if (!record || typeof record.session_id !== 'string') {
+    reportClientFailure('sessions', 'invalid_response');
     throw new SessionsClientError('The session service returned an unexpected session shape.');
   }
   return {
@@ -231,7 +233,9 @@ export function createSessionsClient(getToken: TokenProvider, options: SessionsC
   const fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
 
   async function request(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<unknown> {
-    const token = await getToken();
+    let token: string | null;
+    try { token = await getToken(); }
+    catch (error) { reportClientFailure('auth', 'auth_error'); throw error; }
     if (!token) {
       throw new SessionsClientError('You are signed out. Sign in again to see your chats.', {
         status: 401,
@@ -253,6 +257,7 @@ export function createSessionsClient(getToken: TokenProvider, options: SessionsC
         signal: controller.signal,
       });
     } catch (error) {
+      reportClientFailure('sessions', controller.signal.aborted ? 'timeout' : 'network');
       if (controller.signal.aborted) {
         throw new SessionsClientError('The session service did not respond in time.', { retriable: true, cause: error });
       }
@@ -262,6 +267,7 @@ export function createSessionsClient(getToken: TokenProvider, options: SessionsC
     }
 
     const parsed: unknown = await response.json().catch((error: unknown) => {
+      reportClientFailure('sessions', 'invalid_response');
       throw new SessionsClientError('The session service returned an invalid response.', {
         status: response.status,
         cause: error,
@@ -270,6 +276,9 @@ export function createSessionsClient(getToken: TokenProvider, options: SessionsC
     if (!response.ok) {
       // api.md error envelope: { error: { code, message, retriable, request_id } }
       const envelope = asRecord(asRecord(parsed)?.error);
+      if (response.status >= 500 || response.status === 429) {
+        reportClientFailure('sessions', 'http_error', response.status, typeof envelope?.request_id === 'string' ? envelope.request_id : undefined);
+      }
       throw new SessionsClientError(
         typeof envelope?.message === 'string'
           ? envelope.message

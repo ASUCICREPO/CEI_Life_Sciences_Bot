@@ -1,6 +1,7 @@
 import { safeParseCEIUISurface, type ActionRequest, type ActionResponse, type CEIUISurface } from './cei-ui/schema';
 import { actionResponseMatchesRequest } from './cei-ui/action-correlation';
 import { getLoadedRuntimeConfig } from './auth/config';
+import { reportClientFailure } from './clientDiagnostics';
 
 export type AgentName = 'research' | 'drafting' | 'analysis' | 'pipeline';
 
@@ -94,7 +95,9 @@ export function setAgentTokenProvider(provider: (() => Promise<string | null>) |
 }
 
 async function postInvocation(agent: AgentName, body: unknown, sessionId: string, timeoutMs: number): Promise<unknown> {
-  const token = tokenProvider ? await tokenProvider() : null;
+  let token: string | null;
+  try { token = tokenProvider ? await tokenProvider() : null; }
+  catch (error) { reportClientFailure('auth', 'auth_error'); throw error; }
   // Never send an unauthenticated request: identity comes only from the bearer token's `sub`.
   if (!token) {
     throw new AgentClientError('You are signed out. Sign in again to continue.');
@@ -115,6 +118,7 @@ async function postInvocation(agent: AgentName, body: unknown, sessionId: string
       signal: controller.signal,
     });
   } catch (error) {
+    reportClientFailure('agent', controller.signal.aborted ? 'timeout' : 'network');
     if (controller.signal.aborted) {
       throw new AgentClientError('The agent did not respond in time.', error);
     }
@@ -134,6 +138,7 @@ async function postInvocation(agent: AgentName, body: unknown, sessionId: string
   }
 
   if (!response.ok) {
+    if (response.status >= 500 || response.status === 429) reportClientFailure('agent', 'http_error', response.status);
     if (response.status === 401) {
       throw new AgentClientError('Your sign-in has expired. Sign in again to continue.');
     }
@@ -147,6 +152,7 @@ async function postInvocation(agent: AgentName, body: unknown, sessionId: string
   }
 
   const parsed: unknown = await response.json().catch((error: unknown) => {
+    reportClientFailure('agent', 'invalid_response');
     throw new AgentClientError('The agent service returned an invalid response.', error);
   });
   return parsed;
@@ -154,6 +160,7 @@ async function postInvocation(agent: AgentName, body: unknown, sessionId: string
 
 function toAgentEnvelope(raw: unknown): AgentEnvelope {
   if (typeof raw !== 'object' || raw === null) {
+    reportClientFailure('agent', 'invalid_response');
     throw new AgentClientError('The agent service returned an unexpected response shape.');
   }
   const candidate = raw as Record<string, unknown>;
@@ -168,6 +175,7 @@ function toAgentEnvelope(raw: unknown): AgentEnvelope {
     if (parsedUi.success) {
       envelope.ui = parsedUi.data;
     } else {
+      reportClientFailure('agent', 'invalid_response');
       envelope.ui_error = 'The agent returned a rich view that could not be validated.';
     }
   } else if (typeof candidate.ui_error === 'string') {
@@ -186,6 +194,7 @@ export async function sendAction(agent: AgentName, action: ActionRequest, sessio
   const raw = await postInvocation(agent, { op: 'resume', action }, sessionId, RUN_TIMEOUT_MS);
   const envelope = toAgentEnvelope(raw);
   if (envelope.action_response && !actionResponseMatchesRequest(action, envelope.action_response)) {
+    reportClientFailure('agent', 'invalid_response');
     throw new AgentClientError('The action response did not match the request.');
   }
   return envelope;
@@ -194,6 +203,7 @@ export async function sendAction(agent: AgentName, action: ActionRequest, sessio
 export async function getJob(jobId: string, sessionId: string): Promise<JobEnvelope> {
   const raw = await postInvocation('pipeline', { op: 'job_status', job_id: jobId }, sessionId, JOB_STATUS_TIMEOUT_MS);
   if (typeof raw !== 'object' || raw === null) {
+    reportClientFailure('agent', 'invalid_response');
     throw new AgentClientError('The job status service returned an unexpected response shape.');
   }
   const candidate = raw as Record<string, unknown>;
@@ -214,6 +224,7 @@ export async function getJob(jobId: string, sessionId: string): Promise<JobEnvel
     if (parsedUi.success) {
       job.ui = parsedUi.data;
     } else {
+      reportClientFailure('agent', 'invalid_response');
       job.ui_error = 'The job returned a rich view that could not be validated.';
     }
   }

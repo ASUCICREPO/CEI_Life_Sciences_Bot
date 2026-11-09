@@ -20,6 +20,7 @@ import { AgentRuntimes } from './constructs/agent-runtimes';
 import { ToolGateway, fullScope } from './constructs/tool-gateway';
 import { SessionRouter } from './constructs/session-router';
 import { suppressXrayWildcard } from './constructs/tracing';
+import { Observability } from './constructs/observability';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export interface BackendStackProps extends cdk.StackProps {
@@ -440,7 +441,8 @@ export class BackendStack extends cdk.Stack {
       ALLOWED_ORIGINS: allowedOrigins.join(','),
     };
 
-    const createSessionFunction = (id: string, dir: string, handlerName: string) => {
+    const createSessionFunction = (id: string, dir: string, handlerName: string,
+      environment: Record<string, string> = sessionLambdaEnv, layers: lambda.ILayerVersion[] = [pythonDeps.layer]) => {
       const logGroup = new logs.LogGroup(this, `${id}Logs`, {
         retention: logs.RetentionDays.ONE_MONTH,
         removalPolicy: RemovalPolicy.DESTROY,
@@ -455,12 +457,12 @@ export class BackendStack extends cdk.Stack {
         code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', dir), {
           exclude: ['tests', '__pycache__', '*.pyc'],
         }),
-        layers: [pythonDeps.layer],
+        layers,
         role,
         logGroup,
         timeout: Duration.seconds(10),
         memorySize: 256,
-        environment: sessionLambdaEnv,
+        environment,
       });
       suppressXrayWildcard(role);
       return { fn, role };
@@ -476,6 +478,8 @@ export class BackendStack extends cdk.Stack {
       'session-history-handler',
       'history_handler.handler',
     );
+    const clientDiagnostics = createSessionFunction('ClientDiagnostics', 'client-diagnostics', 'handler.handler',
+      { ALLOWED_ORIGINS: allowedOrigins.join(',') }, []);
 
     // Least privilege: exactly the actions each handler calls (no DeleteItem until F19, no Scan, no GSI wildcard)
     // ADR: explicit PolicyStatements on the metadata table | Rationale: Table.grant() appends `<table>/index/*`
@@ -600,6 +604,9 @@ export class BackendStack extends cdk.Stack {
 
     const metadataIntegration = new apigw.LambdaIntegration(sessionMetadata.fn);
     const historyIntegration = new apigw.LambdaIntegration(sessionHistory.fn);
+
+    const diagnosticsResource = api.root.addResource('client-diagnostics', { defaultCorsPreflightOptions: corsOptions });
+    diagnosticsResource.addMethod('POST', new apigw.LambdaIntegration(clientDiagnostics.fn), methodOptions);
 
     const sessionsResource = api.root.addResource('sessions', { defaultCorsPreflightOptions: corsOptions });
     sessionsResource.addMethod('POST', metadataIntegration, methodOptions);
@@ -734,6 +741,32 @@ export class BackendStack extends cdk.Stack {
       environment: { CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName, CEI_CHAT_HISTORY_TABLE: chatHistoryTable.tableName, CEI_ACTIVE_RUNS_TABLE: activeRunsTable.tableName, CEI_ROUTER_FUNCTION: router.function.functionName, ALLOWED_ORIGINS: allowedOrigins.join(',') },
     });
     suppressXrayWildcard(runnerRole);
+    new Observability(this, 'Observability', {
+      api,
+      adminEmail: this.config?.adminEmail,
+      functions: {
+        PreSignUp: preSignUpFn, SessionMetadata: sessionMetadata.fn, SessionHistory: sessionHistory.fn,
+        AgentProxy: agentProxyFn, SessionRouter: router.function, SessionRunner: runner,
+        ClientDiagnostics: clientDiagnostics.fn,
+        PreToken: gateway.preTokenFunction, TokenRefresh: gateway.tokenRefreshFunction,
+        ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) => [`Source${name}`, fn])),
+      },
+      tables: { ChatMetadata: chatMetadataTable, ChatHistory: chatHistoryTable, ActiveRuns: activeRunsTable },
+      signupLogs: preSignUpLogGroup,
+      gatewayLogs: gateway.gatewayLogGroup,
+      clientLogs: clientDiagnostics.fn.logGroup,
+      agentProxyLogs: agentProxyLogGroup,
+      caughtFailures: {
+        SessionRunner: { logGroup: runnerLogs, terms: ['request_failed', 'stream_failed', 'agent_error', 'write_failed', 'stream_transport_failed', 'replay_timeout', 'persistence_failed', 'cleanup_failed'] },
+        SessionRouter: { logGroup: router.function.logGroup, terms: ['failed'] },
+        AgentProxy: { logGroup: agentProxyLogGroup, terms: ['agent_proxy_failure', 'agent_proxy_invalid_json'] },
+        SessionMetadata: { logGroup: sessionMetadata.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
+        SessionHistory: { logGroup: sessionHistory.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
+        TokenRefresh: { logGroup: gateway.tokenRefreshFunction.logGroup, terms: ['token_endpoint_error', 'token_refresh_scope_mismatch', 'run_scopes_not_allowed', 'unhandled error'] },
+        ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) =>
+          [`Source${name}`, { logGroup: fn.logGroup, terms: ['upstream_error', 'exception', 'api_key_lookup_failed', ...(name === 'cmscoverage' ? ['cms_ncd_detail_error'] : [])] }])),
+      },
+    });
     const chatResource = api.root.addResource('chat', { defaultCorsPreflightOptions: corsOptions });
     const streamResource = chatResource.addResource('stream', { defaultCorsPreflightOptions: corsOptions });
     streamResource.addMethod('POST', new apigw.LambdaIntegration(runner, { responseTransferMode: apigw.ResponseTransferMode.STREAM, timeout: Duration.minutes(14) }), methodOptions);

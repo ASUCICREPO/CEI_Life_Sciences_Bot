@@ -1,5 +1,6 @@
 import { TERMINAL_EVENT_TYPES, parseStreamEvent, type StreamEvent } from './events';
 import { SseParser, frameToRawEvent } from './sseParser';
+import { reportClientFailure } from '../clientDiagnostics';
 
 // Opens POST /chat/stream over fetch + ReadableStream (B4) and yields typed stream events.
 // On a dropped connection it re-opens the stream with backoff, sending `resume_from_seq`
@@ -55,9 +56,12 @@ export async function* openStream(options: OpenStreamOptions): AsyncGenerator<St
   const sleep = options.sleep ?? defaultSleep;
   let lastSeq = -1;
   let attempt = 0;
+  let invalidReported = false;
 
   while (!options.signal?.aborted) {
-    const token = await options.getToken();
+    let token: string | null;
+    try { token = await options.getToken(); }
+    catch (error) { reportClientFailure('auth', 'auth_error'); throw error; }
     if (!token) throw new StreamError('You are signed out. Sign in again to continue.', { status: 401 });
     const body = lastSeq >= 0 ? { ...options.body, resume_from_seq: lastSeq } : options.body;
 
@@ -75,15 +79,20 @@ export async function* openStream(options: OpenStreamOptions): AsyncGenerator<St
         signal: options.signal,
       });
       if (!response.ok || !response.body) {
+        if (response.ok && !response.body) reportClientFailure('stream', 'invalid_response');
         const retriable = response.status >= 500 || response.status === 429;
         if (!retriable || lastSeq < 0 || response.status === 429) {
           const body: unknown = await response.json().catch(() => null);
           const envelope = body && typeof body === 'object' && 'error' in body ? (body as { error?: unknown }).error : null;
+          const requestId = envelope && typeof envelope === 'object' && 'request_id' in envelope && typeof envelope.request_id === 'string'
+            ? envelope.request_id : undefined;
+          if (response.status >= 500 || response.status === 429) reportClientFailure('stream', 'http_error', response.status, requestId);
           const message = envelope && typeof envelope === 'object' && 'message' in envelope
             && typeof envelope.message === 'string' && envelope.message.length <= 1000
             ? envelope.message : `The stream could not be opened (HTTP ${response.status}).`;
           throw new StreamError(message, { status: response.status, retriable });
         }
+        reportClientFailure('stream', 'http_error', response.status);
       } else {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -93,8 +102,15 @@ export async function* openStream(options: OpenStreamOptions): AsyncGenerator<St
             const { value, done } = await reader.read();
             if (done) break;
             for (const frame of parser.push(decoder.decode(value, { stream: true }))) {
-              const event = parseStreamEvent(frameToRawEvent(frame, options.now));
-              if (!event) continue;
+              const raw = frameToRawEvent(frame, options.now);
+              const event = parseStreamEvent(raw);
+              if (!event) {
+                if (frame.comment === undefined && !invalidReported) {
+                  invalidReported = true;
+                  reportClientFailure('stream', 'invalid_response');
+                }
+                continue;
+              }
               if (event.type !== 'heartbeat') {
                 if (event.seq > lastSeq) {
                   lastSeq = event.seq;
@@ -122,9 +138,13 @@ export async function* openStream(options: OpenStreamOptions): AsyncGenerator<St
     if (outcome === 'terminal' || options.signal?.aborted) return;
     // A request may have reached the server even if no event made it back. Without a replay
     // sequence there is no safe way to distinguish it from a new run; do not submit it again.
-    if (lastSeq < 0) throw new StreamError('The connection was lost before the response began. Check the chat history before retrying.', { retriable: true });
+    if (lastSeq < 0) {
+      reportClientFailure('stream', 'stream_dropped');
+      throw new StreamError('The connection was lost before the response began. Check the chat history before retrying.', { retriable: true });
+    }
     attempt = progressed ? 1 : attempt + 1;
     if (attempt > maxReconnects) {
+      reportClientFailure('stream', 'stream_dropped');
       throw new StreamError('The connection was lost and could not be resumed.', { retriable: true });
     }
     await sleep(backoff(attempt), options.signal);

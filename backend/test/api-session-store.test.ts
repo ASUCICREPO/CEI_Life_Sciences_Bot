@@ -66,7 +66,7 @@ describe('BackendStack REST API + session store', () => {
     const iamMethods = methods.filter((m) => m.AuthorizationType === 'AWS_IAM');
     expect(iamMethods.map((m) => m.HttpMethod)).toEqual(['POST']);
     const real = methods.filter((m) => m.HttpMethod !== 'OPTIONS' && m.AuthorizationType !== 'AWS_IAM');
-    expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST']);
+    expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST', 'POST']);
     for (const method of real) {
       expect(method.AuthorizationType).toBe('COGNITO_USER_POOLS');
       expect(method.AuthorizerId).toBeDefined();
@@ -82,10 +82,10 @@ describe('BackendStack REST API + session store', () => {
   it('includes the streaming and trace routes without a DELETE route', () => {
     const methods = Object.values(template.findResources('AWS::ApiGateway::Method')).map((m: any) => m.Properties);
     expect(methods.map((method) => method.HttpMethod)).not.toContain('DELETE');
-    template.resourceCountIs('AWS::ApiGateway::Resource', 10);
+    template.resourceCountIs('AWS::ApiGateway::Resource', 11);
     const resources = template.findResources('AWS::ApiGateway::Resource');
     const paths = Object.values(resources).map((r: any) => r.Properties.PathPart);
-    expect(paths.sort()).toEqual(['chat', 'history', 'internal', 'sessions', 'stream', 'token-refresh', 'trace', 'turns', '{messageId}', '{sessionId}']);
+    expect(paths.sort()).toEqual(['chat', 'client-diagnostics', 'history', 'internal', 'sessions', 'stream', 'token-refresh', 'trace', 'turns', '{messageId}', '{sessionId}']);
     const idFor = (part: string) => Object.entries(resources).find(([, resource]: [string, any]) => resource.Properties.PathPart === part)![0];
     const stream = resources[idFor('stream')] as any;
     const trace = resources[idFor('trace')] as any;
@@ -245,6 +245,11 @@ describe('BackendStack REST API + session store', () => {
 
     for (const statement of [...metadataStatements, ...historyStatements]) {
       const resource = JSON.stringify(statement.resource);
+      if (statement.actions.some((action) => action.startsWith('xray:'))) {
+        expect([...statement.actions].sort()).toEqual(['xray:PutTelemetryRecords', 'xray:PutTraceSegments']);
+        expect(statement.resource).toEqual('*');
+        continue;
+      }
       expect(resource).not.toContain('"*"');
       expect(resource).not.toContain('/index/*');
       if (resource.includes('/index/')) {

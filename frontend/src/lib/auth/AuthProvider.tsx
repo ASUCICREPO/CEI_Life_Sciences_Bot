@@ -1,8 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
 import type { User, UserManager } from 'oidc-client-ts';
 import { loadRuntimeConfig, type RuntimeConfig } from './config';
 import { getUserManager, buildCognitoLogoutUrl } from './userManager';
 import { setAgentTokenProvider } from '../agentClient';
+import { configureClientDiagnostics, installGlobalDiagnostics } from '../clientDiagnostics';
 
 interface AuthContextValue {
   user: User | null;
@@ -59,8 +60,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!userManager) return;
 
     const onUserLoaded = (loadedUser: User) => setUser(loadedUser);
-    const onUserUnloaded = () => setUser(null);
-    const onAccessTokenExpired = () => setUser(null);
+    const onUserUnloaded = () => { configureClientDiagnostics(null); setUser(null); };
+    const onAccessTokenExpired = () => { configureClientDiagnostics(null); setUser(null); };
 
     userManager.events.addUserLoaded(onUserLoaded);
     userManager.events.addUserUnloaded(onUserUnloaded);
@@ -88,6 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // Revocation failure must not block sign-out; the local session is still cleared.
     }
+    configureClientDiagnostics(null);
     await userManager.removeUser();
     window.location.href = buildCognitoLogoutUrl(config);
   }, [userManager, config]);
@@ -104,6 +106,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAgentTokenProvider(getAccessToken);
     return () => setAgentTokenProvider(null);
   }, [getAccessToken]);
+
+  const authenticated = Boolean(user && !user.expired);
+  useLayoutEffect(() => {
+    if (!config || !authenticated) return;
+    configureClientDiagnostics({ baseUrl: config.apiBaseUrl ?? '/api', getToken: getAccessToken });
+    const remove = installGlobalDiagnostics();
+    return () => { remove(); configureClientDiagnostics(null); };
+  }, [config, getAccessToken, authenticated]);
 
   const value = useMemo<AuthContextValue>(
     () => ({ user, isLoading, error, userManager, config, signIn, signOut, getAccessToken }),

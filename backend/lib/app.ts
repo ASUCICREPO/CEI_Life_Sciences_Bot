@@ -57,6 +57,7 @@ function buildCoreStacks(app: cdk.App, config: DeployConfig | undefined, fronten
     const edgeWaf = new EdgeWafStack(app, 'EdgeWafStack', {
       env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'us-east-1' },
       crossRegionReferences: true,
+      alertTopicRegion: config.region,
     });
 
     const backend = new BackendStack(app, 'BackendStack', {

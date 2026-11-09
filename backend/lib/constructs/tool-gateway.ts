@@ -83,6 +83,8 @@ export class ToolGateway extends Construct {
   public readonly routerSecret: secretsmanager.Secret;
   public readonly routerRole: iam.Role;
   public readonly tokenRefreshFunction: lambda.Function;
+  public readonly preTokenFunction: lambda.Function;
+  public readonly gatewayLogGroup: logs.ILogGroup;
   public readonly sourceFunctions: Record<string, lambda.Function> = {};
   public readonly scopeNames: string[];
 
@@ -161,6 +163,7 @@ export class ToolGateway extends Construct {
       timeout: Duration.seconds(5),
       environment: {},
     });
+    this.preTokenFunction = preTokenFn;
     props.userPool.addTrigger(cognito.UserPoolOperation.PRE_TOKEN_GENERATION_CONFIG, preTokenFn, cognito.LambdaVersion.V3_0);
 
     // ---------------------------------------------------------------
@@ -273,6 +276,7 @@ export class ToolGateway extends Construct {
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    this.gatewayLogGroup = gatewayLogGroup;
     const deliverySource = new logs.CfnDeliverySource(this, 'GatewayLogSource', {
       name: `${stack.stackName}-tools-gateway-logs`,
       logType: 'APPLICATION_LOGS',
@@ -362,7 +366,10 @@ export class ToolGateway extends Construct {
           reason: 'ADR: gateway/* in the Gateway role | Rationale: S2 — the role is a required Gateway property, so the Gateway ARN cannot be referenced without a circular dependency | Alternative: a fixed name rejected — the service appends a random suffix',
           // partition/region/account are tokens without cdk.json context (Jest) and literals under the CDK CLI,
           // whose cdk.json feature flags resolve them when the stack env is known — match both
-          appliesTo: [{ regex: '/^Resource::arn:(<AWS::Partition>|aws[a-z-]*):bedrock-agentcore:[^:]+:[^:]+:gateway\\/\\*$/' }],
+          appliesTo: [
+            'Resource::arn:<AWS::Partition>:bedrock-agentcore:<AWS::Region>:<AWS::AccountId>:gateway/*',
+            { regex: '/^Resource::arn:(<AWS::Partition>|aws[a-z-]*):bedrock-agentcore:[^:]+:[^:]+:gateway\\/\\*$/' },
+          ],
         },
       ],
       true,

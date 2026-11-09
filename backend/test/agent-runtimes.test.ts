@@ -27,6 +27,20 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
     expect(names).toEqual(AGENT_RUNTIMES.map((r) => r.runtimeName).sort());
   });
 
+  test('delivers traces for all runtimes without extracting model content', () => {
+    const sources = Object.values(template.findResources('AWS::Logs::DeliverySource')) as any[];
+    expect(sources.filter((source) => source.Properties.LogType === 'TRACES')).toHaveLength(4);
+    const destinations = Object.values(template.findResources('AWS::Logs::DeliveryDestination')) as any[];
+    expect(destinations.filter((destination) => destination.Properties.DeliveryDestinationType === 'XRAY')).toHaveLength(4);
+    template.resourceCountIs('AWS::XRay::ResourcePolicy', 1);
+    for (const [, runtime] of runtimes) {
+      expect((runtime as any).Properties.EnvironmentVariables.AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT).toBe('false');
+      expect((runtime as any).Properties.EnvironmentVariables.OTEL_LOGS_EXPORTER).toBe('none');
+      expect((runtime as any).Properties.EnvironmentVariables.OTEL_PYTHON_DISABLED_INSTRUMENTATIONS).toContain('requests');
+      expect((runtime as any).Properties.EnvironmentVariables.CEI_TELEMETRY_ENABLED).toBe('true');
+    }
+  });
+
   test.each(runtimes.map(([id, r]) => [id, r] as const))('%s: inbound JWT authorizer pinned to the pool + SPA client', (_id, r) => {
     const jwt = (r as any).Properties.AuthorizerConfiguration.CustomJWTAuthorizer;
     expect(JSON.stringify(jwt.DiscoveryUrl)).toContain(userPoolId);
@@ -50,7 +64,7 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
 
   test.each(runtimes.map(([id, r]) => [id, r] as const))('%s: no auth-bypass env var', (_id, r) => {
     const keys = Object.keys((r as any).Properties.EnvironmentVariables);
-    expect(keys.filter((k) => /DIRECT_MODE|LOCAL_DEMO|USER_ID|SKIP|BYPASS|DISABLE/i.test(k))).toEqual([]);
+    expect(keys.filter((k) => k !== 'OTEL_PYTHON_DISABLED_INSTRUMENTATIONS' && /DIRECT_MODE|LOCAL_DEMO|USER_ID|SKIP|BYPASS|DISABLE/i.test(k))).toEqual([]);
   });
 
   test.each(runtimes.map(([id, r]) => [id, r] as const))('%s: carries an explicit CEI_ALLOWED_ORIGINS browser allowlist', (_id, r) => {

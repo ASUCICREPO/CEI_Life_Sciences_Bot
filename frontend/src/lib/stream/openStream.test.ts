@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SseParser, frameToRawEvent } from './sseParser';
 import { openStream, StreamError } from './openStream';
 import { parseStreamEvent, type StreamEvent } from './events';
+import { configureClientDiagnostics } from '../clientDiagnostics';
 
 function sse(seq: number, type: string, data: Record<string, unknown>): string {
   return `id: ${seq}\nevent: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -72,6 +73,21 @@ describe('SseParser', () => {
 });
 
 describe('openStream', () => {
+  it('reports a server error with its request id but no prompt or response body', async () => {
+    const diagnostics = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    configureClientDiagnostics({ baseUrl: '/api', getToken: async () => 'token', fetchImpl: diagnostics });
+    const requestId = '87c2b902-a93f-46e3-a066-af38f8360d83';
+    const { impl } = fakeFetch([() => new Response(JSON.stringify({ error: { message: 'private response', request_id: requestId } }), { status: 502 })]);
+    try {
+      await expect(collect(openStream({ url: '/s', body: { prompt: 'private prompt' }, getToken: async () => 'token', fetchImpl: impl }))).rejects.toBeInstanceOf(StreamError);
+      await vi.waitFor(() => expect(diagnostics).toHaveBeenCalledOnce());
+      const body = diagnostics.mock.calls[0][1].body;
+      expect(JSON.parse(body)).toEqual({ source: 'stream', failure: 'http_error', status: 502, request_id: requestId });
+      expect(body).not.toContain('private');
+    } finally {
+      configureClientDiagnostics(null);
+    }
+  });
   it('POSTs with the bearer token over fetch (not EventSource) and stops at the terminal event', async () => {
     const { calls, impl } = fakeFetch([() => new Response(streamOf([BEGIN + ROOT, END, sse(3, 'usage', { input_tokens: 1, output_tokens: 1 })]))]);
     const events = await collect(openStream({ url: '/api/chat/stream', body: { prompt: 'hi' }, getToken: async () => 'tok', fetchImpl: impl }));

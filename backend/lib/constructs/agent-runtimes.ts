@@ -168,6 +168,17 @@ export class AgentRuntimes extends Construct {
       CEI_CHAT_HISTORY_TABLE: props.chatHistoryTable.tableName,
       CEI_CODE_INTERPRETER_ID: props.codeInterpreter.codeInterpreterId,
       CEI_ATTACHMENTS_BUCKET: props.attachmentsBucket.bucketName,
+      // ADOT's opt-out=true keeps GenAI payloads on spans. Keep extraction enabled and
+      // discard extracted OTLP logs so recognized GenAI content is not exported.
+      AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT: 'false',
+      OTEL_LOGS_EXPORTER: 'none',
+      CEI_TELEMETRY_ENABLED: 'true',
+      AGENT_OBSERVABILITY_ENABLED: 'true',
+      OTEL_PYTHON_DISTRO: 'aws_distro',
+      OTEL_PYTHON_CONFIGURATOR: 'aws_configurator',
+      // HTTP client URL attributes can contain user queries or API keys. Instrument AWS SDK
+      // calls instead; leave generic client auto-instrumentation off until URLs are sanitized.
+      OTEL_PYTHON_DISABLED_INSTRUMENTATIONS: 'requests,urllib,urllib3,httpx,httpx2,aiohttp-client',
       // ADR: comma-joined string | Rationale: parsed by config.allowed_origins_list; same origin set as the
       // sessions API (API Gateway preflight + Lambda ALLOWED_ORIGINS) so all CORS layers agree
       CEI_ALLOWED_ORIGINS: cdk.Fn.join(',', props.allowedOrigins),
@@ -178,6 +189,7 @@ export class AgentRuntimes extends Construct {
     for (const def of AGENT_RUNTIMES) {
       const runtime = new agentcore.Runtime(this, `${def.id}Runtime`, {
         runtimeName: def.runtimeName,
+        tracingEnabled: true,
         description: `CEI ${def.id} agent runtime`,
         agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
           path: AGENTS_DIR,

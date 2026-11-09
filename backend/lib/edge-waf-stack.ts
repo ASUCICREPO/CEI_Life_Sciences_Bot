@@ -3,6 +3,13 @@ import { Aspects } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { AwsSolutionsChecks } from 'cdk-nag';
 import { aws_wafv2 as wafv2 } from 'aws-cdk-lib';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import { ALERT_TOPIC_NAME } from './constructs/observability';
+
+export interface EdgeWafStackProps extends cdk.StackProps {
+  /** Region hosting the shared operational SNS topic. */
+  alertTopicRegion?: string;
+}
 
 /**
  * Small, always-us-east-1 stack holding only the CLOUDFRONT-scope Web ACL.
@@ -13,7 +20,7 @@ import { aws_wafv2 as wafv2 } from 'aws-cdk-lib';
 export class EdgeWafStack extends cdk.Stack {
   public readonly webAclArn: string;
 
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props?: EdgeWafStackProps) {
     super(scope, id, props);
 
     // ADR: cdk-nag scoped to stack, not app entry point | Rationale: matches BackendStack's convention (self-contained checks travel with the stack)
@@ -102,6 +109,27 @@ export class EdgeWafStack extends cdk.Stack {
     });
 
     this.webAclArn = webAcl.attrArn;
+
+    if (props?.alertTopicRegion) {
+      // CloudFront WAF metrics live in us-east-1 even if the application is in another region.
+      // Initial threshold: 25% blocked with at least 100 requests in five minutes.
+      const blocked = new cloudwatch.Metric({ namespace: 'AWS/WAFV2', metricName: 'BlockedRequests',
+        dimensionsMap: { WebACL: 'cei-life-sciences-edge-waf', Rule: 'ALL' }, statistic: 'Sum', period: cdk.Duration.minutes(5) });
+      const allowed = new cloudwatch.Metric({ namespace: 'AWS/WAFV2', metricName: 'AllowedRequests',
+        dimensionsMap: { WebACL: 'cei-life-sciences-edge-waf', Rule: 'ALL' }, statistic: 'Sum', period: cdk.Duration.minutes(5) });
+      const rate = new cloudwatch.MathExpression({ expression: 'IF(blocked + allowed >= 100, 100 * blocked / (blocked + allowed), 0)',
+        usingMetrics: { blocked, allowed }, period: cdk.Duration.minutes(5) });
+      const alarm = new cloudwatch.Alarm(this, 'BlockedRequestsSpike', {
+        metric: rate, threshold: 25, evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        alarmDescription: 'WAF blocked at least 25% of 100 or more requests in five minutes. Starting threshold; tune after observing traffic.',
+      });
+      // Use the stable topic ARN to avoid an Edge -> Backend -> Edge stack dependency cycle.
+      (alarm.node.defaultChild as cloudwatch.CfnAlarm).alarmActions = [
+        `arn:${cdk.Aws.PARTITION}:sns:${props.alertTopicRegion}:${cdk.Aws.ACCOUNT_ID}:${ALERT_TOPIC_NAME}`,
+      ];
+    }
 
     new cdk.CfnOutput(this, 'WebAclArn', {
       value: this.webAclArn,

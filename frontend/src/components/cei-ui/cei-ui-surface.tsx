@@ -24,6 +24,7 @@ import {
   type ReactNode,
 } from 'react';
 import { dispatchCEIUIAction } from '../../lib/cei-ui/actions';
+import { reportClientFailure } from '../../lib/clientDiagnostics';
 import {
   MAX_COMPONENT_DEPTH,
   type ActionDescriptor,
@@ -558,6 +559,7 @@ function CEIUIFallback({ text, error }: { text?: string; error: string }) {
 class CEIUIErrorBoundary extends Component<BoundaryProps, BoundaryState> {
   state: BoundaryState = { hasError: false };
   static getDerivedStateFromError(): BoundaryState { return { hasError: true }; }
+  componentDidCatch() { reportClientFailure('window', 'render_error'); }
   componentDidUpdate(previousProps: BoundaryProps) {
     if (this.state.hasError && previousProps.resetToken !== this.props.resetToken) this.setState({ hasError: false });
   }

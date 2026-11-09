@@ -56,6 +56,19 @@ describe('buildStacks (the same wiring bin/backend.ts uses)', () => {
     });
   });
 
+  it('sends the us-east-1 WAF alarm to the shared topic in the application region', () => {
+    const app = new cdk.App();
+    const { edgeWaf, backend } = buildStacks(app, testConfig({ region: 'eu-west-1' }), FIXTURE_ASSET_PATH);
+    Template.fromStack(backend).hasResourceProperties('AWS::SNS::Topic', { TopicName: 'cei-life-sciences-alerts' });
+    const alarms = Object.values(Template.fromStack(edgeWaf!).findResources('AWS::CloudWatch::Alarm')) as any[];
+    expect(alarms).toHaveLength(1);
+    const serialized = JSON.stringify(alarms[0].Properties);
+    expect(serialized).toContain('AWS/WAFV2');
+    expect(serialized).toContain('BlockedRequests');
+    expect(serialized).toContain('eu-west-1');
+    expect(serialized).toContain('cei-life-sciences-alerts');
+  });
+
   it('produces zero unsuppressed cdk-nag AwsSolutions errors on both cross-region stacks', () => {
     const app = new cdk.App();
     const { edgeWaf, backend } = buildStacks(app, testConfig({ region: 'eu-west-1' }), FIXTURE_ASSET_PATH);
