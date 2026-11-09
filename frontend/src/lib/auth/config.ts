@@ -8,6 +8,8 @@ export interface RuntimeConfig {
   cognitoDomain: string;
   /** Sessions API base (https URL or same-origin path). Absent → clients use their relative '/api' default. */
   apiBaseUrl?: string;
+  /** Enable only after the Research streaming endpoint has been deployed and verified. */
+  researchStreamingEnabled?: boolean;
   /** Direct AgentCore invocation URLs per agent. Absent entries → the relative '/api/agents/<name>' dev proxy. */
   agentUrls?: Partial<Record<AgentUrlKey, string>>;
 }
@@ -67,6 +69,7 @@ function validateRuntimeConfig(data: unknown): RuntimeConfig {
   const config: RuntimeConfig = { region, userPoolId, userPoolClientId, cognitoDomain };
   const apiBaseUrl = validateApiBaseUrl(candidate.apiBaseUrl);
   if (apiBaseUrl) config.apiBaseUrl = apiBaseUrl;
+  if (candidate.researchStreamingEnabled === true) config.researchStreamingEnabled = true;
   const agentUrls = validateAgentUrls(candidate.agentUrls);
   if (agentUrls) config.agentUrls = agentUrls;
   return config;

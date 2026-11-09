@@ -64,7 +64,25 @@ describe('surface_begin', () => {
   });
 });
 
+describe('surface_end', () => {
+  it('keeps the persisted message id for loading this turn\'s trace', () => {
+    const state = reduceEvents([...START, { ...END, message_id: 'turn-123' }]);
+    expect(state.messageId).toBe('turn-123');
+  });
+});
+
 describe('component_add', () => {
+  it('accepts children declared by a Tabs parent without losing its labels', () => {
+    const root = { seq: 1, type: 'component_add', parent_id: null, component: { id: 'root', type: 'Tabs', tabs: [{ label: 'Answer', child_id: 'answer' }] } };
+    expect(selectTree(reduceEvents([BEGIN, root]))).toBeNull();
+    const state = reduceEvents([
+      BEGIN, root,
+      { seq: 2, type: 'component_add', parent_id: 'root', component: { id: 'answer', type: 'Markdown', content: 'Hello' } },
+    ]);
+    expect(component(state, 'root')).toMatchObject({ tabs: [{ label: 'Answer', child_id: 'answer' }] });
+    expect(component(state, 'answer')).toMatchObject({ content: 'Hello' });
+    expect(state.warnings).toEqual([]);
+  });
   it('splices components into the parent at index', () => {
     const state = reduceEvents([...START, ADD_EVIDENCE, { ...ADD_TEXT, seq: 4 }]);
     expect(rootChildren(state)).toEqual(['answer', 'evidence']);

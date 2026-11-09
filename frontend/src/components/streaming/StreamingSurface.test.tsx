@@ -61,6 +61,23 @@ describe('StreamingSurface', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('The request could not be completed.');
   });
 
+  it('reports completion exactly once to the owning chat', async () => {
+    const { impl } = scripted(FULL_RUN);
+    const finished = vi.fn();
+    render(<StreamingSurface sessionId="s-1" agent="research" body={{ message: 'hi' }} openStreamImpl={impl} onFinished={finished} />);
+    await waitFor(() => expect(finished).toHaveBeenCalledTimes(1));
+    expect(finished.mock.calls[0][0].status).toBe('ended');
+    expect(finished.mock.calls[0][1]).toBeNull();
+  });
+
+  it('reports connection failure so the chat can unlock', async () => {
+    const finished = vi.fn();
+    const impl = async function* (): AsyncGenerator<StreamEvent> { throw new Error('offline'); };
+    render(<StreamingSurface sessionId="s-1" agent="research" body={{}} openStreamImpl={impl} onFinished={finished} />);
+    await waitFor(() => expect(finished).toHaveBeenCalledTimes(1));
+    expect(finished.mock.calls[0][1]).toBe('The response stream failed.');
+  });
+
   it('aborts the stream on unmount', async () => {
     const { calls, impl } = scripted([], { hang: true });
     const { unmount } = render(<StreamingSurface sessionId="s-1" agent="research" body={{}} openStreamImpl={impl} />);

@@ -36,6 +36,7 @@ export type StreamState = {
   lastSeq: number;
   status: StreamStatus;
   surface: { surface_id: string; revision: number; version: string; root_id: string } | null;
+  messageId: string | null;
   components: ReadonlyMap<string, CEIUIComponent>;
   rootIds: readonly string[];
   traceEvents: readonly TraceEvent[];
@@ -53,6 +54,7 @@ export const initialStreamState: StreamState = Object.freeze({
   lastSeq: -1,
   status: 'idle',
   surface: null,
+  messageId: null,
   components: new Map(),
   rootIds: [],
   traceEvents: [],
@@ -67,7 +69,7 @@ export const initialStreamState: StreamState = Object.freeze({
 type Handler<T extends StreamEventType> = (state: StreamState, event: StreamEventOf<T>) => StreamState;
 type HandlerTable = { [T in StreamEventType]: Handler<T> };
 
-const STRUCTURAL_FIELDS = new Set(['id', 'type', 'children']);
+const STRUCTURAL_FIELDS = new Set(['id', 'type', 'children', 'tabs']);
 
 function childrenOf(component: CEIUIComponent): string[] | null {
   return 'children' in component && Array.isArray(component.children) ? component.children : null;
@@ -111,12 +113,17 @@ function removeSubtree(state: StreamState, componentId: string): StreamState {
     const node = state.components.get(id);
     if (!node || doomed.has(id)) return;
     doomed.add(id);
-    childrenOf(node)?.forEach(visit);
+    (node.type === 'Tabs' ? node.tabs.map((tab) => tab.child_id) : childrenOf(node))?.forEach(visit);
   };
   visit(componentId);
   const components = new Map<string, CEIUIComponent>();
   for (const [id, node] of state.components) {
     if (doomed.has(id)) continue;
+    if (node.type === 'Tabs') {
+      const tabs = node.tabs.filter((tab) => !doomed.has(tab.child_id));
+      if (tabs.length) components.set(id, { ...node, tabs, active_index: Math.min(node.active_index, tabs.length - 1) });
+      continue;
+    }
     const children = childrenOf(node);
     components.set(id, children ? ({ ...node, children: children.filter((child) => !doomed.has(child)) } as CEIUIComponent) : node);
   }
@@ -145,6 +152,12 @@ const HANDLERS: HandlerTable = {
       return { ...replaceComponent(state, component), rootIds: [component.id] };
     }
     const parent = state.components.get(event.parent_id);
+    // Tabs declare their labels and child ids before those children arrive. Unlike
+    // generic containers their structure cannot be inferred from a child alone.
+    if (parent?.type === 'Tabs') {
+      if (!parent.tabs.some((tab) => tab.child_id === component.id)) return warn(state, `unknown tab child ${component.id}`);
+      return replaceComponent(state, component);
+    }
     const siblings = parent ? childrenOf(parent) : null;
     if (!parent || !siblings) return warn(state, `unknown or non-container parent ${event.parent_id}`);
     const at = Math.min(event.index ?? siblings.length, siblings.length);
@@ -184,7 +197,7 @@ const HANDLERS: HandlerTable = {
 
   heartbeat: (state, event) => ({ ...state, lastHeartbeatAt: event.ts }),
 
-  surface_end: (state) => ({ ...state, status: 'ended' }),
+  surface_end: (state, event) => ({ ...state, status: 'ended', messageId: event.message_id ?? null }),
 
   error: (state, event) => ({ ...state, status: 'error', error: { code: event.code, message: event.message } }),
 
@@ -231,6 +244,17 @@ export function reduceEvents(events: readonly unknown[], initial: StreamState = 
 /** Project state into the flat surface shape CEIUISurface renders, or null until the root exists. */
 export function selectTree(state: StreamState): CEIUISurface | null {
   if (!state.surface || state.rootIds.length === 0) return null;
+  // Tab descriptors can arrive before their child components. Project only tabs
+  // whose child has arrived, so the renderer never displays a missing-node error.
+  const projected = [...state.components.values()].flatMap((node): CEIUIComponent[] => {
+    if (node.type !== 'Tabs') return [node];
+    const tabs = node.tabs.filter((tab) => state.components.has(tab.child_id));
+    if (!tabs.length) return [];
+    const selectedId = node.tabs[node.active_index]?.child_id;
+    const active = tabs.findIndex((tab) => tab.child_id === selectedId);
+    return [{ ...node, tabs, active_index: Math.max(active, 0) }];
+  });
+  if (!projected.some((component) => component.id === state.rootIds[0])) return null;
   return {
     content_type: CEI_UI_CONTENT_TYPE,
     protocol: CEI_UI_PROTOCOL,
@@ -239,7 +263,7 @@ export function selectTree(state: StreamState): CEIUISurface | null {
     surface_id: state.surface.surface_id,
     revision: state.surface.revision,
     root_id: state.rootIds[0],
-    components: [...state.components.values()],
+    components: projected,
   };
 }
 

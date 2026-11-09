@@ -76,7 +76,14 @@ export async function* openStream(options: OpenStreamOptions): AsyncGenerator<St
       });
       if (!response.ok || !response.body) {
         const retriable = response.status >= 500 || response.status === 429;
-        if (!retriable) throw new StreamError(`The stream could not be opened (HTTP ${response.status}).`, { status: response.status });
+        if (!retriable || lastSeq < 0 || response.status === 429) {
+          const body: unknown = await response.json().catch(() => null);
+          const envelope = body && typeof body === 'object' && 'error' in body ? (body as { error?: unknown }).error : null;
+          const message = envelope && typeof envelope === 'object' && 'message' in envelope
+            && typeof envelope.message === 'string' && envelope.message.length <= 1000
+            ? envelope.message : `The stream could not be opened (HTTP ${response.status}).`;
+          throw new StreamError(message, { status: response.status, retriable });
+        }
       } else {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -113,6 +120,9 @@ export async function* openStream(options: OpenStreamOptions): AsyncGenerator<St
     }
 
     if (outcome === 'terminal' || options.signal?.aborted) return;
+    // A request may have reached the server even if no event made it back. Without a replay
+    // sequence there is no safe way to distinguish it from a new run; do not submit it again.
+    if (lastSeq < 0) throw new StreamError('The connection was lost before the response began. Check the chat history before retrying.', { retriable: true });
     attempt = progressed ? 1 : attempt + 1;
     if (attempt > maxReconnects) {
       throw new StreamError('The connection was lost and could not be resumed.', { retriable: true });

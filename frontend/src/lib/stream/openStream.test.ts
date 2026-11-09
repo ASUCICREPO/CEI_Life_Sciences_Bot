@@ -95,15 +95,28 @@ describe('openStream', () => {
     expect(events.map((event) => event.type)).toEqual(['surface_begin', 'component_add', 'component_add', 'surface_end']);
   });
 
-  it('retries 5xx with backoff and gives up after maxReconnects', async () => {
+  it('does not resubmit a request that disconnected before its first event', async () => {
     const delays: number[] = [];
     const { calls, impl } = fakeFetch(Array.from({ length: 5 }, () => () => new Response('x', { status: 503 })));
     await expect(collect(openStream({
       url: '/s', body: {}, getToken: async () => 'tok', fetchImpl: impl, maxReconnects: 2,
       sleep: async (ms) => { delays.push(ms); },
     }))).rejects.toBeInstanceOf(StreamError);
-    expect(calls).toHaveLength(3);
-    expect(delays).toEqual([500, 1000]);
+    expect(calls).toHaveLength(1);
+    expect(delays).toEqual([]);
+  });
+
+  it('surfaces the safe API error message for unavailable background processing', async () => {
+    const { impl } = fakeFetch([() => new Response(JSON.stringify({ error: { code: 'service_unavailable', message: 'Background processing is not available yet.' } }), { status: 400 })]);
+    await expect(collect(openStream({ url: '/s', body: {}, getToken: async () => 'tok', fetchImpl: impl })))
+      .rejects.toMatchObject({ status: 400, message: 'Background processing is not available yet.' });
+  });
+
+  it('shows the server concurrency-limit message without starting a second run', async () => {
+    const { calls, impl } = fakeFetch([() => new Response(JSON.stringify({ error: { code: 'concurrency_limit', message: 'Too many active runs.' } }), { status: 429 })]);
+    await expect(collect(openStream({ url: '/s', body: {}, getToken: async () => 'tok', fetchImpl: impl })))
+      .rejects.toMatchObject({ status: 429, message: 'Too many active runs.' });
+    expect(calls).toHaveLength(1);
   });
 
   it('does not retry a 4xx and requires a token', async () => {
