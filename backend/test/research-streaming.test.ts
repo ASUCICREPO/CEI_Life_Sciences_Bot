@@ -35,4 +35,9 @@ describe('Research streaming infrastructure', () => {
       Environment: { Variables: Match.objectLike({ CEI_ROUTER_FUNCTION: Match.anyValue(), CEI_CHAT_HISTORY_TABLE: Match.anyValue() }) },
     });
   });
+  it('grants the Research role access to the internal refresh route', () => {
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')).map((policy) => JSON.stringify(policy));
+    expect(policies.some((policy) => policy.includes('AgentRuntimesResearch') &&
+      policy.includes('execute-api:Invoke') && policy.includes('internal/token-refresh'))).toBe(true);
+  });
 });
