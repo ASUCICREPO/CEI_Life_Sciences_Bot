@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "CEI Life Sciences Research Agent"
 requires-python = ">=3.12"
 dependencies = [
+    "aws-opentelemetry-distro>=0.18.0",
     "bedrock-agentcore",
     "boto3",
     "cryptography",  # RS256 verification of Cognito access tokens (shared/runtime/identity.py)

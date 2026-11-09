@@ -1,6 +1,9 @@
 """AgentCore Runtime entry point for the CEI Pipeline Manager (B94, B96, B98)."""
 from __future__ import annotations
 
+from shared.telemetry import configure_telemetry
+configure_telemetry()
+
 import asyncio
 import logging
 import os
@@ -152,8 +155,8 @@ async def _run_job(job_id: str, session_id: str, user_id: str, action_resume_val
             _replay.record_job_status(prompt, JOB_REGISTRY.snapshot(job_id))
         log.info(f"Pipeline job complete: job={job_id} session={session_id}")
     except Exception as exc:  # ADR: a crashed background job must still resolve the job record | never hang /pipeline
-        log.error(f"Pipeline job failed: job={job_id} session={session_id} error={exc!r}")
-        JOB_REGISTRY.finish(job_id, JobStatus.FAILED, ui=None, text=f"Pipeline run failed: {exc!r}")
+        log.error("Pipeline job failed: job=%s session=%s error_type=%s", job_id, session_id, type(exc).__name__)
+        JOB_REGISTRY.finish(job_id, JobStatus.FAILED, ui=None, text="Pipeline run failed.")
         await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope={"text": "Pipeline run failed."})
     finally:
         app.complete_async_task(task_id)

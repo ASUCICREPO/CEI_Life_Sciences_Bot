@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -22,6 +23,22 @@ def _plan() -> PipelinePlan:
         steps=[PipelineStep(step_id="step-1", agent="research", description="Find sources")],
         estimated_duration_seconds=30,
     )
+
+
+def test_failed_job_records_safe_error(monkeypatch):
+    graph = SimpleNamespace(ainvoke=AsyncMock(side_effect=RuntimeError("private request content")))
+    finish = Mock()
+    logger = Mock()
+    monkeypatch.setattr(pipeline_main, "_compile_graph", lambda: graph)
+    monkeypatch.setattr(pipeline_main.JOB_REGISTRY, "finish", finish)
+    monkeypatch.setattr(pipeline_main, "end_turn", AsyncMock())
+    monkeypatch.setattr(pipeline_main.app, "complete_async_task", Mock())
+    monkeypatch.setattr(pipeline_main, "log", logger)
+    asyncio.run(pipeline_main._run_job("job-test", "session-test", "user-test", {}, 1))
+    assert finish.call_args.kwargs["text"] == "Pipeline run failed."
+    assert "RuntimeError" in str(logger.error.call_args)
+    assert "private request content" not in str(logger.error.call_args)
+    assert "private request content" not in str(finish.call_args)
 
 
 class _FakeStatus:

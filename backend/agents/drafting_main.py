@@ -1,6 +1,9 @@
 """AgentCore Runtime entry point for the CEI Life Sciences Drafting Agent."""
 from __future__ import annotations
 
+from shared.telemetry import configure_telemetry
+configure_telemetry()
+
 import logging
 import os
 from collections import OrderedDict
