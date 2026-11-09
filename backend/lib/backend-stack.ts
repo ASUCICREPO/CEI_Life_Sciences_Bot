@@ -687,6 +687,12 @@ export class BackendStack extends cdk.Stack {
       refreshCallerRoleArns: [agentRuntimes.runtimes.Research.role.roleArn],
     });
     agentRuntimes.configureResearchGateway(gateway.routerClient.userPoolClientId, gateway.gateway.attrGatewayUrl);
+    // B67: only the Research runtime may invoke the internal IAM-authenticated
+    // refresh method; the refresh handler also verifies the caller and active run.
+    agentRuntimes.runtimes.Research.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['execute-api:Invoke'],
+      resources: [api.arnForExecuteApi('POST', '/internal/token-refresh', api.deploymentStage.stageName)],
+    }));
 
     const router = new SessionRouter(this, 'SessionRouter', {
       role: gateway.routerRole,
