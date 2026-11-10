@@ -107,7 +107,7 @@ export interface TurnTrace {
 export interface SessionsClient {
   listSessions(options?: ListSessionsOptions): Promise<Page<SessionSummary>>;
   getSession(sessionId: string): Promise<SessionSummary>;
-  createSession(input: { title: string; mode: SessionMode; model_id?: string }): Promise<CreatedSession>;
+  createSession(input: { title: string; mode: SessionMode; model_id?: string; agent_type?: string }): Promise<CreatedSession>;
   updateSession(sessionId: string, patch: { title?: string; mode?: SessionMode }): Promise<SessionSummary>;
   /** Newest page first; items within a page are chronological. Pass `next_cursor` to load older messages. */
   loadHistory(sessionId: string, options?: LoadHistoryOptions): Promise<HistoryPage>;

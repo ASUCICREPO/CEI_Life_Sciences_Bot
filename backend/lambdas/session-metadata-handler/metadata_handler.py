@@ -125,10 +125,20 @@ def _public(record: ChatMetadataRecord) -> dict[str, Any]:
 
 def _create(event: dict[str, Any], user_id: str) -> dict[str, Any]:
     body = parse_json_body(event)
-    _reject_unknown(body, {"title", "mode", "model_id"})
+    _reject_unknown(body, {"title", "mode", "model_id", "agent_type"})
     if "title" not in body or "mode" not in body:
         raise invalid_request("The title and mode fields are required.")
     now = datetime.now(UTC)
+    # Validate agent_type when provided — must be a known value so History can resume the session
+    _KNOWN_AGENT_TYPES = frozenset({"research", "drafting", "analysis", "pipeline_manager"})
+    agent_type_raw = body.get("agent_type")
+    agent_type: str | None = None
+    if agent_type_raw is not None:
+        if not isinstance(agent_type_raw, str) or agent_type_raw not in _KNOWN_AGENT_TYPES:
+            raise invalid_request(
+                "The agent_type field must be one of: research, drafting, analysis, pipeline_manager."
+            )
+        agent_type = agent_type_raw
     # A brand-new UUID has no history, so the owner is the caller by construction (stamped on the first turn)
     record = ChatMetadataRecord(
         session_id=_new_session_id(),
@@ -136,13 +146,17 @@ def _create(event: dict[str, Any], user_id: str) -> dict[str, Any]:
         title=_validate_title(body["title"]),
         mode=_validate_mode(body["mode"]),
         model_id=_validate_model_id(body["model_id"]) if body.get("model_id") is not None else None,
+        agent_type=agent_type,
         created_at=now,
         updated_at=now,
         last_activity_at=now,
     )
     _repository().create(record)
     created = record.model_dump(mode="json")
-    response = {k: created[k] for k in ("session_id", "title", "title_source", "mode", "status", "created_at")}
+    response = {
+        k: created[k]
+        for k in ("session_id", "title", "title_source", "mode", "status", "created_at")
+    }
     return json_response(201, response, event)
 
 
@@ -178,7 +192,9 @@ def _list(event: dict[str, Any], user_id: str) -> dict[str, Any]:
             sort_attribute: lambda v: isinstance(v, str),
         },
     )
-    page = _repository().list_by_user(user_id, sort=sort, limit=limit, start_key=start_key, query=query)
+    page = _repository().list_by_user(
+        user_id, sort=sort, limit=limit, start_key=start_key, query=query
+    )
     return json_response(200, page_envelope([_public(r) for r in page.items], page.next_key), event)
 
 
@@ -196,7 +212,9 @@ def _patch(event: dict[str, Any], user_id: str) -> dict[str, Any]:
     _reject_unknown(body, {"title", "mode"})
     if not body:
         raise invalid_request("Provide at least one of title or mode.")
-    title = _validate_title(body["title"]) if "title" in body else None  # repo marks title_source="user"
+    title = (
+        _validate_title(body["title"]) if "title" in body else None
+    )  # repo marks title_source="user"
     mode = _validate_mode(body["mode"]) if "mode" in body else None
     try:
         record = _repository().update(user_id, session_id, title=title, mode=mode)

@@ -123,6 +123,7 @@ export function ToolsPage() {
       const created = await sessionsClient.createSession({
         title: `${source.name}: ${query.slice(0, 80)}`,
         mode: 'science',
+        agent_type: 'research',
       });
       clearTimers();
       const runId = crypto.randomUUID();
@@ -252,7 +253,7 @@ export function ToolsPage() {
                   key={item.id}
                   type="button"
                   data-tour={item.id === 'clinical-trials' ? 'tools-source' : undefined}
-                  
+
                   onClick={() => handleSourceSelect(item)}
                   className="group relative min-h-56 rounded-xl border border-border-subtle bg-surface-elevated p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-cei-blue-light/50 hover:shadow-md cursor-pointer"
                   aria-label={`Open ${item.name}`}
