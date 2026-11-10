@@ -14,7 +14,7 @@ import { Construct } from 'constructs';
 const AGENTS_DIR = path.join(__dirname, '..', '..', 'agents');
 
 /** Source trees and entrypoints shipped in the CodeZip (everything else under backend/agents stays local). */
-const SOURCE_DIRS = ['research', 'drafting', 'analysis', 'pipeline_manager', 'shared'];
+const SOURCE_DIRS = ['research', 'drafting', 'analysis', 'pipeline_manager', 'tool_agent', 'shared'];
 const ENTRYPOINT_FILES = ['main.py', 'drafting_main.py', 'analysis_main.py', 'pipeline_main.py'];
 
 // ADR: never ship local-only files | Rationale: .env holds developer credentials/settings; .venv is a Windows/host
