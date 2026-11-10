@@ -82,24 +82,12 @@ async def _research_checkpoint_context(user_id: str, session_id: str):
 
 async def _research_long_term_context(user_id: str, prompt: str) -> list[str]:
     """Load only this actor's memory when the experimental read path is enabled."""
-    if os.environ.get("CEI_RESEARCH_LONG_TERM_ENABLED", "").lower() != "true":
-        return []
-    memory_id = os.environ.get("CEI_RESEARCH_MEMORY_ID", "").strip()
-    if not memory_id:
-        return []
-    import boto3
-    from botocore.exceptions import BotoCoreError, ClientError
-    from shared.config import config
-    from shared.memory.turns import load_turn_memories
+    # ADR: moved to shared/memory/turns.py (F11) | same env vars, generic across specialist agents
+    from shared.memory.turns import load_long_term_context
 
-    client = boto3.client("bedrock-agentcore", region_name=config.aws_region)
-    try:
-        return await load_turn_memories(client=client, memory_id=memory_id, user_id=user_id, query=prompt)
-    except (BotoCoreError, ClientError) as exc:
-        # Memory is optional context; a service failure must not fail the turn.
-        # Validation errors (e.g. a foreign namespace) still propagate.
-        log.warning("long-term memory unavailable: %s", type(exc).__name__)
-        return []
+    return await load_long_term_context(
+        user_id, prompt, enabled_env="CEI_RESEARCH_LONG_TERM_ENABLED", memory_id_env="CEI_RESEARCH_MEMORY_ID",
+    )
 
 
 def _runtime_port() -> int:
