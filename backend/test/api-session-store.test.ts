@@ -66,7 +66,7 @@ describe('BackendStack REST API + session store', () => {
     const iamMethods = methods.filter((m) => m.AuthorizationType === 'AWS_IAM');
     expect(iamMethods.map((m) => m.HttpMethod)).toEqual(['POST']);
     const real = methods.filter((m) => m.HttpMethod !== 'OPTIONS' && m.AuthorizationType !== 'AWS_IAM');
-    expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST', 'POST']);
+    expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST', 'POST', 'POST', 'POST']);
     for (const method of real) {
       expect(method.AuthorizationType).toBe('COGNITO_USER_POOLS');
       expect(method.AuthorizerId).toBeDefined();

@@ -72,6 +72,7 @@ describe.each([
       'GET /exports/{exportId}/download', 'GET /sessions', 'GET /sessions/{sessionId}', 'GET /sessions/{sessionId}/exports', 'GET /sessions/{sessionId}/history',
       'GET /sessions/{sessionId}/turns/{messageId}/trace', 'PATCH /sessions/{sessionId}',
       'POST /chat/stream', 'POST /client-diagnostics', 'POST /sessions',
+      'GET /jobs', 'GET /jobs/{jobId}', 'POST /jobs/{jobId}/cancel', 'POST /ui-actions',
     ].sort());
   });
 
