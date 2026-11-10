@@ -41,6 +41,11 @@ Two concrete activation blockers remain:
   cannot currently use it to establish that the writer and all its remote
   operations have stopped, including after an ambiguous registration response.
   A trustworthy binding and recovery procedure must be implemented and tested.
+- `ExportRepository.save` relies on its caller to hold the writer fence; the
+  repository does not verify a fence token or proof. The reviewed export service
+  uses the current fence foundation, but any new caller could bypass it. Enforce
+  this invariant centrally or require and validate a trusted fence proof on every
+  save before enabling report generation.
 
 Keep report generation and deletion routes disabled until both issues, the
 durable job/outbox transaction, universal writer coverage, and the remaining

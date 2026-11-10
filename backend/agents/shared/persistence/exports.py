@@ -39,6 +39,8 @@ class ExportRepository:
         """Reserve metadata before writing the object, then mark the report ready.
 
         The caller must hold a deletion fence through this entire operation.
+        This method does not verify that fence; production activation requires
+        central enforcement or a validated fence proof for every caller.
         A failed or ambiguous S3 write leaves an indexed record with its object
         key so deletion and reconciliation can find any object S3 may have saved.
         """
