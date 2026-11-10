@@ -137,6 +137,20 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
         JSON.stringify(s.Resource).includes(memoryId)))).toBe(true);
   });
 
+  test('every runtime gets the Guardrail id/version and the blocklist env var (F8)', () => {
+    const guardrailId = Object.keys(template.findResources('AWS::Bedrock::Guardrail'))[0];
+    for (const [, runtime] of runtimes) {
+      const env = (runtime as any).Properties.EnvironmentVariables;
+      expect(env.CEI_GUARDRAIL_ID).toEqual({ 'Fn::GetAtt': [guardrailId, 'GuardrailId'] });
+      expect(env.CEI_GUARDRAIL_VERSION).toBeDefined();
+      expect(env.CEI_BLOCKED_MODELS).toBeDefined();
+    }
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    expect(policies.some((p) => JSON.stringify(p.Properties.Roles).includes('AgentRuntimesResearchRuntime') &&
+      p.Properties.PolicyDocument.Statement.some((s: any) =>
+        [s.Action].flat().includes('bedrock:ApplyGuardrail') && !JSON.stringify(s.Resource).includes('"*"')))).toBe(true);
+  });
+
   test('zero unsuppressed cdk-nag errors after adding the runtimes', () => {
     const errors = Annotations.fromStack(stack).findError('*', Match.stringLikeRegexp('AwsSolutions-.*'));
     expect(errors).toHaveLength(0);
