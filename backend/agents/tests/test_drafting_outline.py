@@ -57,8 +57,9 @@ def test_outline_incorporates_correction_and_increments_revision(monkeypatch):
     state = _base_state(outline="- Intro\n- Methods", outline_revision=1, outline_correction="add an appendix")
     result = outline(state)
     assert result["outline_revision"] == 2
-    user_prompt = model.invoke.call_args.args[0][1]["content"]
-    assert "add an appendix" in user_prompt
+    content_blocks = model.invoke.call_args.args[0][1]["content"]
+    # B51a: the outline correction is user-typed, so it must be its own guard_content block.
+    assert {"type": "guard_content", "text": "add an appendix"} in content_blocks
 
 
 # ── approve_outline node: pause + routing on resume ─────────────────────────
