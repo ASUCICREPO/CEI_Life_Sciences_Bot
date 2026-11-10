@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createHandler, validateRequest, parseEvents, routerError } = require('./index');
+const { createHandler, validateRequest, parseEvents, routerError, bufferedToEvents, choiceRequiredEvents, choicePickerSurface, requestBodyFor, walkComponents } = require('./index');
 const session = '6f1c2d3e-0000-4000-8000-000000000001';
 const run = '6f1c2d3e-0000-4000-8000-000000000002';
 function request(extra = {}) { return { requestContext: { requestId: 'request-1', authorizer: { claims: { sub: 'user-1' } } }, headers: { Authorization: 'Bearer token' }, body: JSON.stringify({ session_id: session, run_id: run, message: 'question', task_type: 'live-research', mode: 'science', ...extra }) }; }
@@ -154,4 +154,87 @@ test('parser accepts a large transport chunk containing many bounded events', as
 test('parser rejects truncated UTF-8 at the end of a stream', async () => {
   const bytes = Buffer.concat([Buffer.from('id: 0\nevent: text_delta\ndata: {"delta":"'), Buffer.from([0xc3])]);
   await assert.rejects(async () => { for await (const _item of parseEvents((async function* () { yield bytes; })())) {} });
+});
+
+// F9: free text (task_type absent), the ChoicePicker turn, and the buffered-JSON-to-SSE adapter for the
+// non-Research specialists.
+test('validateRequest accepts a free-text request (no task_type) and rejects an unknown task_type', () => {
+  const parsed = validateRequest(request({ task_type: undefined }));
+  assert.equal(parsed.request.task_type, undefined);
+  assert.throws(() => validateRequest(request({ task_type: 'not-a-real-task' })), { statusCode: 400 });
+});
+
+test('requestBodyFor defaults a document_type for drafting only', () => {
+  const parsed = { request: { message: 'hello', mode: 'science' } };
+  assert.deepEqual(requestBodyFor('analysis', parsed), { prompt: 'hello', mode: 'science' });
+  assert.deepEqual(requestBodyFor('drafting', parsed), { prompt: 'hello', mode: 'science', document_type: 'whitepaper' });
+});
+
+test('walkComponents visits parent-first and clears container children', () => {
+  const ui = { root_id: 'root', components: [
+    { id: 'root', type: 'Column', children: ['a', 'b'] },
+    { id: 'a', type: 'Text', content: 'x' },
+    { id: 'b', type: 'Text', content: 'y' },
+  ] };
+  const records = [...walkComponents(ui, 'root')];
+  assert.deepEqual(records.map((r) => r.component.id), ['root', 'a', 'b']);
+  assert.equal(records[0].parent_id, null);
+  assert.deepEqual(records[0].component.children, []);
+  assert.equal(records[1].parent_id, 'root'); assert.equal(records[1].index, 0);
+  assert.equal(records[2].parent_id, 'root'); assert.equal(records[2].index, 1);
+});
+
+test('choicePickerSurface lists the four agents behind a fixed route-choice action', () => {
+  const surface = choicePickerSurface('router-choice-1');
+  assert.equal(surface.components[0].type, 'ChoicePicker');
+  assert.equal(surface.components[0].action.action_id, 'route-choice');
+  assert.deepEqual(surface.components[0].options.map((o) => o.value), ['research', 'drafting', 'analysis', 'pipeline_manager']);
+});
+
+test('choiceRequiredEvents starts with surface_begin then a terminal hitl_request', () => {
+  const [begin, hitl] = choiceRequiredEvents('router-choice-1');
+  assert.deepEqual(begin, { seq: 0, type: 'surface_begin', surface_id: 'router-choice-1', revision: 1, content_type: 'application/vnd.cei.ui+json', protocol: 'cei-ui', version: '1.2', root_id: 'router-choice' });
+  assert.equal(hitl.seq, 1); assert.equal(hitl.type, 'hitl_request'); assert.equal(hitl.surface_id, 'router-choice-1');
+});
+
+test('bufferedToEvents adapts a completed envelope into surface_begin/component_add/surface_end', () => {
+  const envelope = { status: 'completed', text: 'hi', ui: { content_type: 'application/vnd.cei.ui+json', protocol: 'cei-ui', version: '1.1', surface_id: 'drafting-final', revision: 1, root_id: 'root', components: [{ id: 'root', type: 'Text', content: 'hi' }] } };
+  const events = bufferedToEvents(envelope);
+  assert.deepEqual(events.map((e) => e.type), ['surface_begin', 'component_add', 'surface_end']);
+  assert.equal(events[0].surface_id, 'drafting-final');
+  assert.equal(events[events.length - 1].final, true);
+});
+
+test('bufferedToEvents adapts an awaiting_input envelope into surface_begin then hitl_request', () => {
+  const ui = { content_type: 'application/vnd.cei.ui+json', protocol: 'cei-ui', version: '1.1', surface_id: 'drafting-outline', revision: 1, root_id: 'root', components: [{ id: 'root', type: 'Text', content: 'outline' }] };
+  const events = bufferedToEvents({ status: 'awaiting_input', ui });
+  assert.deepEqual(events.map((e) => e.type), ['surface_begin', 'hitl_request']);
+  assert.equal(events[1].surface_id, 'drafting-outline');
+});
+
+test('bufferedToEvents falls back to a minimal surface when completed with no ui', () => {
+  const events = bufferedToEvents({ status: 'completed', text: 'The plan could not be built.' });
+  assert.deepEqual(events.map((e) => e.type), ['surface_begin', 'component_add', 'surface_end']);
+});
+
+test('a free-text choice_required route emits only a surface_begin/hitl_request ChoicePicker', async () => {
+  const h = harness();
+  h.deps.start = async () => ({ user_id: 'user-1', session_id: session, run_id: run, choice_required: true, surface_id: 'router-choice-1' });
+  let opened = false; h.deps.open = async () => { opened = true; throw new Error('must not open a runtime for a choice'); };
+  const response = await h.invoke(request({ task_type: undefined }));
+  assert.equal(response.metadata.statusCode, 200);
+  assert.match(response.text, /event: surface_begin/); assert.match(response.text, /event: hitl_request/);
+  assert.doesNotMatch(response.text, /event: surface_end/);
+  assert.equal(opened, false);
+});
+
+test('a free-text route to a non-Research agent is adapted from one buffered envelope', async () => {
+  const h = harness();
+  h.deps.start = async () => ({ user_id: 'user-1', session_id: session, run_id: run, gateway_token: 'secret', agent: 'drafting', runtime_url: 'https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/x/invocations?qualifier=DEFAULT' });
+  let capturedBody;
+  h.deps.invokeBuffered = async (_route, parsed) => { capturedBody = parsed.request.message; return { status: 'completed', text: 'done', ui: { content_type: 'application/vnd.cei.ui+json', protocol: 'cei-ui', version: '1.1', surface_id: 'drafting-final', revision: 1, root_id: 'root', components: [{ id: 'root', type: 'Text', content: 'done' }] } }; };
+  const response = await h.invoke(request({ task_type: undefined }));
+  assert.equal(response.metadata.statusCode, 200);
+  assert.match(response.text, /event: surface_begin/); assert.match(response.text, /event: component_add/); assert.match(response.text, /event: surface_end/);
+  assert.equal(capturedBody, 'question');
 });
