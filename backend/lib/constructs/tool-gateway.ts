@@ -256,7 +256,8 @@ export class ToolGateway extends Construct {
       gateway: this.gateway, gatewayRole, policyEngine,
     }).function;
 
-    const ncbiTools = [
+    const ncbiTools: Array<{ id: string; name: string; description: string;
+      properties: Record<string, { type: string }>; required: string[] }> = [
       { id: 'taxonomy', name: 'lineage', description: 'Retrieve an NCBI taxonomy lineage by taxon name or ID.',
         properties: { taxon: { type: 'string' } }, required: ['taxon'] },
       { id: 'sequence', name: 'efetch', description: 'Retrieve an NCBI nucleotide or protein sequence by accession.',
@@ -270,7 +271,7 @@ export class ToolGateway extends Construct {
         credentialProviderConfigurations: [{ credentialProviderType: 'GATEWAY_IAM_ROLE' }],
         targetConfiguration: { mcp: { lambda: { lambdaArn: this.ncbiFunction.functionArn, toolSchema: { inlinePayload: [
           { name: tool.name, description: tool.description,
-            inputSchema: { type: 'object', properties: tool.properties as Record<string, { type: string }>, required: tool.required } },
+            inputSchema: { type: 'object', properties: tool.properties, required: tool.required } },
         ] } } } },
       });
       target.node.addDependency(gatewayRole);
