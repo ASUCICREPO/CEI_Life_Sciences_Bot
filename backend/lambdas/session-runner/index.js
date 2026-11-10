@@ -41,13 +41,13 @@ const frame = (event) => `id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.s
 
 /** Parse SSE frames from an async iterable of bytes, including split UTF-8 and CRLF. */
 async function* parseEvents(body) {
-  const decoder = new TextDecoder(); let buffer = '';
+  const decoder = new TextDecoder('utf-8', { fatal: true }); let buffer = '';
   for await (const chunk of body) {
     buffer += decoder.decode(chunk, { stream: true });
-    if (Buffer.byteLength(buffer) > MAX_EVENT_BYTES * 2) throw new Error('oversized frame');
     let match;
     while ((match = /\r?\n\r?\n/.exec(buffer))) {
       const raw = buffer.slice(0, match.index); buffer = buffer.slice(match.index + match[0].length);
+      if (Buffer.byteLength(raw) > MAX_EVENT_BYTES * 2) throw new Error('oversized frame');
       if (raw.startsWith(':')) continue;
       const lines = raw.split(/\r?\n/);
       const id = lines.find((line) => line.startsWith('id:'))?.slice(3).trim();
@@ -58,7 +58,11 @@ async function* parseEvents(body) {
       if (!Number.isSafeInteger(seq) || !payload || typeof payload !== 'object' || Array.isArray(payload) || (payload.type && payload.type !== type)) throw new Error('invalid event');
       yield { ...payload, type, seq };
     }
+    // One transport chunk can contain many valid events; bound the unfinished
+    // frame, not the total size of the chunk received from the runtime.
+    if (Buffer.byteLength(buffer) > MAX_EVENT_BYTES * 2) throw new Error('oversized frame');
   }
+  buffer += decoder.decode();
   if (buffer.trim()) throw new Error('incomplete frame');
 }
 
@@ -84,9 +88,14 @@ function createHandler(responseFrom, deps) {
       if (parsed.request.resume_from_seq !== undefined) {
         stage = 'replay';
         if (!await deps.exists(key)) throw new RequestError(404, 'not_found', 'Response not found.');
+        // A resume cursor represents an event the client has already received.
+        // Validate it against durable storage before opening the SSE response.
+        const cursor = await deps.at(key, parsed.request.resume_from_seq);
+        if (!cursor || cursor.seq !== parsed.request.resume_from_seq) throw new RequestError(409, 'invalid_replay_position', 'The replay position is unavailable.');
         stream = responseFrom(rawStream, { statusCode: 200, headers: deps.headers(event, true) });
         stream.on?.('error', (error) => { closed = true; log('error', 'stream_transport_failed', error); });
         send(': connected\n\n');
+        if (TERMINAL.has(cursor.type)) { stream.end(); return; }
         let seq = parsed.request.resume_from_seq, lastHeartbeat = Date.now();
         while (!closed && (context.getRemainingTimeInMillis?.() ?? 900000) > 5000) {
           const events = await deps.after(key, seq);
@@ -173,6 +182,10 @@ function productionDependencies() {
     },
     async owns(userId, sessionId) { const r = await db.send(new GetItemCommand({ TableName: metadata, Key: { user_id: { S: userId }, session_id: { S: sessionId } }, ConsistentRead: true })); return !!r.Item; },
     async exists(key) { const r = await db.send(new GetItemCommand({ TableName: table, Key: { session_id: { S: key }, sequence_number: { N: '-1' } }, ConsistentRead: true })); return !!r.Item; },
+    async at(key, seq) {
+      const r = await db.send(new GetItemCommand({ TableName: table, Key: { session_id: { S: key }, sequence_number: { N: String(seq) } }, ConsistentRead: true }));
+      return r.Item?.event?.S ? JSON.parse(r.Item.event.S) : null;
+    },
     async reserve(key, userId, request) {
       // The index makes the synthetic history partition discoverable during the F19 deletion cascade.
       // Reserving both rows atomically prevents orphaned event partitions if either write fails.

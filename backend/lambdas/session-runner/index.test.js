@@ -11,6 +11,7 @@ function harness() {
     headers: (_event, sse) => ({ 'Content-Type': sse ? 'text/event-stream' : 'application/json' }),
     owns: async (user, id) => user === 'user-1' && id === session,
     exists: async (key) => heads.has(key),
+    at: async (_key, seq) => events.find((e) => e.seq === seq) || null,
     reserve: async (key) => { if (heads.has(key)) throw new Error('duplicate'); heads.add(key); },
     append: async (_key, item) => { events.push(item); },
     after: async (_key, seq) => events.filter((e) => e.seq > seq),
@@ -71,6 +72,20 @@ test('foreign sessions and missing replay heads never start a run', async () => 
   assert.equal((await h.invoke(request({ resume_from_seq: 0 }))).metadata.statusCode, 404);
   assert.deepEqual(h.calls, []);
 });
+test('terminal replay cursor closes immediately without replay or a new run', async () => {
+  const h = harness(); await h.invoke(request());
+  const replay = await h.invoke(request({ resume_from_seq: 1 }));
+  assert.equal(replay.metadata.statusCode, 200);
+  assert.equal(replay.text, ': connected\n\n');
+  assert.deepEqual(h.calls, ['start', 'finish']);
+});
+test('replay cursor ahead of durable events is rejected before streaming', async () => {
+  const h = harness(); await h.invoke(request());
+  const replay = await h.invoke(request({ resume_from_seq: 100 }));
+  assert.equal(replay.metadata.statusCode, 409);
+  assert.equal(JSON.parse(replay.text).error.code, 'invalid_replay_position');
+  assert.deepEqual(h.calls, ['start', 'finish']);
+});
 test('runtime failures yield a safe persisted terminal error and release the run', async () => {
   const h = harness(); h.deps.open = async () => { throw new Error('secret runtime failure'); };
   const result = await h.invoke(request()); assert.match(result.text, /event: error/);
@@ -117,4 +132,13 @@ test('parser handles split CRLF, UTF-8 and multiple events', async () => {
   const bytes = Buffer.from('id: 0\r\nevent: text_delta\r\ndata: {"delta":"é"}\r\n\r\n');
   const out = []; for await (const event of parseEvents((async function* () { for (const byte of bytes) yield Buffer.from([byte]); })())) out.push(event);
   assert.equal(out[0].delta, 'é'); assert.equal(out[0].seq, 0);
+});
+test('parser accepts a large transport chunk containing many bounded events', async () => {
+  const body = Array.from({ length: 8 }, (_, i) => `id: ${i}\nevent: text_delta\ndata: ${JSON.stringify({ delta: 'x'.repeat(90000) })}\n\n`).join('');
+  const out = []; for await (const item of parseEvents((async function* () { yield Buffer.from(body); })())) out.push(item);
+  assert.equal(out.length, 8);
+});
+test('parser rejects truncated UTF-8 at the end of a stream', async () => {
+  const bytes = Buffer.concat([Buffer.from('id: 0\nevent: text_delta\ndata: {"delta":"'), Buffer.from([0xc3])]);
+  await assert.rejects(async () => { for await (const _item of parseEvents((async function* () { yield bytes; })())) {} });
 });
