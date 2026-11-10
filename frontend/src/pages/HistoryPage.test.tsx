@@ -36,7 +36,7 @@ function page(items: SessionSummary[], next: string | null = null): Page<Session
 
 function fakeClient(listSessions: SessionsClient['listSessions']): SessionsClient {
   const unused = () => Promise.reject(new Error('not used'));
-  return { listSessions, getSession: unused, createSession: unused, updateSession: unused, loadHistory: unused, loadTurnTrace: unused, presignAttachment: unused };
+  return { listSessions, getSession: unused, createSession: unused, updateSession: unused, loadHistory: unused, loadTurnTrace: unused };
 }
 
 function TasksProbe() {
