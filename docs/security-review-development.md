@@ -8,16 +8,18 @@ deployment, live attack simulation, or user-data access was performed.
 
 ## Findings and follow-up
 
-1. **Report write recovery and deletion.** The current
-   `backend/agents/shared/persistence/exports.py` writes an S3 object before its
-   DynamoDB metadata. If the metadata write fails and the subsequent read also
-   fails, the code leaves the object in place. An ambiguous S3 write failure
-   can similarly leave an object without metadata. Object keys do not identify
-   the owner or session, and `delete_session` enumerates only metadata. Such an
-   orphan cannot be found by the current user-scoped deletion helper, and reports
-   have no automatic expiry. A recoverable write protocol with durable ownership
-   and retryable cleanup is required. A fix is in progress; test failures before
-   and after each write, including ambiguous timeouts and concurrent deletion.
+1. **Report write recovery and deletion.** Commit `730a6f5` changed
+   `backend/agents/shared/persistence/exports.py` to reserve owner-scoped
+   metadata before attempting the S3 write. This addresses the reviewed
+   object-first failure in which an ambiguous metadata write could leave a
+   report without an indexed owner. An ambiguous S3 write or final status update
+   now leaves a `processing` or `failed` reservation for cleanup. The cleanup
+   and reconciliation worker is not connected, and the caller must hold a
+   deletion fence throughout the write. Without a working fence, deletion can
+   remove the reservation while a writer is still uploading and leave an
+   unindexed object. Reports have no automatic expiry. Verify failure recovery,
+   concurrent deletion and reconciliation in the deployed workflow; the
+   reservation change alone does not prove complete deletion.
 2. **Deletion fence and cascade are not connected.**
    `backend/lambdas/delete-worker/handler.py` describes a fence, run quiescence,
    and a retryable deletion sequence through an abstract backend. The APIs,
