@@ -227,3 +227,51 @@ def test_logs_never_contain_the_token(active, caplog):
     caplog.set_level("INFO")
     call(event({"session_id": "s-1"}))
     assert "new.jwt.token" not in caplog.text
+
+
+JOB = "job_0000000001000_00000000000000ab"
+
+
+def test_job_refresh_needs_no_expiring_user_token(monkeypatch):
+    calls = []
+    monkeypatch.setattr(refresh, "_run_lookup", lambda u, s, r, j: calls.append((u, s, r, j)) or
+                        refresh.ActiveRun(user_sub=u, session_id=s, scopes=SCOPES))
+    monkeypatch.setattr(refresh, "_token_requester", lambda run: {"access_token": "t", "expires_in": 3600})
+    status, _ = call(event({"session_id": "s-1", "job_id": JOB, "run_id": JOB, "user_id": SUB, "user_token": None}))
+    assert status == 200 and calls == [(SUB, "s-1", JOB, JOB)]
+
+
+def test_job_refresh_rejects_mismatched_user_token(active, monkeypatch):
+    monkeypatch.setattr(refresh, "_user_verifier", lambda token: "someone-else")
+    status, _ = call(event({"session_id": "s-1", "job_id": JOB, "run_id": JOB, "user_id": SUB}))
+    assert status == 401 and active == []
+
+
+@pytest.mark.parametrize("body", [
+    {"session_id": "s-1", "job_id": JOB, "run_id": "run-1", "user_id": SUB},
+    {"session_id": "s-1", "job_id": JOB, "run_id": JOB},
+    {"session_id": "s-1", "job_id": "job-1", "run_id": "job-1", "user_id": SUB},
+    {"session_id": "s-1", "user_id": SUB},
+])
+def test_malformed_job_refresh_is_400(active, body):
+    assert call(event(body))[0] == 400 and active == []
+
+
+@pytest.mark.parametrize("job", [
+    None,
+    {"status": "completed", "session_id": "s-1", "scopes": list(SCOPES)},
+    {"status": "running", "session_id": "s-1", "scopes": list(SCOPES), "cancel_requested": True},
+    {"status": "running", "session_id": "other", "scopes": list(SCOPES)},
+    {"status": "running", "session_id": "s-1", "scopes": []},
+])
+def test_inactive_or_unbound_jobs_are_not_refreshed(monkeypatch, job):
+    monkeypatch.setenv("JOB_TABLE", "jobs")
+    monkeypatch.setattr(refresh, "JobRepository", lambda _name: type("Repo", (), {"get": lambda self, u, j: job})())
+    assert refresh.lookup_active_job(SUB, "s-1", JOB) is None
+
+
+def test_running_job_supplies_its_stored_scopes(monkeypatch):
+    monkeypatch.setenv("JOB_TABLE", "jobs")
+    stored = {"status": "running", "session_id": "s-1", "scopes": list(SCOPES), "cancel_requested": False}
+    monkeypatch.setattr(refresh, "JobRepository", lambda _name: type("Repo", (), {"get": lambda self, u, j: stored})())
+    assert refresh.lookup_active_job(SUB, "s-1", JOB).scopes == SCOPES
