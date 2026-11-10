@@ -84,16 +84,25 @@ export function agentCoreDataPlaneOrigin(stack: cdk.Stack): string {
 
 // ADR: build the invocation URL with intrinsics | Rationale: the runtime ARN is a deploy-time token, so
 // encodeURIComponent cannot run on it; ':' and '/' are the only reserved characters an AgentCore runtime ARN holds
-function invocationUrl(stack: cdk.Stack, runtimeArn: string): string {
+function runtimeUrl(stack: cdk.Stack, runtimeArn: string, operation: 'invocations' | 'stopruntimesession'): string {
   const colonsEncoded = cdk.Fn.join('%3A', cdk.Fn.split(':', runtimeArn));
   const encodedArn = cdk.Fn.join('%2F', cdk.Fn.split('/', colonsEncoded));
   return cdk.Fn.join('', [
     agentCoreDataPlaneOrigin(stack),
     '/runtimes/',
     encodedArn,
-    '/invocations?qualifier=DEFAULT',
+    `/${operation}?qualifier=DEFAULT`,
   ]);
 }
+
+function invocationUrl(stack: cdk.Stack, runtimeArn: string): string {
+  return runtimeUrl(stack, runtimeArn, 'invocations');
+}
+
+/** Job agent_type values (shared/persistence/jobs.py AGENT_TYPES) for each runtime. */
+export const JOB_AGENT_TYPES = {
+  Research: 'research', Drafting: 'drafting', Analysis: 'analysis', Pipeline: 'pipeline_manager',
+} as const;
 
 export interface AgentRuntimesProps {
   /** Validated deployment default; absent only during environment-agnostic synth. */
@@ -128,6 +137,11 @@ export class AgentRuntimes extends Construct {
    * handed to the agent proxy Lambda (AGENT_URLS), which the SPA calls via /config.json `agentUrls`.
    */
   public readonly invocationUrls: Record<Lowercase<(typeof AGENT_RUNTIMES)[number]['id']>, string>;
+  /**
+   * StopRuntimeSession URLs keyed by job agent_type, for user-initiated job cancellation. The jobs Lambda calls
+   * them with the caller's own bearer token, because the runtimes accept only SPA user tokens.
+   */
+  public readonly stopUrls: Record<string, string> = {};
 
   constructor(scope: Construct, id: string, props: AgentRuntimesProps) {
     super(scope, id);
@@ -249,6 +263,7 @@ export class AgentRuntimes extends Construct {
       });
       runtimes[def.id] = runtime;
       invocationUrls[def.id.toLowerCase() as Lowercase<typeof def.id>] = invocationUrl(stack, runtime.agentRuntimeArn);
+      this.stopUrls[JOB_AGENT_TYPES[def.id]] = runtimeUrl(stack, runtime.agentRuntimeArn, 'stopruntimesession');
     }
     this.runtimes = runtimes;
     this.invocationUrls = invocationUrls;

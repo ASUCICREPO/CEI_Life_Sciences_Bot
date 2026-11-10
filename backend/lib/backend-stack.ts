@@ -21,6 +21,7 @@ import { ToolGateway, fullScope } from './constructs/tool-gateway';
 import { SessionRouter } from './constructs/session-router';
 import { suppressXrayWildcard } from './constructs/tracing';
 import { Observability } from './constructs/observability';
+import { BackgroundJobs } from './constructs/background-jobs';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export interface BackendStackProps extends cdk.StackProps {
@@ -731,6 +732,17 @@ export class BackendStack extends cdk.Stack {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: RemovalPolicy.RETAIN,
     });
+    // F16: Job ID Store, /jobs routes and the watchdog
+    const backgroundJobs = new BackgroundJobs(this, 'BackgroundJobs', {
+      api,
+      methodOptions,
+      corsOptions,
+      requestValidator,
+      pythonDepsLayer: pythonDeps.layer,
+      activeRunsTable,
+      allowedOrigins,
+      runtimeStopUrls: agentRuntimes.stopUrls,
+    });
     const gateway = new ToolGateway(this, 'ToolGateway', {
       userPool,
       cognitoDomainUrl,
@@ -741,6 +753,7 @@ export class BackendStack extends cdk.Stack {
       policyMode: this.config?.toolPolicyMode ?? DEFAULT_TOOL_POLICY_MODE,
       activeRunsTable,
       metadataTable: chatMetadataTable,
+      jobTable: backgroundJobs.table,
       spaClientId: spaClient.userPoolClientId,
       refreshCallerRoleArns: [agentRuntimes.runtimes.Research.role.roleArn],
     });
@@ -792,12 +805,12 @@ export class BackendStack extends cdk.Stack {
         PreSignUp: preSignUpFn, SessionMetadata: sessionMetadata.fn, SessionHistory: sessionHistory.fn,
         AgentProxy: agentProxyFn, SessionRouter: router.function, SessionRunner: runner,
         ClientDiagnostics: clientDiagnostics.fn, Exports: exportsHandler.fn, LifeSciencesOperations: gateway.operationsFunction,
-        NcbiReadOnly: gateway.ncbiFunction,
+        NcbiReadOnly: gateway.ncbiFunction, Jobs: backgroundJobs.jobsFunction, JobWatchdog: backgroundJobs.watchdogFunction,
         PreToken: gateway.preTokenFunction, TokenRefresh: gateway.tokenRefreshFunction,
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) => [`Source${name}`, fn])),
       },
       tables: { ChatMetadata: chatMetadataTable, ChatHistory: chatHistoryTable, ActiveRuns: activeRunsTable,
-        Exports: exportsTable, NcbiRateLimiter: gateway.ncbiRateTable },
+        Exports: exportsTable, NcbiRateLimiter: gateway.ncbiRateTable, JobIdStore: backgroundJobs.table },
       signupLogs: preSignUpLogGroup,
       gatewayLogs: gateway.gatewayLogGroup,
       clientLogs: clientDiagnostics.fn.logGroup,
@@ -810,6 +823,7 @@ export class BackendStack extends cdk.Stack {
         SessionHistory: { logGroup: sessionHistory.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         Exports: { logGroup: exportsHandler.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         NcbiReadOnly: { logGroup: gateway.ncbiFunction.logGroup, terms: ['ncbi_request_failed'] },
+        Jobs: { logGroup: backgroundJobs.jobsFunction.logGroup, terms: ['handled_api_failure', 'unhandled error', 'runtime_stop_failed'] },
         TokenRefresh: { logGroup: gateway.tokenRefreshFunction.logGroup, terms: ['token_endpoint_error', 'token_refresh_scope_mismatch', 'run_scopes_not_allowed', 'unhandled error'] },
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) =>
           [`Source${name}`, { logGroup: fn.logGroup, terms: ['upstream_error', 'exception', 'api_key_lookup_failed', ...(name === 'cmscoverage' ? ['cms_ncd_detail_error'] : [])] }])),

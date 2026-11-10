@@ -65,6 +65,8 @@ export interface ToolGatewayProps {
   refreshCallerRoleArns?: string[];
   activeRunsTable?: dynamodb.ITable;
   metadataTable?: dynamodb.ITable;
+  /** F16 Job ID Store: a background job refresh is authorized by its active job record. */
+  jobTable?: dynamodb.ITable;
   spaClientId?: string;
 }
 
@@ -129,6 +131,9 @@ export class ToolGateway extends Construct {
     const refreshRole = new iam.Role(this, 'TokenRefreshRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
     if (props.activeRunsTable && props.metadataTable) {
       refreshRole.addToPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [props.activeRunsTable.tableArn, props.metadataTable.tableArn] }));
+    }
+    if (props.jobTable) {
+      refreshRole.addToPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [props.jobTable.tableArn] }));
     }
 
     this.routerSecret = new secretsmanager.Secret(this, 'RouterM2MSecret', {
@@ -357,6 +362,7 @@ export class ToolGateway extends Construct {
         ALLOWED_CALLER_ROLE_ARNS: (props.refreshCallerRoleArns ?? []).join(','),
         ACTIVE_RUNS_TABLE: props.activeRunsTable?.tableName ?? '',
         METADATA_TABLE: props.metadataTable?.tableName ?? '',
+        JOB_TABLE: props.jobTable?.tableName ?? '',
         USER_POOL_ID: props.userPool.userPoolId,
         SPA_CLIENT_ID: props.spaClientId ?? '',
       },
