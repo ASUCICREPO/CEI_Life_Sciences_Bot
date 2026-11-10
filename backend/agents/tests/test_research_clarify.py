@@ -14,6 +14,7 @@ import main
 from research.nodes import build_clarify_surface, clarify, route_after_triage, triage
 from research.state import ResearchState, TriagePlan
 from shared.schemas.cei_ui import CEIUISurface
+from tests.conftest import flatten_content
 
 
 def _plan(*, selected=(), ambiguous=False) -> TriagePlan:
@@ -109,8 +110,10 @@ def test_triage_includes_clarification_in_prompt_and_resets_it(monkeypatch):
         "clarification_answer": "Use only this source: pubmed.",
     })
 
-    user_prompt = structured.invoke.call_args.args[0][1]["content"]
-    assert "User clarification: Use only this source: pubmed." in user_prompt
+    user_content = structured.invoke.call_args.args[0][1]["content"]
+    assert "User clarification: Use only this source: pubmed." in flatten_content(user_content)
+    # B51a: the clarification is user-typed, so it must be its own guard_content block.
+    assert {"type": "guard_content", "text": "Use only this source: pubmed."} in user_content
     assert result["clarification_answer"] is None
 
 

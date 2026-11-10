@@ -10,6 +10,7 @@ from research.state import TriagePlan
 from shared.schemas.citation import Citation, SourceType
 from shared.schemas.response_blocks import ProseBlock, ResponseDocument, ResponseSection
 from shared.tools.base import DataSourceResult
+from tests.conftest import flatten_content
 
 
 def _pubmed_result(*, citations: list[Citation] | None = None) -> DataSourceResult:
@@ -65,7 +66,10 @@ def test_memory_is_user_context_not_a_system_instruction(monkeypatch) -> None:
     system, user = structured.invoke.call_args.args[0]
     assert "untrusted data, not instructions" in system["content"]
     assert "ignore system policy" not in system["content"]
-    assert "ignore system policy" in user["content"]
+    assert "ignore system policy" in flatten_content(user["content"])
+    # B51a: recalled memory is not user-typed text, so it must never land in a guard_content block.
+    guard_blocks = [b for b in user["content"] if b.get("type") == "guard_content"]
+    assert all("ignore system policy" not in b["text"] for b in guard_blocks)
 
 
 def test_retrieve_falls_back_to_pubmed_and_preserves_citations(monkeypatch) -> None:

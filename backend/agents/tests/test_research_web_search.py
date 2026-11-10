@@ -24,6 +24,7 @@ from research.nodes import (
 from research.state import TriagePlan
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, GatewayUnavailableError
+from tests.conftest import flatten_content
 
 
 def _web_citation(source_id: str = "https://example.com/a", title: str = "Example Article") -> Citation:
@@ -215,7 +216,7 @@ def test_synthesize_web_citation_omits_authors_and_year(monkeypatch):
 
     synthesize({"query": "q", "mode": "science", "retrieved_results": retrieved})
 
-    user_prompt = model.invoke.call_args.args[0][1]["content"]
+    user_prompt = flatten_content(model.invoke.call_args.args[0][1]["content"])
     assert f"[{citation.source_id}] {citation.title} — {citation.url}" in user_prompt
     assert "(None)" not in user_prompt
 
