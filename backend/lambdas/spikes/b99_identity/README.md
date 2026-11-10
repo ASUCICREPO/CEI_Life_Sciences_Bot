@@ -18,15 +18,13 @@ identity channel. Never attach either function to a production Gateway or target
 
 ## Deployment and evidence required
 
-Use a separately identified development account/environment and the repository's
-CodeBuild build process. Provision a temporary Cognito pool/client and pre-token
-trigger, an isolated CUSTOM_JWT MCP Gateway with a REQUEST interceptor, and one
-Lambda target with an input schema for `query` and the reserved context field. Bundle
-the interceptor with the application shared identity verifier and dependencies.
-Set `USER_POOL_ID`, `AWS_REGION`, `ROUTER_CLIENT_ID`, and `SPIKE_SCOPE` on the
-interceptor. Enable `passRequestHeaders`. Grant the Gateway role only the Lambda
-invokes needed for the spike; deny other application/runtime principals direct
-target invocation using identity and resource policies. Inspect the deployed
+Use the isolated `IdentitySpikeStack` and the repository's CodeBuild asset build;
+the stack has not yet been deployed. It defines a temporary Cognito pool/client
+and pre-token trigger, CUSTOM_JWT Gateway with a REQUEST interceptor, and one
+Lambda target with an input schema for `query` and the reserved context field.
+The Gateway role can invoke only the spike interceptor and target. Test the
+separate probe caller role's explicit direct-invocation denial. Verify that other
+application/runtime principals cannot directly invoke the target. Inspect the deployed
 policies and test direct invocation with representative application credentials.
 Do not log JWTs, keys, or request bodies. Remove the temporary resources after the
 recorded tests.
