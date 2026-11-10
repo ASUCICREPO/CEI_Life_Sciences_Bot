@@ -24,11 +24,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Callable
 
 import boto3
 from shared.persistence.active_runs import ActiveRunRepository
-from shared.runtime.identity import CognitoAccessTokenVerifier, UnauthenticatedError
+from shared.runtime.identity import CognitoAccessTokenVerifier, UnauthenticatedError, verify_gateway_token
 
 from http_errors import ApiError, api_handler, get_logger, invalid_request, json_response, not_found, parse_json_body
 
@@ -81,6 +82,11 @@ def verify_user(token: str) -> str:
 
 
 _user_verifier: Callable[[str], str] = verify_user
+
+
+@lru_cache(maxsize=1)
+def gateway_verifier() -> CognitoAccessTokenVerifier:
+    return CognitoAccessTokenVerifier(os.environ["USER_POOL_ID"], os.environ["AWS_REGION"], [os.environ["ROUTER_CLIENT_ID"]], require_subject=False)
 
 
 def _env_list(name: str) -> list[str]:
@@ -180,11 +186,14 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         logger.error(json.dumps({"event": "token_endpoint_error", "status": status}))
         raise ApiError(503, "service_unavailable", "The token service is unavailable.", retriable=True) from None
 
-    granted = sorted(str(token.get("scope", "")).split())
-    if granted != sorted(run.scopes):
-        # Cognito never widens a client-credentials scope set, but a narrower grant must not pass silently
-        logger.error(json.dumps({"event": "token_refresh_scope_mismatch"}))
-        raise ApiError(500, "internal_error", "An internal error occurred.")
+    try:
+        access_token = token.get("access_token") if isinstance(token, dict) else None
+        if not isinstance(access_token, str) or not access_token:
+            raise ValueError("invalid token grant")
+        granted = verify_gateway_token(access_token, gateway_verifier(), run.scopes, user_id, session_id)
+    except (ValueError, UnauthenticatedError):
+        logger.error(json.dumps({"event": "token_refresh_invalid_grant"}))
+        raise ApiError(503, "service_unavailable", "The token service is unavailable.", retriable=True) from None
 
     logger.info(json.dumps({"event": "token_refreshed", "scopes": granted}))
     return json_response(

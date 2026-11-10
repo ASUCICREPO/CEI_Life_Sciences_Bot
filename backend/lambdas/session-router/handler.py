@@ -21,7 +21,7 @@ from botocore.exceptions import ClientError
 
 from shared.persistence.active_runs import ActiveRunRepository, ConcurrencyLimitError
 from shared.persistence.ownership import is_session_uuid
-from shared.runtime.identity import CognitoAccessTokenVerifier, UnauthenticatedError
+from shared.runtime.identity import CognitoAccessTokenVerifier, UnauthenticatedError, verify_gateway_token
 
 _RUN_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 logger = logging.getLogger()
@@ -31,6 +31,11 @@ logger.setLevel(logging.INFO)
 @lru_cache(maxsize=1)
 def verifier() -> CognitoAccessTokenVerifier:
     return CognitoAccessTokenVerifier(os.environ["USER_POOL_ID"], os.environ["AWS_REGION"], [os.environ["SPA_CLIENT_ID"]])
+
+
+@lru_cache(maxsize=1)
+def gateway_verifier() -> CognitoAccessTokenVerifier:
+    return CognitoAccessTokenVerifier(os.environ["USER_POOL_ID"], os.environ["AWS_REGION"], [os.environ["ROUTER_CLIENT_ID"]], require_subject=False)
 
 
 @lru_cache(maxsize=1)
@@ -49,11 +54,10 @@ def issue_token(user_id: str, session_id: str, scopes: tuple[str, ...]) -> str:
         "Authorization": f"Basic {authorization}", "Content-Type": "application/x-www-form-urlencoded"})
     with urllib.request.urlopen(request, timeout=10) as response:  # fixed deployment-configured Cognito endpoint
         grant = json.load(response)
-    if not isinstance(grant, dict) or sorted(str(grant.get("scope", "")).split()) != sorted(scopes):
-        raise ValueError("incorrect token grant")
-    token = grant.get("access_token")
+    token = grant.get("access_token") if isinstance(grant, dict) else None
     if not isinstance(token, str) or not token:
         raise ValueError("invalid token grant")
+    verify_gateway_token(token, gateway_verifier(), scopes, user_id, session_id)
     return token
 
 

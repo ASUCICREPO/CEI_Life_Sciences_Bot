@@ -77,3 +77,18 @@ def test_aws_error_code_logged_without_service_message(deps, caplog):
     assert router.handler(event(), None)["status"] == 503
     assert '"aws_error_code": "AccessDeniedException"' in caplog.text
     assert "secret details" not in caplog.text
+
+
+def test_issue_token_accepts_cognito_response_without_top_level_scope(monkeypatch):
+    import io
+    import json
+    monkeypatch.setenv("ROUTER_SECRET_ARN", "secret")
+    monkeypatch.setenv("ROUTER_CLIENT_ID", "client")
+    monkeypatch.setenv("TOKEN_ENDPOINT", "https://example.invalid/token")
+    monkeypatch.setattr(router.boto3, "client", lambda _: Mock(get_secret_value=Mock(return_value={"SecretString": "secret"})))
+    monkeypatch.setattr(router.urllib.request, "urlopen", lambda *args, **kwargs: io.BytesIO(json.dumps({"access_token": "jwt", "expires_in": 3600}).encode()))
+    verifier = Mock()
+    verifier.verify.return_value = {"scope": " ".join(SCOPES), "cei_user_sub": "alice", "cei_session_id": SESSION}
+    monkeypatch.setattr(router, "gateway_verifier", lambda: verifier)
+    assert router.issue_token("alice", SESSION, SCOPES) == "jwt"
+    verifier.verify.assert_called_once_with("jwt")

@@ -83,6 +83,7 @@ class CognitoAccessTokenVerifier:
         fetch_jwks: Callable[[str], Mapping[str, Any]] = _fetch_jwks,
         clock: Callable[[], float] = time.time,
         jwks_ttl_seconds: int = 3600,
+        require_subject: bool = True,
     ) -> None:
         if not user_pool_id or not region or not app_client_ids:
             raise ValueError("Cognito user pool id, region and at least one app client id are required")
@@ -92,6 +93,7 @@ class CognitoAccessTokenVerifier:
         self._fetch = fetch_jwks
         self._clock = clock
         self._ttl = jwks_ttl_seconds
+        self._require_subject = require_subject
         self._keys: dict[str, rsa.RSAPublicKey] = {}
         self._fetched_at = float("-inf")
         self._lock = threading.Lock()
@@ -153,9 +155,20 @@ class CognitoAccessTokenVerifier:
             if isinstance(value, (int, float)) and value - CLOCK_SKEW_SECONDS > now:
                 raise UnauthenticatedError("token not yet valid")
         sub = claims.get("sub")
-        if not isinstance(sub, str) or not sub:
+        if self._require_subject and (not isinstance(sub, str) or not sub):
             raise UnauthenticatedError("token has no subject")
         return claims
+
+
+def verify_gateway_token(token: str, verifier: TokenVerifier, scopes: tuple[str, ...], user_id: str, session_id: str) -> list[str]:
+    """Validate the signed M2M grant and its run binding without exposing token contents."""
+    claims = verifier.verify(token)
+    scope = claims.get("scope")
+    if not isinstance(scope, str) or sorted(scope.split()) != sorted(scopes):
+        raise ValueError("incorrect token grant")
+    if claims.get("cei_user_sub") != user_id or claims.get("cei_session_id") != session_id:
+        raise ValueError("incorrect token binding")
+    return sorted(scope.split())
 
 
 class _UnconfiguredVerifier:

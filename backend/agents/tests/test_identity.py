@@ -57,6 +57,22 @@ def test_valid_access_token_returns_sub(keypair):
     assert _verifier(keypair).verify(_token(keypair))["sub"] == "user-1"
 
 
+def test_gateway_grant_checks_signed_scopes_and_run_binding(keypair):
+    verifier = CognitoAccessTokenVerifier(POOL, REGION, [CLIENT], fetch_jwks=lambda _: _jwks(keypair),
+                                         clock=lambda: NOW, require_subject=False)
+    claims = {"sub": None, "scope": "tools/b tools/a", "cei_user_sub": "user-1", "cei_session_id": "session-1"}
+    token = _token(keypair, claims)
+    assert identity.verify_gateway_token(token, verifier, ("tools/a", "tools/b"), "user-1", "session-1") == ["tools/a", "tools/b"]
+    for overrides in ({"scope": "tools/a"}, {"scope": "tools/a tools/b tools/c"},
+                      {"scope": None}, {"cei_user_sub": "other"}, {"cei_session_id": "other"}):
+        with pytest.raises(ValueError):
+            identity.verify_gateway_token(_token(keypair, {**claims, **overrides}), verifier,
+                                          ("tools/a", "tools/b"), "user-1", "session-1")
+    with pytest.raises(UnauthenticatedError):
+        identity.verify_gateway_token(_token(keypair, {**claims, "client_id": "wrong"}), verifier,
+                                      ("tools/a", "tools/b"), "user-1", "session-1")
+
+
 @pytest.mark.parametrize("claims", [
     {"iss": "https://cognito-idp.us-east-1.amazonaws.com/other"},
     {"token_use": "id"},

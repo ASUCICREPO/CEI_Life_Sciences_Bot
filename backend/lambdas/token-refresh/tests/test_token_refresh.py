@@ -37,6 +37,9 @@ def env(monkeypatch):
         "TOKEN_ENDPOINT", "https://cei-ls.auth.us-east-2.amazoncognito.com/oauth2/token"
     )
     monkeypatch.setattr(refresh, "_user_verifier", lambda token: SUB)
+    monkeypatch.setattr(refresh, "gateway_verifier", lambda: type("Verifier", (), {
+        "verify": lambda self, token: {"scope": " ".join(SCOPES), "cei_user_sub": SUB, "cei_session_id": "s-1"}
+    })())
 
 
 @pytest.fixture
@@ -53,7 +56,7 @@ def active(monkeypatch):
 
     def mint(run):
         minted.append(run)
-        return {"access_token": "new.jwt.token", "expires_in": 3600, "scope": " ".join(run.scopes)}
+        return {"access_token": "new.jwt.token", "expires_in": 3600}
 
     monkeypatch.setattr(refresh, "_run_lookup", lookup)
     monkeypatch.setattr(refresh, "_token_requester", mint)
@@ -179,10 +182,10 @@ def test_token_endpoint_failure_is_retriable_503(active, monkeypatch):
 
 
 def test_narrower_granted_scope_is_refused(active, monkeypatch):
-    monkeypatch.setattr(
-        refresh, "_token_requester", lambda run: {"access_token": "t", "scope": "cei-tools/common"}
-    )
-    assert call(event({"session_id": "s-1"}))[0] == 500
+    monkeypatch.setattr(refresh, "gateway_verifier", lambda: type("Verifier", (), {
+        "verify": lambda self, token: {"scope": "cei-tools/common", "cei_user_sub": SUB, "cei_session_id": "s-1"}
+    })())
+    assert call(event({"session_id": "s-1"}))[0] == 503
 
 
 def test_wrong_route_is_404(active):
