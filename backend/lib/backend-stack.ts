@@ -806,8 +806,11 @@ export class BackendStack extends cdk.Stack {
     const router = new SessionRouter(this, 'SessionRouter', {
       defaultModelId: this.config?.defaultModelId,
       blockedModelIds: this.config?.blockedModelIds,
+      // F9/B17: fixed classifier model, independent of the user's own chat model selection.
+      routerModelId: this.config?.routerModelId,
       guardrailId: modelGuardrail.guardrailId,
       guardrailVersion: modelGuardrail.guardrailVersion,
+      guardrailArn: modelGuardrail.guardrailArn,
       role: gateway.routerRole,
       pythonDepsLayer: pythonDeps.layer,
       metadataTable: chatMetadataTable,
@@ -818,7 +821,12 @@ export class BackendStack extends cdk.Stack {
       clientId: gateway.routerClient.userPoolClientId,
       secretArn: gateway.routerSecret.secretArn,
       scopes: gateway.scopeNames.map(fullScope),
-      runtimeUrl: agentRuntimes.invocationUrls.research,
+      runtimeUrls: {
+        research: agentRuntimes.invocationUrls.research,
+        drafting: agentRuntimes.invocationUrls.drafting,
+        analysis: agentRuntimes.invocationUrls.analysis,
+        pipeline_manager: agentRuntimes.invocationUrls.pipeline,
+      },
     });
     const runnerLogs = new logs.LogGroup(this, 'SessionRunnerLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY });
     const runnerRole = new iam.Role(this, 'SessionRunnerRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
@@ -848,6 +856,10 @@ export class BackendStack extends cdk.Stack {
     const uiActionsRole = new iam.Role(this, 'UiActionsRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
     uiActionsLogs.grantWrite(uiActionsRole);
     uiActionsRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }));
+    // F9: the route-choice action reads then clears its own pending-choice record (handler.py writes it)
+    // and starts the chosen agent through the Router, same lease/token broker the Runner uses.
+    uiActionsRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem', 'dynamodb:DeleteItem'], resources: [activeRunsTable.tableArn] }));
+    uiActionsRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [router.function.functionArn] }));
     const uiActions = new lambda.Function(this, 'UiActions', {
       tracing: lambda.Tracing.ACTIVE,
       runtime: lambda.Runtime.NODEJS_24_X,
@@ -859,6 +871,8 @@ export class BackendStack extends cdk.Stack {
       memorySize: 256,
       environment: {
         CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName,
+        CEI_ACTIVE_RUNS_TABLE: activeRunsTable.tableName,
+        CEI_ROUTER_FUNCTION: router.function.functionName,
         AGENT_URLS: this.toJsonString(agentRuntimes.invocationUrls),
         ALLOWED_ORIGINS: allowedOrigins.join(','),
       },
