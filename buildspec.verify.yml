@@ -20,6 +20,7 @@ phases:
       - cd "$CODEBUILD_SRC_DIR/backend/lambdas/ncbi" && AWS_EC2_METADATA_DISABLED=true ../../agents/.venv/bin/python -m pytest test_handler.py test_targets.py test_limiter.py -q
       - cd "$CODEBUILD_SRC_DIR/backend/agents" && AWS_EC2_METADATA_DISABLED=true .venv/bin/python -m pytest ../lambdas/spikes/b99_identity/test_interceptor.py ../lambdas/session-router/tests/test_classifier.py ../lambdas/delete-worker/test_handler.py -q
       - cd "$CODEBUILD_SRC_DIR/backend/lambdas/jobs-handler" && AWS_EC2_METADATA_DISABLED=true ../../agents/.venv/bin/python -m pytest tests -q
+      - cd "$CODEBUILD_SRC_DIR/backend/lambdas/watchdog" && AWS_EC2_METADATA_DISABLED=true ../../agents/.venv/bin/python -m pytest tests -q
       - cd "$CODEBUILD_SRC_DIR/backend/scripts/spikes" && AWS_EC2_METADATA_DISABLED=true ../../agents/.venv/bin/python -m pytest test_b99_identity_test.py -q
       - docker build -t cei-lsops-verify "$CODEBUILD_SRC_DIR/backend/lambdas/lsops"
       - docker run --rm --entrypoint python cei-lsops-verify -c "import Bio, rdkit, primer3, hgvs.parser"
