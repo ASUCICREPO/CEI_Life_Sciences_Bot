@@ -9,7 +9,6 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
@@ -424,37 +423,6 @@ export class BackendStack extends cdk.Stack {
     });
 
     // ---------------------------------------------------------------
-    // Attachments metadata table + Knowledge Base bucket
-    // ---------------------------------------------------------------
-
-    const attachmentsTable = new dynamodb.Table(this, 'AttachmentsTable', {
-      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'attachment_id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      // ADR: RETAIN | Rationale: attachment metadata is user data
-      removalPolicy: RemovalPolicy.RETAIN,
-    });
-    // GSI for listing attachments by session
-    attachmentsTable.addGlobalSecondaryIndex({
-      indexName: 'by_session',
-      partitionKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'created_at', type: dynamodb.AttributeType.STRING },
-      projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    // KB bucket for extracted text chunks (Bedrock KB data source)
-    const kbBucket = new s3.Bucket(this, 'KnowledgeBaseBucket', {
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
-      serverAccessLogsBucket: logsBucket,
-      serverAccessLogsPrefix: 'kb-bucket-access-logs/',
-      removalPolicy: RemovalPolicy.RETAIN,
-    });
-
-    // ---------------------------------------------------------------
     // Session Lambdas (Python 3.14) sharing one dependency layer
     // ---------------------------------------------------------------
 
@@ -534,63 +502,6 @@ export class BackendStack extends cdk.Stack {
     chatHistoryTable.grant(sessionHistory.role, 'dynamodb:Query');
     // F6 B59: GET .../turns/{messageId}/trace reads the trace head (GetItem) and its chunks (BatchGetItem)
     chatHistoryTable.grant(sessionHistory.role, 'dynamodb:GetItem', 'dynamodb:BatchGetItem');
-
-    // ---------------------------------------------------------------
-    // Attachment Lambdas: presign URL generator + S3-triggered processor
-    // ---------------------------------------------------------------
-
-    const attachmentPresign = createSessionFunction(
-      'AttachmentPresignHandler',
-      'attachment-presign',
-      'handler.handler',
-      {
-        ATTACHMENTS_BUCKET: attachmentsBucket.bucketName,
-        ATTACHMENTS_TABLE: attachmentsTable.tableName,
-        ALLOWED_ORIGINS: allowedOrigins.join(','),
-      },
-      [pythonDeps.layer],
-    );
-    // Grant presign Lambda permission to generate S3 pre-signed URLs and write metadata
-    attachmentsBucket.grantPut(attachmentPresign.role);
-    attachmentsTable.grantWriteData(attachmentPresign.role);
-
-    // Processor Lambda — triggered by S3, extracts text, stores in KB bucket
-    const attachmentProcessorLogs = new logs.LogGroup(this, 'AttachmentProcessorLogs', {
-      retention: logs.RetentionDays.ONE_MONTH,
-      removalPolicy: RemovalPolicy.DESTROY,
-    });
-    const attachmentProcessorRole = new iam.Role(this, 'AttachmentProcessorRole', {
-      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-    });
-    attachmentProcessorLogs.grantWrite(attachmentProcessorRole);
-    const attachmentProcessor = new lambda.Function(this, 'AttachmentProcessorFn', {
-      tracing: lambda.Tracing.ACTIVE,
-      runtime: lambda.Runtime.PYTHON_3_14,
-      handler: 'handler.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', 'attachment-processor'), {
-        exclude: ['tests', '__pycache__', '*.pyc'],
-      }),
-      layers: [pythonDeps.layer],
-      role: attachmentProcessorRole,
-      logGroup: attachmentProcessorLogs,
-      timeout: Duration.minutes(5),
-      memorySize: 1024,
-      environment: {
-        ATTACHMENTS_TABLE: attachmentsTable.tableName,
-        KB_BUCKET: kbBucket.bucketName,
-      },
-    });
-    suppressXrayWildcard(attachmentProcessorRole);
-    // Grant processor read from attachments bucket, write to KB bucket, update metadata
-    attachmentsBucket.grantRead(attachmentProcessorRole);
-    kbBucket.grantWrite(attachmentProcessorRole);
-    attachmentsTable.grantReadWriteData(attachmentProcessorRole);
-    // S3 event notification to trigger processor on uploads
-    attachmentsBucket.addEventNotification(
-      s3.EventType.OBJECT_CREATED,
-      new s3n.LambdaDestination(attachmentProcessor),
-      { prefix: 'uploads/' },
-    );
 
     // ---------------------------------------------------------------
     // AgentCore runtimes (plan 3b4d4f64 decision 9): Cognito JWT inbound authorizer + Authorization header
@@ -710,11 +621,6 @@ export class BackendStack extends cdk.Stack {
     const turnResource = turnsResource.addResource('{messageId}', { defaultCorsPreflightOptions: corsOptions });
     const traceResource = turnResource.addResource('trace', { defaultCorsPreflightOptions: corsOptions });
     traceResource.addMethod('GET', historyIntegration, methodOptions);
-
-    // Attachments presign endpoint
-    const attachmentsResource = api.root.addResource('attachments', { defaultCorsPreflightOptions: corsOptions });
-    const presignResource = attachmentsResource.addResource('presign', { defaultCorsPreflightOptions: corsOptions });
-    presignResource.addMethod('POST', new apigw.LambdaIntegration(attachmentPresign.fn), methodOptions);
 
     // Gateway-generated errors (no Lambda ran) use the same envelope as the Lambdas. The static CORS origin is the
     // site; a localhost dev origin therefore sees these particular errors as CORS failures.
