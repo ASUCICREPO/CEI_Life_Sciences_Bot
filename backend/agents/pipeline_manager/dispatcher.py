@@ -44,6 +44,7 @@ class Dispatcher(Protocol):
         mode: str,
         user_id: str,
         dependency_outputs: dict[str, str],
+        long_term_context: list[str] = (),
     ) -> StepOutcome: ...
 
 
@@ -89,14 +90,17 @@ class InProcessDispatcher:
         mode: str,
         user_id: str,
         dependency_outputs: dict[str, str],
+        long_term_context: list[str] = (),
     ) -> StepOutcome:
         prompt = _build_prompt(step, dependency_outputs)
         sub_session_id = f"{session_id}:step:{step.step_id}"
         try:
             if step.agent == "research":
-                return await self._run_research(prompt, mode, user_id, sub_session_id, step.step_id)
+                return await self._run_research(prompt, mode, user_id, sub_session_id, step.step_id, long_term_context)
             if step.agent == "drafting":
-                return await self._run_drafting(prompt, mode, user_id, sub_session_id, step.step_id, step.document_type)
+                return await self._run_drafting(
+                    prompt, mode, user_id, sub_session_id, step.step_id, step.document_type, long_term_context,
+                )
             if step.agent == "analysis":
                 return await self._run_analysis(prompt, mode, sub_session_id, step.step_id, step.analysis_type, step.scope)
             return StepOutcome(status="failed", error=f"unknown agent {step.agent!r}")
@@ -105,7 +109,8 @@ class InProcessDispatcher:
             return StepOutcome(status="failed", error=repr(exc))
 
     async def _run_research(
-        self, prompt: str, mode: str, user_id: str, session_id: str, step_id: str
+        self, prompt: str, mode: str, user_id: str, session_id: str, step_id: str,
+        long_term_context: list[str] = (),
     ) -> StepOutcome:
         from research.graph import compile_graph as compile_research_graph
 
@@ -113,6 +118,9 @@ class InProcessDispatcher:
         initial_state = {
             "messages": [HumanMessage(content=prompt)],
             "mode": mode,
+            # ADR: forward the parent's already-loaded context | an in-process sub-run has no
+            # authenticated caller of its own, so it must not call memory itself.
+            "long_term_context": list(long_term_context),
             "user_id": user_id,
             "session_id": session_id,
             "query": prompt,
@@ -135,7 +143,8 @@ class InProcessDispatcher:
         )
 
     async def _run_drafting(
-        self, prompt: str, mode: str, user_id: str, session_id: str, step_id: str, document_type: str | None
+        self, prompt: str, mode: str, user_id: str, session_id: str, step_id: str, document_type: str | None,
+        long_term_context: list[str] = (),
     ) -> StepOutcome:
         from drafting.graph import compile_graph as compile_drafting_graph
         from drafting.state import DocumentType
@@ -145,6 +154,8 @@ class InProcessDispatcher:
         initial_state = {
             "messages": [HumanMessage(content=prompt)],
             "mode": mode,
+            # ADR: forward the parent's already-loaded context | see _run_research
+            "long_term_context": list(long_term_context),
             "user_id": user_id,
             "session_id": session_id,
             "document_type": DocumentType(doc_type_raw),
@@ -180,6 +191,9 @@ class InProcessDispatcher:
         analysis_type: str | None,
         scope: dict[str, Any] | None,
     ) -> StepOutcome:
+        # ADR: analysis/run.py is outside this phase's file list | its run_analysis() helper
+        # does not yet accept long_term_context, so an analysis step dispatched by the Pipeline
+        # Manager does not receive the parent's recalled context (tracked in LONG_TERM.md).
         from analysis.run import run_analysis
 
         resolved_type = analysis_type if analysis_type in _VALID_ANALYSIS_TYPES else None

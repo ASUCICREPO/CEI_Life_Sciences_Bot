@@ -151,7 +151,7 @@ class _FakeDispatcher:
         self._outcomes = outcomes
         self._events = events if events is not None else []
 
-    async def run(self, step, *, session_id, mode, user_id, dependency_outputs):
+    async def run(self, step, *, session_id, mode, user_id, dependency_outputs, long_term_context=()):
         self._events.append(("start", step.step_id))
         await asyncio.sleep(0.01)
         self._events.append(("end", step.step_id))
@@ -245,7 +245,7 @@ def test_dispatch_retries_failure_then_marks_partial(monkeypatch) -> None:
     calls = {"n": 0}
 
     class _FlakyDispatcher:
-        async def run(self, step, *, session_id, mode, user_id, dependency_outputs):
+        async def run(self, step, *, session_id, mode, user_id, dependency_outputs, long_term_context=()):
             calls["n"] += 1
             return StepOutcome(status="failed", error=f"attempt {calls['n']} failed")
 
