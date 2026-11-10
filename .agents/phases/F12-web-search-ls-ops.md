@@ -54,8 +54,31 @@ Give every agent two more tools: a built-in AgentCore web search connector for g
 - CDK assertion tests: LS Ops Lambda is a container image function; Gateway target exists; Web Search connector construct is present/absent based on the Region context value; cdk-nag passes or carries an ADR-format suppression for the container image size / public network need.
 - Integration: a local LangGraph run using `lsops_client.py` calls `lsops___dilution` and gets the correct answer, exercising the same code path the Gateway will use later.
 
+## Implementation notes (web-search part, B103)
+`backend/lib/constructs/tool-gateway.ts` builds a plain, unpinned `CfnGatewayTarget` with a
+`ConnectorSource` (`connectorId: "web-search"`), created only when `props.webSearchEnabled` is
+true — a value that already folds in the Region gate (B44/B45), because `scripts/preflight.ts
+--write` evaluates `region-capabilities.ts` and writes the final boolean into `cei.deploy.json`
+before the CDK app ever reads it. This accepts whatever connector version AWS currently defaults
+to, because CloudFormation's `ConnectorSourceProperty` exposes only `connectorId` — there is no
+`source.version` field in this resource to pin v1.2.0 against, so a lifecycle-managed custom
+resource would be the only way to pin it, and that is out of scope for this iteration (B103
+replaces the "do not deploy an unpinned default" blocker below). The Gateway role's existing
+`AuthorizeAction`/`PartiallyAuthorizeActions` statement also gets `bedrock-agentcore:
+InvokeWebSearch` added, and a `cei-tools/common` Cedar permit is written with the same
+target-level `cedarPermit('web-search', ...)` helper already proven for `lsops`. The agent-side
+tool lives in `backend/agents/shared/tools/web_search.py`, called through the existing
+`call_gateway_tool` custom-JWT MCP path (not the SigV4 `bedrock_agentcore` SDK client, which does
+not fit this Gateway's auth model); it trims every result to `url`/`title`/`snippet` before
+returning, and `shared/streaming/trace_redaction.py` re-applies the same trim to any `sources`
+trace entry tagged `source_type: "web"` as a second line of defense. `shared/schemas/citation.py`
+adds `SourceType.WEB` and an optional `snippet` field, and makes `authors`/`year` optional for
+`SourceType.WEB` only (still required for every other source). The exact MCP tool name the
+built-in connector registers on this Gateway's `tools/list` (assumed `WebSearch` here, an
+installed-SDK fact, not yet confirmed against a live Gateway) stays an S2 open item per B86.
+
 ## Risks and open items
-- Web Search deployment remains open: the AgentCore API supports `source.version`, but the current CloudFormation `AWS::BedrockAgentCore::GatewayTarget ConnectorSource` schema only exposes `ConnectorId`. Do not deploy an unpinned default in place of B44's approved 1.2.0; implement and test a lifecycle-managed API-backed resource or wait for CloudFormation version support. AWS references: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-add-target-api-target-config.html and https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-bedrockagentcore-gatewaytarget-connectorsource.html.
+- Web Search deployment is resolved by B103 (above): an unpinned `ConnectorSource` target is deployed, since CloudFormation has no `source.version` field to pin against. ~~Do not deploy an unpinned default in place of B44's approved 1.2.0~~ (superseded).
 - Resolved: B70 states plainly that "all agents and tool agents always get" the shared `cei-tools/common` scope, and B86 confirms the Code Interpreter is not a Gateway target at all (so it is outside this Cedar scope question entirely — it is controlled by the runtime binding). This phase implements the granted-by-default reading for LS Ops and Web Search; no further decision is needed. If `auth-and-tool-scope.md` still shows this as open when you read it, follow B70/B86, not the older spec text — the parallel spec-update agent may not have applied them yet.
 - Upstream rate limits are not a concern here (LS Ops has no external API calls), but the Web Search connector's $7/1,000-query cost is an unbudgeted MVP cost (B16 has no token/cost budget) — accepted gap, not a blocker.
 - RDKit container image size/cold start is a build risk; if it is too slow, revisit as a Lambda-behind-Fargate-like pattern — but note B25 already removed Fargate from the architecture, so any such change needs a new decision, not an assumption.
