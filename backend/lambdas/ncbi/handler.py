@@ -42,11 +42,10 @@ def handler(event: Any, context: Any) -> dict[str, Any]:
     name = custom.get("bedrockAgentCoreToolName", "")
     if not isinstance(name, str) or "___" not in name or not isinstance(event, dict):
         return {"error": {"code": "invalid_request", "message": "Invalid tool request."}}
-    operation = name.split("___", 1)[1]
     try:
-        if operation == "taxonomy_lineage" and set(event) == {"taxon"}:
+        if name == "ncbi-taxonomy___lineage" and set(event) == {"taxon"}:
             return {"result": taxonomy_lineage(event["taxon"], acquire=acquire)}
-        if operation == "sequence_efetch" and set(event) == {"accession", "database", "format"}:
+        if name == "ncbi-sequence___efetch" and set(event) == {"accession", "database", "format"}:
             return {"result": sequence_efetch(event["accession"], database=event["database"],
                                               format=event["format"], acquire=acquire)}
         return {"error": {"code": "invalid_request", "message": "Unknown tool or invalid arguments."}}

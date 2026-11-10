@@ -256,24 +256,31 @@ export class ToolGateway extends Construct {
       gateway: this.gateway, gatewayRole, policyEngine,
     }).function;
 
-    const ncbiTarget = new agentcore.CfnGatewayTarget(this, 'NcbiTarget', {
-      name: 'ncbi', gatewayIdentifier: this.gateway.attrGatewayIdentifier,
-      credentialProviderConfigurations: [{ credentialProviderType: 'GATEWAY_IAM_ROLE' }],
-      targetConfiguration: { mcp: { lambda: { lambdaArn: this.ncbiFunction.functionArn, toolSchema: { inlinePayload: [
-        { name: 'taxonomy_lineage', description: 'Retrieve an NCBI taxonomy lineage by taxon name or ID.',
-          inputSchema: { type: 'object', properties: { taxon: { type: 'string' } }, required: ['taxon'] } },
-        { name: 'sequence_efetch', description: 'Retrieve an NCBI nucleotide or protein sequence by accession.',
-          inputSchema: { type: 'object', properties: { accession: { type: 'string' }, database: { type: 'string' }, format: { type: 'string' } },
-            required: ['accession', 'database', 'format'] } },
-      ] } } } },
-    });
-    ncbiTarget.node.addDependency(gatewayRole);
-    const ncbiPolicy = new agentcore.CfnPolicy(this, 'PermitNcbi', {
-      name: 'permit_ncbi', policyEngineId: policyEngine.attrPolicyEngineId,
-      definition: { cedar: { statement: cedarPermit('ncbi', this.gateway.attrGatewayArn, fullScope(sourceScopeName('ncbi'))) } },
-      validationMode: 'IGNORE_ALL_FINDINGS',
-    });
-    ncbiPolicy.node.addDependency(ncbiTarget);
+    const ncbiTools = [
+      { id: 'taxonomy', name: 'lineage', description: 'Retrieve an NCBI taxonomy lineage by taxon name or ID.',
+        properties: { taxon: { type: 'string' } }, required: ['taxon'] },
+      { id: 'sequence', name: 'efetch', description: 'Retrieve an NCBI nucleotide or protein sequence by accession.',
+        properties: { accession: { type: 'string' }, database: { type: 'string' }, format: { type: 'string' } },
+        required: ['accession', 'database', 'format'] },
+    ];
+    for (const tool of ncbiTools) {
+      const targetName = `ncbi-${tool.id}`;
+      const target = new agentcore.CfnGatewayTarget(this, `NcbiTarget-${tool.id}`, {
+        name: targetName, gatewayIdentifier: this.gateway.attrGatewayIdentifier,
+        credentialProviderConfigurations: [{ credentialProviderType: 'GATEWAY_IAM_ROLE' }],
+        targetConfiguration: { mcp: { lambda: { lambdaArn: this.ncbiFunction.functionArn, toolSchema: { inlinePayload: [
+          { name: tool.name, description: tool.description,
+            inputSchema: { type: 'object', properties: tool.properties, required: tool.required } },
+        ] } } } },
+      });
+      target.node.addDependency(gatewayRole);
+      const policy = new agentcore.CfnPolicy(this, `PermitNcbi-${tool.id}`, {
+        name: `permit_ncbi_${tool.id}`, policyEngineId: policyEngine.attrPolicyEngineId,
+        definition: { cedar: { statement: cedarPermit(targetName, this.gateway.attrGatewayArn, fullScope(sourceScopeName('ncbi'))) } },
+        validationMode: 'IGNORE_ALL_FINDINGS',
+      });
+      policy.node.addDependency(target);
+    }
 
     for (const entry of schemas) {
       const fn = this.sourceFunctions[entry.sourceId];

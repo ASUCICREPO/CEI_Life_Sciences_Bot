@@ -122,7 +122,7 @@ describe('ToolGateway (F4)', () => {
     });
 
     it('has one Lambda target per source, each serving exactly the generated `search` tool', () => {
-      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').filter((target) => !['lsops', 'ncbi'].includes(target.Name));
+      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').filter((target) => target.Name !== 'lsops' && !target.Name.startsWith('ncbi-'));
       expect(targets.map((t) => t.Name).sort()).toEqual([...SOURCE_IDS].sort());
       const schemas = new Map(loadToolSchemas().map((s) => [s.sourceId, s.tool]));
       for (const target of targets) {
@@ -135,7 +135,7 @@ describe('ToolGateway (F4)', () => {
     });
 
     it('writes one scoped Cedar permit per source target (B69)', () => {
-      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').filter((policy) => !['permit_lsops', 'permit_ncbi'].includes(policy.Name));
+      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').filter((policy) => policy.Name !== 'permit_lsops' && !policy.Name.startsWith('permit_ncbi_'));
       expect(policies.map((p) => p.Name).sort()).toEqual(SOURCE_IDS.map((id) => `permit_${id}`).sort());
       for (const policy of policies) {
         const id = policy.Name.replace('permit_', '');
@@ -158,10 +158,12 @@ describe('ToolGateway (F4)', () => {
     });
 
     it('scopes NCBI lookups and uses a shared rate table for PubMed', () => {
-      const target = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').find((t) => t.Name === 'ncbi');
-      expect(target.TargetConfiguration.Mcp.Lambda.ToolSchema.InlinePayload.map((tool: any) => tool.Name)).toEqual(['taxonomy_lineage', 'sequence_efetch']);
-      const policy = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').find((p) => p.Name === 'permit_ncbi');
-      expect(JSON.stringify(policy.Definition.Cedar.Statement)).toContain('cei-tools/src.ncbi');
+      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').filter((t) => t.Name.startsWith('ncbi-'));
+      expect(targets.map((t) => [t.Name, t.TargetConfiguration.Mcp.Lambda.ToolSchema.InlinePayload[0].Name]).sort())
+        .toEqual([['ncbi-sequence', 'efetch'], ['ncbi-taxonomy', 'lineage']]);
+      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').filter((p) => p.Name.startsWith('permit_ncbi_'));
+      expect(policies).toHaveLength(2);
+      for (const policy of policies) expect(JSON.stringify(policy.Definition.Cedar.Statement)).toContain('cei-tools/src.ncbi');
       const functions = resourcesOf(template, 'AWS::Lambda::Function');
       const withLimiter = functions.filter((f) => f.Environment?.Variables?.NCBI_RATE_LIMIT_TABLE);
       expect(withLimiter).toHaveLength(2);
@@ -176,7 +178,7 @@ describe('ToolGateway (F4)', () => {
         .flatMap((p) => p.PolicyDocument.Statement);
       const invokes = statements.filter((s: any) => s.Action === 'lambda:InvokeFunction');
       const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget');
-      const expected = targets.map((target) => JSON.stringify(target.TargetConfiguration.Mcp.Lambda.LambdaArn)).sort();
+      const expected = [...new Set(targets.map((target) => JSON.stringify(target.TargetConfiguration.Mcp.Lambda.LambdaArn)))].sort();
       const resources = invokes.flatMap((invoke: any) => Array.isArray(invoke.Resource) ? invoke.Resource : [invoke.Resource]);
       expect(resources.map((arn: unknown) => JSON.stringify(arn)).sort()).toEqual(expected);
     });
