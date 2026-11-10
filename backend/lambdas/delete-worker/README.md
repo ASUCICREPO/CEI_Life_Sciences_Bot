@@ -27,6 +27,25 @@ but the deployed job/runtime binding and verified recovery adapter are not yet
 implemented. Tests exercise ordered interleavings with Moto; they do not prove
 real DynamoDB concurrency or remote-write termination.
 
+Two concrete activation blockers remain:
+
+- A successful SDK operation may follow an earlier timed-out retry whose
+  server-side operation is still running. Releasing a writer token after the
+  successful response can therefore let deletion finish before that late
+  attempt recreates an object. Disabling retries alone does not prove a timed-out
+  operation stopped. The implementation needs a demonstrated way to establish
+  that every attempt is terminal before releasing the token or declaring
+  deletion complete.
+- `writer_ref` is supplied by the caller and is not bound to a unique immutable
+  runtime execution or to every operation that execution issued. Recovery
+  cannot currently use it to establish that the writer and all its remote
+  operations have stopped, including after an ambiguous registration response.
+  A trustworthy binding and recovery procedure must be implemented and tested.
+
+Keep report generation and deletion routes disabled until both issues, the
+durable job/outbox transaction, universal writer coverage, and the remaining
+integration and live verification above are complete.
+
 Before activating either deletion route:
 
 1. Authenticate with the Cognito authorizer and derive the user solely from its

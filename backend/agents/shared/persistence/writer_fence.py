@@ -7,6 +7,12 @@ then wait for ``quiescent``. Tokens deliberately have no TTL: expiry alone is
 not proof that an isolated runtime or a network request has stopped. Recovery
 must confirm the writer is terminated before releasing an abandoned token.
 
+Do not activate this protocol yet. A successful SDK call can follow an earlier
+timed-out retry that might still complete later; the context manager cannot prove
+all remote attempts are finished. ``writer_ref`` is caller-supplied and is not
+bound to an immutable execution or all of its operations. Both gaps must be
+resolved and verified before either deletion or reviewed export is exposed.
+
 The fence table has string partition key ``user_id`` and string sort key
 ``scope``. Account and chat gates are durable tombstones until account cleanup
 has safely revoked credentials. Session ownership is checked separately by the
