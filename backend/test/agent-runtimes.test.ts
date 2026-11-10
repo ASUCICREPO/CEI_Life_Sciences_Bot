@@ -98,7 +98,13 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
 
   test('Research uses retained AgentCore Memory with the maximum event retention', () => {
     template.hasResource('AWS::BedrockAgentCore::Memory', {
-      Properties: Match.objectLike({ EventExpiryDuration: 365 }), DeletionPolicy: 'Retain',
+      Properties: Match.objectLike({
+        EventExpiryDuration: 365,
+        MemoryStrategies: [
+          { UserPreferenceMemoryStrategy: { Name: 'user_preferences', NamespaceTemplates: ['/users/{actorId}/'] } },
+          { SemanticMemoryStrategy: { Name: 'semantic_facts', NamespaceTemplates: ['/users/{actorId}/'] } },
+        ],
+      }), DeletionPolicy: 'Retain',
     });
     const research = runtimes.find(([, r]) => (r as any).Properties.AgentRuntimeName === 'CEIResearchAgent')![1] as any;
     const memoryId = Object.keys(template.findResources('AWS::BedrockAgentCore::Memory'))[0];

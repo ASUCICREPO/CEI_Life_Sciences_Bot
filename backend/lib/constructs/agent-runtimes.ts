@@ -156,7 +156,11 @@ export class AgentRuntimes extends Construct {
     // EventExpiryDuration at 365 days; retain checkpoints across stack removal.
     const researchMemory = new agentcore.CfnMemory(this, 'ResearchMemory', {
       name: 'CEIResearchMemory', eventExpiryDuration: 365,
-      description: 'Research short-term checkpoints scoped by user and session',
+      description: 'Checkpoints and per-user specialist memory',
+      memoryStrategies: [
+        { userPreferenceMemoryStrategy: { name: 'user_preferences', namespaceTemplates: ['/users/{actorId}/'] } },
+        { semanticMemoryStrategy: { name: 'semantic_facts', namespaceTemplates: ['/users/{actorId}/'] } },
+      ],
     });
     researchMemory.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     const environmentVariables: Record<string, string> = {
