@@ -8,28 +8,33 @@ import {
   Circle,
   ExternalLink,
   LoaderCircle,
-  LockKeyhole,
   Play,
   Search,
-  Settings2,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
-import { ConfidenceBadge, ProvenanceTrail, UncertaintyBlock } from '../design-system';
+import { ProvenanceTrail } from '../design-system';
 import { useProductTour } from '../components/tour/ProductTour';
 import { NcbiToolCard } from '../components/NcbiToolCard';
 import { ncbiTools } from '../mocks/ncbiTools';
 import type { NcbiToolId } from '../mocks/ncbiTools';
 import {
   configuredToolSourceIds,
-  executionStages,
   toolSourceBranding,
   toolSources,
 } from '../mocks/tools';
 import type { ToolSource, ToolSourceId } from '../mocks/tools';
 import { Dna, GitBranch, ListTree } from 'lucide-react';
+import {
+  AgentClientError,
+  getOrCreateSessionId,
+  invokeAgent,
+  type AgentEnvelope,
+} from '../lib/agentClient';
+import { CEIUISurface } from '../components/cei-ui/cei-ui-surface';
+import { SafeMarkdown } from '../components/cei-ui/markdown';
 
-type RunState = 'idle' | 'running' | 'success';
+type RunState = 'idle' | 'running' | 'success' | 'error';
 
 function displayText(value: string) {
   return value
@@ -63,6 +68,8 @@ export function ToolsPage() {
   const [runState, setRunState] = useState<RunState>('idle');
   const [stageIndex, setStageIndex] = useState(0);
   const [expandedResultId, setExpandedResultId] = useState<string | null>(null);
+  const [agentResponse, setAgentResponse] = useState<AgentEnvelope | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
   const timers = useRef<number[]>([]);
 
   const source = selectedSourceId
@@ -84,6 +91,8 @@ export function ToolsPage() {
     setRunState('idle');
     setStageIndex(0);
     setExpandedResultId(null);
+    setAgentResponse(null);
+    setAgentError(null);
     reportTourEvent({ type: 'TOOL_SOURCE_SELECTED', id: nextSource.id });
   };
 
@@ -94,26 +103,47 @@ export function ToolsPage() {
     setRunState('idle');
     setStageIndex(0);
     setExpandedResultId(null);
+    setAgentResponse(null);
+    setAgentError(null);
   };
 
-  const handleRun = (event: FormEvent) => {
+  const handleRun = async (event: FormEvent) => {
     event.preventDefault();
     if (!source || !query.trim() || runState === 'running') return;
     clearTimers();
     setRunState('running');
     setStageIndex(0);
     setExpandedResultId(null);
+    setAgentResponse(null);
+    setAgentError(null);
 
-    executionStages.slice(1).forEach((_, index) => {
-      timers.current.push(window.setTimeout(() => setStageIndex(index + 1), 550 * (index + 1)));
-    });
-    timers.current.push(window.setTimeout(() => {
+    // Animate the stages while the real request is in-flight
+    const stageInterval = window.setInterval(() => {
+      setStageIndex((prev) => Math.min(prev + 1, 3));
+    }, 2500);
+    timers.current.push(stageInterval);
+
+    try {
+      const sessionId = getOrCreateSessionId(`tools-${source.id}`);
+      const result = await invokeAgent(
+        'research',
+        { prompt: `Using ${source.name} only: ${query}`, mode: 'science' },
+        sessionId,
+      );
+      clearTimers();
+      setStageIndex(4);
+      setAgentResponse(result);
       setRunState('success');
       reportTourEvent({ type: 'TOOLS_RUN_COMPLETED' });
-    }, 550 * executionStages.length));
+    } catch (err) {
+      clearTimers();
+      const message =
+        err instanceof AgentClientError ? err.message : 'The search could not be completed. Try again.';
+      setAgentError(message);
+      setRunState('error');
+    }
   };
 
-  const configuredCount = configuredToolSourceIds.length;
 
   // ─── NCBI tool detail view ─────────────────────────────────
   if (selectedNcbiToolId) {
@@ -160,11 +190,11 @@ export function ToolsPage() {
             </div>
             <h1 className="text-xl font-semibold text-text-primary">Choose a data source</h1>
             <p className="text-sm text-text-secondary mt-1 max-w-3xl">
-              Start with an API connected in Settings. Each tool understands that source’s data, filters, limits, and result structure.
+              Start with one of the available sources below. Each tool understands that source’s data, filters, limits, and result structure.
             </p>
           </div>
           <div className="flex items-center gap-2 rounded-lg border border-success/20 bg-success-bg px-3 py-2 text-xs text-success shrink-0">
-            <ShieldCheck size={14} aria-hidden="true" /> {configuredCount} of {toolSources.length} configured
+            <ShieldCheck size={14} aria-hidden="true" /> All {toolSources.length} sources live
           </div>
         </header>
 
@@ -208,37 +238,34 @@ export function ToolsPage() {
           <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-4">
             <div>
               <h2 id="available-tools-heading" className="text-sm font-semibold text-text-primary">Available APIs</h2>
-              <p className="text-xs text-text-secondary mt-1">Configured APIs are ready to use. Connect additional sources from Settings.</p>
+              <p className="text-xs text-text-secondary mt-1">All sources are live and ready to use.</p>
             </div>
             <div className="flex items-center gap-4 text-[10px] font-medium text-text-secondary" aria-label="Connection status legend">
-              <span className="inline-flex items-center gap-1.5"><Circle size={7} className="fill-success text-success" /> Configured</span>
-              <span className="inline-flex items-center gap-1.5"><Circle size={7} className="fill-text-tertiary text-text-tertiary" /> Not configured</span>
+
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {toolSources.map((item) => {
-              const configured = configuredToolSourceIds.includes(item.id);
               const branding = toolSourceBranding[item.id];
               return (
                 <button
                   key={item.id}
                   type="button"
                   data-tour={item.id === 'clinical-trials' ? 'tools-source' : undefined}
-                  disabled={!configured}
+                  
                   onClick={() => handleSourceSelect(item)}
-                  className={`group relative min-h-56 rounded-xl border p-5 text-left transition-all ${configured ? 'border-border-subtle bg-surface-elevated shadow-sm hover:-translate-y-0.5 hover:border-cei-blue-light/50 hover:shadow-md cursor-pointer' : 'border-border-subtle bg-surface-panel/60 text-text-tertiary cursor-not-allowed'}`}
-                  aria-label={configured ? `Open ${item.name}` : `${item.name} is not configured`}
+                  className="group relative min-h-56 rounded-xl border border-border-subtle bg-surface-elevated p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-cei-blue-light/50 hover:shadow-md cursor-pointer"
+                  aria-label={`Open ${item.name}`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <SourceLogo source={item} muted={!configured} />
-                    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold ${configured ? 'bg-success-bg text-success' : 'bg-gray-200/70 text-text-tertiary'}`}>
-                      {configured ? <Circle size={6} className="fill-success" /> : <LockKeyhole size={10} />}
-                      {configured ? 'Configured' : 'Not configured'}
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-success-bg px-2 py-1 text-[10px] font-semibold text-success">
+                      <Circle size={6} className="fill-success" /> Live
                     </span>
                   </div>
 
-                  <div className={`mt-4 ${configured ? '' : 'opacity-60'}`}>
+                  <div className="mt-4">
                     <div className="flex items-center gap-2">
                       <h3 className="text-sm font-semibold text-text-primary">{item.name}</h3>
                       <span className="rounded-full bg-surface-panel px-2 py-0.5 text-[9px] font-medium text-text-secondary">{item.category}</span>
@@ -246,9 +273,9 @@ export function ToolsPage() {
                     <p className="mt-2 text-xs leading-5 text-text-secondary">{item.description}</p>
                   </div>
 
-                  <div className={`absolute inset-x-5 bottom-4 flex items-center justify-between border-t pt-3 text-xs ${configured ? 'border-border-subtle text-cei-blue' : 'border-border-default text-text-tertiary'}`}>
-                    <span className="font-medium">{configured ? item.capability : 'Configure in Settings'}</span>
-                    {configured ? <ArrowRight size={14} className="transition-transform group-hover:translate-x-0.5" /> : <Settings2 size={13} />}
+                  <div className="absolute inset-x-5 bottom-4 flex items-center justify-between border-t border-border-subtle pt-3 text-xs text-cei-blue">
+                    <span className="font-medium">{item.capability}</span>
+                    <ArrowRight size={14} className="transition-transform group-hover:translate-x-0.5" />
                   </div>
                   <span className="sr-only">Official website: {branding.websiteUrl}</span>
                 </button>
@@ -262,11 +289,6 @@ export function ToolsPage() {
   }
 
   const branding = toolSourceBranding[source.id];
-  const provenanceSteps = [
-    { id: 'interpret', action: 'Interpreted request', source: 'NLP parameter mapper', detail: `Mapped the request to ${source.name} capabilities.`, duration: '0.4s', icon: 'compute' as const },
-    { id: 'query', action: 'Built query plan', source: displayText(source.interface), detail: source.parameters.map((item) => `${item.label}: ${displayText(item.value)}`).join(' · '), duration: '0.3s', icon: 'search' as const },
-    { id: 'normalize', action: 'Normalized source records', source: source.name, detail: 'Preserved source identifiers, retrieval context, and match rationale.', duration: '0.8s', icon: 'database' as const },
-  ];
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
@@ -333,9 +355,20 @@ export function ToolsPage() {
 
         {runState === 'running' && (
           <section className="rounded-xl border border-cei-blue/20 bg-surface-elevated p-5 shadow-sm" aria-live="polite" aria-busy="true">
-            <div className="flex items-center gap-3 mb-4"><div className="grid h-9 w-9 place-items-center rounded-lg bg-cei-blue/8 text-cei-blue"><LoaderCircle size={18} className="animate-spin" /></div><div><h2 className="text-sm font-semibold text-text-primary">Preparing your results</h2><p className="text-xs text-text-secondary mt-0.5">{executionStages[stageIndex]}</p></div></div>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="grid h-9 w-9 place-items-center rounded-lg bg-cei-blue/8 text-cei-blue"><LoaderCircle size={18} className="animate-spin" /></div>
+              <div>
+                <h2 className="text-sm font-semibold text-text-primary">Searching {source.name}</h2>
+                <p className="text-xs text-text-secondary mt-0.5">
+                  {stageIndex === 0 && 'Interpreting your request…'}
+                  {stageIndex === 1 && 'Building query plan…'}
+                  {stageIndex === 2 && 'Fetching records…'}
+                  {stageIndex >= 3 && 'Processing results…'}
+                </p>
+              </div>
+            </div>
             <ol className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-              {executionStages.map((stage, index) => {
+              {(['Interpret request', 'Build query', 'Fetch records', 'Process results'] as const).map((stage, index) => {
                 const complete = index < stageIndex;
                 const active = index === stageIndex;
                 return <li key={stage} className={`rounded-lg border p-3 text-xs ${active ? 'border-cei-blue/30 bg-cei-blue/5 text-cei-blue' : complete ? 'border-success/20 bg-success-bg text-success' : 'border-border-subtle text-text-tertiary'}`}><span className="mb-2 grid h-5 w-5 place-items-center rounded-full border border-current">{complete ? <Check size={11} /> : index + 1}</span>{stage}</li>;
@@ -344,69 +377,54 @@ export function ToolsPage() {
           </section>
         )}
 
-        {runState === 'success' && (
-          <div data-tour="tools-results" className="space-y-5">
-            <section className="rounded-xl border border-border-subtle bg-surface-elevated p-5 shadow-sm">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4"><div><p className="text-[10px] font-semibold uppercase tracking-wider text-cei-blue">Query interpretation</p><h2 className="text-sm font-semibold text-text-primary mt-1">What Founder AI understood</h2></div><span className="inline-flex items-center gap-1.5 rounded-full bg-success-bg px-2.5 py-1 text-xs font-medium text-success"><Check size={12} /> Ready to execute</span></div>
-              <div className="rounded-lg bg-surface-panel px-4 py-3 text-sm text-text-primary mb-4">“{query}”</div>
-              <dl className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                {source.parameters.map((parameter) => <div key={parameter.label} className="rounded-lg border border-border-subtle px-3 py-2.5 min-w-0"><dt className="text-[10px] uppercase tracking-wider text-text-tertiary">{parameter.label}</dt><dd className="mt-1 wrap-break-word font-mono text-xs text-text-primary">{displayText(parameter.value)}</dd></div>)}
-              </dl>
-              <UncertaintyBlock what={source.constraint} resolution="Review the source-specific boundary and refine the request before a production run." />
-            </section>
-
-            <section aria-labelledby="tool-results-heading">
-              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-3"><div><p className="text-[10px] font-semibold uppercase tracking-wider text-success">Search complete</p><h2 id="tool-results-heading" className="text-base font-semibold text-text-primary mt-1">{source.results.length} {source.results.length === 1 ? 'match' : 'matches'}</h2></div><p className="text-[10px] text-text-tertiary">Data retrieved just now</p></div>
-              <div className="space-y-3">
-                {source.results.map((result) => {
-                  const expanded = expandedResultId === result.id;
-                  const details = result.details ?? [
-                    { label: 'Source', value: source.name },
-                    { label: 'Interface', value: source.interface },
-                    { label: 'Record identifier', value: result.id },
-                    { label: 'Retrieval', value: 'Current source response' },
-                  ];
-                  return (
-                    <article key={result.id} className={`rounded-xl border bg-surface-elevated p-5 shadow-sm transition-colors ${expanded ? 'border-cei-blue/30' : 'border-border-subtle'}`}>
-                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2 mb-2"><span className="font-mono text-[10px] font-semibold text-cei-blue">{displayText(result.id)}</span><ConfidenceBadge level="moderate" size="sm" /></div>
-                          <h3 className="text-sm font-semibold leading-5 text-text-primary">{displayText(result.title)}</h3>
-                          <p className="mt-2 text-xs leading-5 text-text-secondary">{displayText(result.summary)}</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setExpandedResultId(expanded ? null : result.id)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-cei-blue hover:text-cei-navy shrink-0"
-                          aria-expanded={expanded}
-                          aria-controls={`source-details-${result.id}`}
-                        >
-                          {expanded ? 'Hide details' : 'Source details'}
-                          <ArrowRight size={12} className={`transition-transform ${expanded ? 'rotate-90' : ''}`} />
-                        </button>
-                      </div>
-                      <dl className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3 border-t border-border-subtle pt-4">{result.metadata.map((item) => <div key={item.label}><dt className="text-[10px] uppercase tracking-wider text-text-tertiary">{item.label}</dt><dd className="mt-1 text-xs font-medium text-text-primary">{displayText(item.value)}</dd></div>)}</dl>
-                      <div className="mt-4 flex items-start gap-2 rounded-lg bg-cei-blue/5 px-3 py-2.5"><Sparkles size={13} className="mt-0.5 shrink-0 text-cei-blue" /><p className="text-xs text-text-secondary"><span className="font-semibold text-cei-blue">Why this matched:</span> {displayText(result.matchReason)}</p></div>
-
-                      {expanded && (
-                        <div id={`source-details-${result.id}`} className="mt-4 rounded-xl border border-cei-blue/15 bg-surface-panel/70 p-4">
-                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-4">
-                            <div><p className="text-[10px] font-semibold uppercase tracking-wider text-cei-blue">Source record</p><h4 className="mt-1 text-sm font-semibold text-text-primary">Additional fields from {source.name}</h4></div>
-                            <span className="rounded-full border border-border-subtle bg-white px-2 py-1 font-mono text-[10px] text-text-secondary">{displayText(result.id)}</span>
-                          </div>
-                          <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                            {details.map((item) => <div key={item.label} className="rounded-lg border border-border-subtle bg-white px-3 py-2.5"><dt className="text-[10px] uppercase tracking-wider text-text-tertiary">{item.label}</dt><dd className="mt-1 text-xs font-medium leading-5 text-text-primary">{displayText(item.value)}</dd></div>)}
-                          </dl>
-                          <p className="mt-3 text-[10px] text-text-tertiary">Source payload via {displayText(source.interface)}. The raw response and retrieval timestamp are preserved with this record.</p>
-                        </div>
-                      )}
-                    </article>
-                  );
-                })}
+        {runState === 'error' && agentError && (
+          <section className="rounded-xl border border-red-200 bg-red-50 p-5" aria-live="polite">
+            <div className="flex items-start gap-3">
+              <AlertCircle size={18} className="shrink-0 text-red-500 mt-0.5" />
+              <div>
+                <h2 className="text-sm font-semibold text-red-700">Search failed</h2>
+                <p className="mt-1 text-xs text-red-600">{agentError}</p>
               </div>
-            </section>
+            </div>
+          </section>
+        )}
 
-            <ProvenanceTrail steps={provenanceSteps} totalDuration="1.5s" defaultExpanded />
+        {runState === 'success' && agentResponse && (
+          <div data-tour="tools-results" className="space-y-5">
+            {agentResponse.ui ? (
+              <section className="rounded-xl border border-border-subtle bg-surface-elevated shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-success">Search complete \u00b7 live data</p>
+                    <h2 className="text-sm font-semibold text-text-primary mt-1">{source.name} results</h2>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-success-bg px-2.5 py-1 text-xs font-medium text-success"><Check size={12} /> Live data</span>
+                </div>
+                <div className="p-5"><CEIUISurface surface={agentResponse.ui} /></div>
+              </section>
+            ) : (
+              <section className="rounded-xl border border-border-subtle bg-surface-elevated p-5 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-success">Search complete \u00b7 live data</p>
+                    <h2 className="text-sm font-semibold text-text-primary mt-1">{source.name} results</h2>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-success-bg px-2.5 py-1 text-xs font-medium text-success"><Check size={12} /> Live data</span>
+                </div>
+                <div className="prose prose-sm max-w-none text-text-primary">
+                  <SafeMarkdown content={agentResponse.text} />
+                </div>
+              </section>
+            )}
+            <ProvenanceTrail
+              steps={[
+                { id: 'interpret', action: 'Interpreted request', source: 'Research agent', detail: `Mapped the request to ${source.name} capabilities.`, duration: '', icon: 'compute' as const },
+                { id: 'query', action: 'Executed live query', source: source.name, detail: `Retrieved results from ${source.name} in real time.`, duration: '', icon: 'search' as const },
+                { id: 'normalize', action: 'Grounded and cited', source: 'Citation engine', detail: 'Every claim is backed by a source record with retrieval context.', duration: '', icon: 'database' as const },
+              ]}
+              totalDuration=""
+              defaultExpanded
+            />
           </div>
         )}
       </div>

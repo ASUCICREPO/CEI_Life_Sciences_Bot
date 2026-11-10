@@ -10,7 +10,9 @@ export type ToolSourceId =
   | 'cms-coverage'
   | 'icd-10'
   | 'npi-registry'
-  | 'pubchem';
+  | 'pubchem'
+  | 'openfda'
+  | 'patentsview';
 
 export interface ToolSourceBranding {
   logoUrl: string;
@@ -18,11 +20,20 @@ export interface ToolSourceBranding {
   websiteUrl: string;
 }
 
+// All 12 sources are deployed and live — no configuration step required.
 export const configuredToolSourceIds: ToolSourceId[] = [
   'pubmed',
   'clinical-trials',
+  'biorxiv',
+  'medrxiv',
   'chembl',
   'open-targets',
+  'cms-coverage',
+  'icd-10',
+  'npi-registry',
+  'pubchem',
+  'openfda',
+  'patentsview',
 ];
 
 export const toolSourceBranding: Record<ToolSourceId, ToolSourceBranding> = {
@@ -75,6 +86,16 @@ export const toolSourceBranding: Record<ToolSourceId, ToolSourceBranding> = {
     logoUrl: 'https://pubchem.ncbi.nlm.nih.gov/favicon.ico',
     logoAlt: 'PubChem official mark',
     websiteUrl: 'https://pubchem.ncbi.nlm.nih.gov/',
+  },
+  openfda: {
+    logoUrl: 'https://open.fda.gov/favicon.ico',
+    logoAlt: 'openFDA official mark',
+    websiteUrl: 'https://open.fda.gov/',
+  },
+  patentsview: {
+    logoUrl: 'https://patentsview.org/favicon.ico',
+    logoAlt: 'PatentsView official mark',
+    websiteUrl: 'https://patentsview.org/',
   },
 };
 
@@ -364,6 +385,34 @@ export const toolSources: ToolSource[] = [
     example: 'Show the molecular formula, weight, and synonyms for aspirin.',
     parameters: [{ label: 'Input', value: 'Compound name: aspirin' }, { label: 'Operation', value: 'Properties + synonyms' }, { label: 'Output', value: 'JSON' }, { label: 'Async handling', value: 'Poll ListKey if returned' }],
     results: [{ id: 'DEMO-CID-001', title: 'Aspirin', summary: 'Illustrative compact compound property response and synonym list.', metadata: [{ label: 'Formula', value: 'C9H8O4' }, { label: 'Molecular weight', value: '180.16' }, { label: 'Record type', value: 'Compound' }], matchReason: 'The preferred compound name resolves directly to a single sample record.', sourceType: 'database' }],
+  },
+  {
+    id: 'openfda',
+    name: 'openFDA',
+    category: 'Regulatory',
+    capability: 'Drug & device search',
+    description: 'FDA drug approvals, adverse events, drug labels, recall enforcement records, and device clearances.',
+    interface: 'openFDA REST API',
+    access: 'Public · optional API key for higher limits',
+    limit: '240 requests/minute without a key · 1,000 with one',
+    constraint: 'Adverse event reports are submitted voluntarily and may be incomplete; they do not prove causation.',
+    example: 'Find FDA adverse event reports for semaglutide.',
+    parameters: [{ label: 'Endpoint', value: 'drug/event.json' }, { label: 'Search term', value: 'semaglutide' }, { label: 'Count field', value: 'patient.reaction.reactionmeddrapt' }, { label: 'Limit', value: '10' }],
+    results: [],
+  },
+  {
+    id: 'patentsview',
+    name: 'PatentsView',
+    category: 'Intellectual property',
+    capability: 'Patent search',
+    description: 'USPTO patent records including titles, abstracts, inventors, assignees, CPC classifications, and filing dates.',
+    interface: 'PatentsView API v1',
+    access: 'Public · API key required',
+    limit: 'Per-query result cap; bulk downloads available separately',
+    constraint: 'Only issued US patents are indexed; pending applications and international filings are not included.',
+    example: 'Find patents on CRISPR gene editing filed after 2018.',
+    parameters: [{ label: 'Query', value: 'CRISPR gene editing' }, { label: 'Filed after', value: '2018-01-01' }, { label: 'Fields', value: 'patent_title, patent_abstract, assignee_organization' }, { label: 'Limit', value: '10' }],
+    results: [],
   },
 ];
 
