@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { BackendStack } from '../lib/backend-stack';
 import { AGENT_RUNTIMES } from '../lib/constructs/agent-runtimes';
+import { DEFAULT_LIMITS } from '../lib/config/deploy-config';
 
 const FIXTURE_ASSET_PATH = path.join(__dirname, 'fixtures', 'spa');
 
@@ -22,6 +23,26 @@ const spaClientId = Object.keys(template.findResources('AWS::Cognito::UserPoolCl
 const tableIds = Object.keys(template.findResources('AWS::DynamoDB::Table'));
 
 describe('AgentCore runtimes: deploy-time Cognito settings', () => {
+  test('passes the configured default model to every runtime', () => {
+    const app = new cdk.App();
+    const configured = new BackendStack(app, 'ConfiguredModelStack', {
+      env: { region: 'us-east-1', account: '123456789012' },
+      frontendAssetPath: FIXTURE_ASSET_PATH,
+      config: { region: 'us-east-1', defaultModelId: 'example.model-v2', routerModelId: 'router',
+        blockedModelIds: [], allowedEmailDomains: ['example.com'], adminEmail: 'admin@example.com',
+        limits: DEFAULT_LIMITS, webSearchEnabled: false, allowLocalhostCallback: false },
+    });
+    const configuredRuntimes = Object.values(Template.fromStack(configured).findResources('AWS::BedrockAgentCore::Runtime')) as any[];
+    expect(configuredRuntimes).toHaveLength(4);
+    for (const runtime of configuredRuntimes) {
+      expect(runtime.Properties.EnvironmentVariables.CEI_DEFAULT_MODEL_ID).toBe('example.model-v2');
+    }
+    const functions = Object.values(Template.fromStack(configured).findResources('AWS::Lambda::Function')) as any[];
+    const routers = functions.filter((fn) => fn.Properties.Environment?.Variables?.TOOL_SCOPES);
+    expect(routers).toHaveLength(1);
+    expect(routers[0].Properties.Environment.Variables.CEI_DEFAULT_MODEL_ID).toBe('example.model-v2');
+  });
+
   test('all four runtimes exist with the agentcore.json names', () => {
     const names = runtimes.map(([, r]) => (r as any).Properties.AgentRuntimeName).sort();
     expect(names).toEqual(AGENT_RUNTIMES.map((r) => r.runtimeName).sort());

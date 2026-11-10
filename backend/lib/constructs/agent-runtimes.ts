@@ -96,6 +96,8 @@ function invocationUrl(stack: cdk.Stack, runtimeArn: string): string {
 }
 
 export interface AgentRuntimesProps {
+  /** Validated deployment default; absent only during environment-agnostic synth. */
+  readonly defaultModelId?: string;
   readonly userPool: cognito.IUserPool;
   readonly spaClient: cognito.IUserPoolClient;
   readonly chatMetadataTable: dynamodb.ITable;
@@ -167,6 +169,7 @@ export class AgentRuntimes extends Construct {
     researchMemory.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     const environmentVariables: Record<string, string> = {
       CEI_AWS_REGION: stack.region,
+      ...(props.defaultModelId ? { CEI_DEFAULT_MODEL_ID: props.defaultModelId } : {}),
       CEI_COGNITO_USER_POOL_ID: props.userPool.userPoolId,
       CEI_COGNITO_REGION: stack.region,
       CEI_COGNITO_APP_CLIENT_IDS: appClientIds,

@@ -46,3 +46,8 @@ def test_get_model_passes_profile_when_set(monkeypatch, capture) -> None:
     monkeypatch.setenv("CEI_AWS_PROFILE", "cei-project")
     kwargs = capture(AgentConfig())
     assert kwargs["credentials_profile_name"] == "cei-project"
+
+
+def test_get_model_uses_deployment_default(monkeypatch, capture) -> None:
+    monkeypatch.setenv("CEI_DEFAULT_MODEL_ID", "example.model-v2")
+    assert capture(AgentConfig())['model_id'] == "example.model-v2"

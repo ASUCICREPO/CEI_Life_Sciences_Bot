@@ -8,6 +8,8 @@ import { Construct } from 'constructs';
 import { suppressXrayWildcard } from './tracing';
 
 export interface SessionRouterProps {
+  /** Validated deployment default; absent only during environment-agnostic synth. */
+  defaultModelId?: string;
   role: iam.Role;
   pythonDepsLayer: lambda.ILayerVersion;
   metadataTable: dynamodb.ITable;
@@ -41,6 +43,7 @@ export class SessionRouter extends Construct {
       layers: [props.pythonDepsLayer],
       timeout: cdk.Duration.seconds(30),
       environment: {
+        ...(props.defaultModelId ? { CEI_DEFAULT_MODEL_ID: props.defaultModelId } : {}),
         USER_POOL_ID: props.userPoolId,
         SPA_CLIENT_ID: props.spaClientId,
         METADATA_TABLE: props.metadataTable.tableName,

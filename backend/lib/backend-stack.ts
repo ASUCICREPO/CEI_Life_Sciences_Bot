@@ -546,6 +546,7 @@ export class BackendStack extends cdk.Stack {
     // ---------------------------------------------------------------
 
     const agentRuntimes = new AgentRuntimes(this, 'AgentRuntimes', {
+      defaultModelId: this.config?.defaultModelId,
       userPool,
       spaClient,
       chatMetadataTable,
@@ -752,6 +753,7 @@ export class BackendStack extends cdk.Stack {
     }));
 
     const router = new SessionRouter(this, 'SessionRouter', {
+      defaultModelId: this.config?.defaultModelId,
       role: gateway.routerRole,
       pythonDepsLayer: pythonDeps.layer,
       metadataTable: chatMetadataTable,
