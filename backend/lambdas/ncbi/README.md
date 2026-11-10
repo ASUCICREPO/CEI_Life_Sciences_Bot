@@ -1,6 +1,6 @@
 # NCBI target primitives
 
-These are isolated functions, not deployed Lambda handlers or Gateway targets.
+These are isolated functions and a read-only Lambda handler, not deployed Gateway targets.
 They validate inputs, call fixed NCBI endpoints, cap response bytes, and require
 a rate limiter callback on every outbound operation. No direct mode or identity
 transport has been integrated.
@@ -15,7 +15,7 @@ limits also apply across callers. Configure the service contact email. Do not
 retry a throttled request outside the limiter. Sources: [BLAST guidelines](https://blast.ncbi.nlm.nih.gov/doc/blast-help/developerinfo.html),
 [BLAST API](https://blast.ncbi.nlm.nih.gov/doc/blast-help/urlapi.html).
 
-Build separate target handlers and schemas, bind all three targets to the
+Integrate the read-only handler and provision its table, then build BLAST handlers and schemas, bind the targets to the
 `cei-tools/src.ncbi` scope, enforce ownership of submitted BLAST RIDs, and add
 the asynchronous submit/poll loop. Include the scope in specialist tokens and
 the NCBI profile while maintaining source isolation. Add per-user NCBI keys only
