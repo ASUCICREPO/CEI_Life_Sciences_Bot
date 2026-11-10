@@ -1,10 +1,11 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
-  Home, Compass, Settings, PanelLeftClose, PanelLeft, Clock, Wrench
+  Home, Compass, Settings, PanelLeftClose, PanelLeft, Clock, Wrench, LogOut
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useProductTour } from '../tour/ProductTour';
 import { resumeState, useSessions } from '../../lib/useSessions';
+import { useAuth } from '../../lib/auth/AuthProvider';
 
 interface NavItem {
   id: string;
@@ -38,6 +39,7 @@ export function LeftRail() {
   const { sidebarCollapsed, setSidebarCollapsed } = useApp();
   const { reportTourEvent } = useProductTour();
   const { sessions: recentSessions, isLoading: recentLoading, error: recentError } = useSessions({ limit: 3 });
+  const { signOut } = useAuth();
 
   const isActive = (path: string) => path === '/' ? location.pathname === '/' : location.pathname.startsWith(path);
 
@@ -106,6 +108,19 @@ export function LeftRail() {
 
       <div className="px-2 py-2 border-t border-border-subtle space-y-0.5">
         {bottomItems.map(renderNavItem)}
+        <button
+          type="button"
+          onClick={() => {
+            signOut().catch(() => {
+              window.location.href = `https://cei-ls-257137551728.auth.us-east-1.amazoncognito.com/logout?client_id=5p6kq45t5qv3atkhhr5vp42l55&logout_uri=${encodeURIComponent(window.location.origin + '/')}`;
+            });
+          }}
+          className={`w-full flex items-center gap-3 px-2 py-2 rounded-lg text-sm transition-colors text-text-secondary hover:text-text-primary hover:bg-surface-panel`}
+          aria-label="Sign out"
+        >
+          <LogOut size={16} aria-hidden="true" className="shrink-0" />
+          {!sidebarCollapsed && <span>Sign out</span>}
+        </button>
       </div>
     </nav>
   );

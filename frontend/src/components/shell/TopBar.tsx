@@ -20,9 +20,9 @@ export function TopBar() {
   const normalizedSearch = searchValue.trim().toLowerCase();
   const searchResults = (normalizedSearch
     ? platformDestinations.filter((destination) =>
-        [destination.label, destination.description, ...destination.keywords]
-          .some((value) => value.toLowerCase().includes(normalizedSearch))
-      )
+      [destination.label, destination.description, ...destination.keywords]
+        .some((value) => value.toLowerCase().includes(normalizedSearch))
+    )
     : platformDestinations
   ).slice(0, 6);
 
@@ -125,16 +125,23 @@ export function TopBar() {
         </button>
       </div>
 
-      <div className="hidden md:flex items-center gap-2 text-xs text-text-tertiary shrink-0">
-        {userEmail && <span className="truncate max-w-[10rem]" title={userEmail}>{userEmail}</span>}
+      <div className="flex items-center gap-2 text-xs text-text-tertiary shrink-0">
+        {userEmail && <span className="hidden md:inline truncate max-w-[10rem]" title={userEmail}>{userEmail}</span>}
         <button
           type="button"
-          onClick={() => void signOut()}
+          onClick={() => {
+            signOut().catch((err: unknown) => {
+              // eslint-disable-next-line no-console
+              console.error('Sign-out failed:', err);
+              // Fallback: force a full page reload to the Cognito logout URL directly
+              window.location.href = `https://cei-ls-257137551728.auth.us-east-1.amazoncognito.com/logout?client_id=5p6kq45t5qv3atkhhr5vp42l55&logout_uri=${encodeURIComponent(window.location.origin + '/')}`;
+            });
+          }}
           className="flex items-center gap-1 px-2 py-1 rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-panel transition-colors"
           aria-label="Sign out"
         >
           <LogOut size={13} aria-hidden="true" />
-          <span>Sign out</span>
+          <span className="hidden sm:inline">Sign out</span>
         </button>
       </div>
     </header>
