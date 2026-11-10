@@ -25,6 +25,7 @@ from shared.runtime import (
     awaiting_envelope,
     check_resume,
     completed_envelope,
+    expired_envelope,
     extract_interrupt_surface,
     parse_action,
     parse_mode,
@@ -226,9 +227,10 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
 
         if session_id not in _thread_ids and _pending.get(session_id) is None and action.session_id == session_id:
             # cold resume (runtime restart / eviction): bring back the interrupted graph + its pending surface
-            await restore_for_resume(
+            if not await restore_for_resume(
                 user_id=user_id, session_id=session_id, saver=_checkpointer, graph=_compile_graph(), pending=_pending
-            )
+            ):
+                return expired_envelope(action)  # B82: no checkpoint left to resume
         terminal = check_resume(_pending, session_id, action)
         if terminal is not None:
             return terminal
