@@ -40,6 +40,13 @@ export interface CreatedSession {
   created_at: string;
 }
 
+export interface PresignedUpload {
+  upload_url: string;
+  attachment_id: string;
+  s3_key: string;
+  expires_in: number;
+}
+
 /** Session fields the history envelope carries so the UI can reopen the chat in the right agent. */
 export interface SessionRef {
   session_id: string;
@@ -108,6 +115,8 @@ export interface SessionsClient {
   listSessions(options?: ListSessionsOptions): Promise<Page<SessionSummary>>;
   getSession(sessionId: string): Promise<SessionSummary>;
   createSession(input: { title: string; mode: SessionMode; model_id?: string; agent_type?: string }): Promise<CreatedSession>;
+  /** Get a pre-signed S3 URL for uploading an attachment. */
+  presignAttachment(input: { filename: string; content_type: string; session_id: string }): Promise<PresignedUpload>;
   updateSession(sessionId: string, patch: { title?: string; mode?: SessionMode }): Promise<SessionSummary>;
   /** Newest page first; items within a page are chronological. Pass `next_cursor` to load older messages. */
   loadHistory(sessionId: string, options?: LoadHistoryOptions): Promise<HistoryPage>;
@@ -306,6 +315,9 @@ export function createSessionsClient(getToken: TokenProvider, options: SessionsC
     },
     async createSession(input) {
       return (await request('POST', '/sessions', input)) as CreatedSession;
+    },
+    async presignAttachment(input) {
+      return (await request('POST', '/attachments/presign', input)) as PresignedUpload;
     },
     async updateSession(sessionId, patch) {
       return toSessionSummary(await request('PATCH', sessionPath(sessionId), patch));
