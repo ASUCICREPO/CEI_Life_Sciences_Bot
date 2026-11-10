@@ -1,4 +1,4 @@
-"""One fixed source tool per run; the model cannot select another source."""
+"""Bind only the selected source's tools; reject all other model tool calls."""
 from __future__ import annotations
 
 import json
@@ -29,9 +29,16 @@ def source_tool(profile: Profile):
 
 
 def compile_graph(profile: Profile, checkpointer, *, model=None, tool=None):
-    tool = tool or source_tool(profile)
+    if tool is not None:
+        tools = [tool]
+    elif profile.source_id == "ncbi":
+        from tool_agent.ncbi_tools import ncbi_tools
+        tools = ncbi_tools()
+    else:
+        tools = [source_tool(profile)]
+    by_name = {item.name: item for item in tools}
     raw_model = model or get_model()
-    model = raw_model.bind_tools([tool])
+    model = raw_model.bind_tools(tools)
     system = SystemMessage(content=(
         f"You are an assistant for the {profile.name} data source. {profile.instruction} "
         "Use only the provided source tool for factual source claims. Cite source records when available. "
@@ -45,11 +52,12 @@ def compile_graph(profile: Profile, checkpointer, *, model=None, tool=None):
     async def execute(state: ToolAgentState) -> dict[str, Any]:
         messages = []
         for index, call in enumerate(state["messages"][-1].tool_calls):
-            if call["name"] != tool.name or index >= MAX_TOOL_ROUNDS:
+            selected = by_name.get(call["name"])
+            if selected is None or index >= MAX_TOOL_ROUNDS:
                 content = "Tool call rejected: source or call limit does not match this session."
             else:
                 try:
-                    result = await tool.ainvoke(call["args"])
+                    result = await selected.ainvoke(call["args"])
                     content = json.dumps(result, ensure_ascii=False, default=str)[:MAX_RESULT_CHARS]
                 except Exception:
                     content = "The selected source could not complete the request."

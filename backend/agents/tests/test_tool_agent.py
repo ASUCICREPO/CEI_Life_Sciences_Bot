@@ -9,6 +9,7 @@ from shared.tools.data_sources import TOOLS_BY_SOURCE_ID
 from tool_agent.graph import SourceUnavailableError, compile_graph, source_tool
 from tool_agent.main import authorize_grant, source_thread
 from tool_agent.profile import SOURCE_IDS, load_profile
+from tool_agent.ncbi_tools import ncbi_tools
 
 
 class FakeTool:
@@ -63,6 +64,24 @@ async def test_graph_only_invokes_selected_source(source):
     assert tool.calls == [{"query": "x"}]
     assert result["messages"][-1].content == "Found a record."
     assert "rejected" in result["messages"][-3].content
+
+
+def test_ncbi_tools_require_gateway_and_call_only_named_targets(monkeypatch):
+    from tool_agent import ncbi_tools as module
+    from shared.tools.gateway_mcp import GatewayCallError
+    tools = {tool.name: tool for tool in ncbi_tools()}
+    assert set(tools) == {"ncbi_taxonomy_lineage", "ncbi_sequence_efetch"}
+    monkeypatch.setattr(module, "current_gateway_token", lambda: None)
+    with pytest.raises(GatewayCallError):
+        tools["ncbi_taxonomy_lineage"].invoke({"taxon": "human"})
+    calls = []
+    monkeypatch.setenv("CEI_TOOL_GATEWAY_URL", "https://example.invalid/mcp")
+    monkeypatch.setattr(module, "current_gateway_token", lambda: "token")
+    monkeypatch.setattr(module, "call_gateway_tool", lambda url, token, target, args, **kw: calls.append((target, kw["tool_name"], args)) or {"result": {}})
+    tools["ncbi_taxonomy_lineage"].invoke({"taxon": "human"})
+    tools["ncbi_sequence_efetch"].invoke({"accession": "ABC123", "database": "protein", "format": "fasta"})
+    assert calls == [("ncbi-taxonomy", "lineage", {"taxon": "human"}),
+                     ("ncbi-sequence", "efetch", {"accession": "ABC123", "database": "protein", "format": "fasta"})]
 
 
 def test_grant_must_match_user_session_and_exact_source():

@@ -5,7 +5,7 @@ Implementation note: the taxonomy and sequence Gateway targets and their shared
 PubMed/NCBI E-utilities rate limiter are implemented, but have not been deployed
 or validated through a live Gateway. BLAST is not exposed: associating a request
 identifier with its owner requires the B99 trusted-identity proof. The NCBI tool
-agent profile remains unavailable until its full set of tools is connected. The
+agent can bind the two read-only tools, but cannot yet complete BLAST. The
 phase remains incomplete; the generic runtime, route, and end-to-end isolation
 still require integration and proof.
 
