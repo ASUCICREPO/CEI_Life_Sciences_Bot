@@ -54,3 +54,97 @@ Let a user type free text into the chat (not just launch a dashboard task) and h
 
 - F14 (Analysis agent) and F17 (Pipeline Manager) do not need to change anything in this phase's Router code once they ship — the classifier already routes to them; their own implementation just stops producing `NotImplementedError`.
 - F8 (Model + mode controls), if it lands after this phase, should double check the classifier's fixed-model call is still excluded from any user-facing model list/blocklist UI — the classifier model is never user-selectable.
+
+## Implementation notes (wave2/router, built on top of F8's model controls)
+
+Implemented: `backend/lambdas/session-router/handler.py` wires `classifier.py` into the `start` op; the
+threshold is `CEI_ROUTER_CONFIDENCE_THRESHOLD` (default `0.7`, `classifier.DEFAULT_CONFIDENCE_THRESHOLD`);
+`backend/lambdas/session-runner/index.js` accepts a missing `task_type` and adapts non-Research agents'
+buffered JSON into SSE; `backend/lambdas/ui-actions/index.js` adds the `route-choice` action. CDK:
+`backend/lib/constructs/session-router.ts` takes `routerModelId`, `confidenceThreshold`, `guardrailArn`,
+and `runtimeUrls` (all four agents); `backend/lib/backend-stack.ts` wires these from `agentRuntimes.invocationUrls`
+and `modelGuardrail`, and grants UiActions `lambda:InvokeFunction` on the Router plus `GetItem`/`DeleteItem`
+on the Active-Run table.
+
+### Pending-choice storage
+
+B80's low-confidence `ChoicePicker` ends the turn without starting any agent, so there is nothing for a
+LangGraph checkpoint to hold. The pending choice is one `UpdateItem` into the existing **Active-Run table**
+(`ActiveRunsStore`), not a new table: `Key={"user_id": <sub>, "record": f"route_choice#{session_id}"}`,
+attributes `message`, `mode`, `surface_id`, `expires_at` (now + 600s). The Router (`store_pending_choice`)
+is the only writer; `ui-actions` is the only reader, and deletes the record once it starts the chosen
+agent. This table already carries the realtime/background leases and the Runner's `replay#...` rows, so a
+`route_choice#...` row is one more record type in the user-keyed item family, not new infrastructure.
+
+### SSE event sequence (`POST /chat/stream`, Session Runner)
+
+Every turn still begins with `surface_begin` (CEI UI *transport* version `"1.2"`, matching Research's own
+`ResearchEventStream.begin()` — this is separate from the surface's own embedded `"version"` field, `"1.1"`).
+
+- **Research** (classified or `task_type: "live-research"`): unchanged — real SSE pass-through from the
+  Research runtime (`stream: true`), the full existing event catalog.
+- **Drafting / Analysis / Pipeline Manager** (classified, confidence >= threshold): the Runner calls the
+  runtime's `op: run` (default) once, buffered, `Accept: application/json` — never SSE. The one JSON
+  envelope is adapted into exactly one of:
+  - completed (`status: "completed"` or no `status` with a string `text`, e.g. Research-shaped envelopes):
+    `surface_begin` -> one `component_add` per component (parent-first walk of `envelope.ui`, mirroring
+    `shared/streaming/research.py`'s `ResearchEventStream.components()`) -> `surface_end` (`final: true`).
+    A `completed` envelope with no `ui` (e.g. Pipeline's "plan could not be built") gets a synthesized
+    one-component `Text` surface instead of being dropped.
+  - awaiting_input (a HITL pause — outline approval, scope confirmation, plan approval): `surface_begin` ->
+    one terminal `hitl_request` whose body is `envelope.ui` spread directly (same shape Research's own
+    clarify pause emits) — the client resumes it exactly as any other HITL pause, via `POST /ui-actions`.
+- **ChoicePicker (B80, confidence < threshold)**: the Router's response carries `choice_required: true` and
+  `surface_id`; no agent runs, no `gateway_token`. The Runner renders the surface itself (the Router cannot
+  build a `shared.schemas.cei_ui` object — that package is not in the REST Lambda layer): `surface_begin`
+  -> one terminal `hitl_request` whose body is a `ChoicePicker` surface, `root_id`/`id` `"router-choice"`,
+  `interaction_id: "router-choice"`, one `ChoiceOption` per agent (`value` = `"research"` | `"drafting"` |
+  `"analysis"` | `"pipeline_manager"`), `action: {action_id: "route-choice", intent: "select"}`.
+
+### `POST /ui-actions` route-choice request/response
+
+Request is an ordinary `ActionRequest` (`backend/agents/shared/schemas/cei_ui.py`) whose `interaction_id`,
+`component_id` are both `"router-choice"`, `action_id` is `"route-choice"`, and `value` is one of the four
+agent strings:
+
+```json
+{ "request_id": "r1", "session_id": "...", "surface_id": "router-choice-<run_id>", "revision": 1,
+  "interaction_id": "router-choice", "component_id": "router-choice", "action_id": "route-choice",
+  "value": "drafting" }
+```
+
+`ui-actions` detects this action (before the existing `agent_type`/`RESUMABLE` lookup — the session has no
+agent yet) and, after verifying ownership and the stored pending choice, calls the *Session Router* Lambda
+(`op: start`, a fresh server-generated `run_id`, `request.route_agent: "drafting"`) the same way the Runner
+does, then invokes the returned `runtime_url` directly (`op: run` default, buffered JSON, no SSE), then
+`op: finish` to release the lease. The response is one JSON envelope, the same contract as an existing
+`/ui-actions` resume (`result?`, `text`, `ui?`, `status`, `action_response`):
+
+```json
+{ "text": "...", "ui": { "...": "CEI UI surface..." }, "status": "completed",
+  "action_response": { "request_id": "r1", "session_id": "...", "surface_id": "router-choice-<run_id>",
+    "revision": 1, "interaction_id": "router-choice", "component_id": "router-choice",
+    "action_id": "route-choice", "value": "drafting", "status": "completed", "message": null } }
+```
+
+An expired or missing pending-choice record returns `{"status": "rejected", "code": "expired", ...}`; a
+`surface_id`/`revision` mismatch or an unrecognized `value` returns `{"status": "stale", ...}` — both `200`,
+matching the existing resume envelope's `stale`/`rejected` statuses, not a REST error.
+
+### `route_agent`: an internal-only field, not a client-facing one
+
+`request.route_agent` on the Router's `op: start` payload skips the classifier and routes directly to the
+named agent with the given `message`/`mode`. It is sent only by `ui-actions` (an IAM-authenticated internal
+caller, same trust boundary as the Runner's `task_type: "live-research"`), never accepted from a browser —
+`session-runner`'s own `validateRequest` does not pass it through from the client request body at all.
+
+### Known gaps / follow-ups
+
+- Drafting's `op: run` requires a valid `document_type`; a free-text route to Drafting has none, so both
+  `session-runner` and `ui-actions` default it to `"whitepaper"` (duplicated in both files — no shared JS
+  module exists between the two Lambda bundles today).
+- The low-confidence threshold (`0.7`) and the pending-choice TTL (600s) are both implementation defaults
+  per B80/CLASSIFIER.md, not tuned against live classifier traffic — this requires real AWS (a deployed
+  Guardrail + the fixed classifier model) and is out of scope for this environment.
+- A real classifier accuracy spot-check against `tests/fixture_prompts.py` with the live fixed model (F09
+  task 5's non-blocking manual step) also requires a deployed Bedrock Guardrail/model and was not run here.
