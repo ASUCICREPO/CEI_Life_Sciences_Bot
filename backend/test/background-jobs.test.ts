@@ -119,3 +119,21 @@ describe('F16 background jobs', () => {
     expect(errors).toEqual([]);
   });
 });
+
+describe('F13 POST /ui-actions', () => {
+  test('streams through the Cognito authorizer so long resumes are not cut at 29 seconds', () => {
+    const resources = template.findResources('AWS::ApiGateway::Resource');
+    const id = Object.entries(resources).find(([, r]: [string, any]) => r.Properties.PathPart === 'ui-actions')![0];
+    const post = Object.values(template.findResources('AWS::ApiGateway::Method')).find((m: any) =>
+      m.Properties.HttpMethod === 'POST' && m.Properties.ResourceId?.Ref === id) as any;
+    expect(post.Properties.AuthorizationType).toBe('COGNITO_USER_POOLS');
+    expect(post.Properties.Integration.ResponseTransferMode).toBe('STREAM');
+  });
+
+  test('the handler can only read chat metadata; runtimes authenticate the forwarded user token', () => {
+    const data = statementsForRole('UiActionsRole').filter((s) =>
+      ([] as string[]).concat(s.Action).some((a) => a.startsWith('dynamodb:') || a.startsWith('bedrock')));
+    expect(data.flatMap((s) => ([] as string[]).concat(s.Action))).toEqual(['dynamodb:GetItem']);
+    expect(JSON.stringify(data[0].Resource)).toContain('ChatMetadataStore');
+  });
+});

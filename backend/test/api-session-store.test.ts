@@ -82,10 +82,10 @@ describe('BackendStack REST API + session store', () => {
   it('includes the streaming and trace routes without a DELETE route', () => {
     const methods = Object.values(template.findResources('AWS::ApiGateway::Method')).map((m: any) => m.Properties);
     expect(methods.map((method) => method.HttpMethod)).not.toContain('DELETE');
-    template.resourceCountIs('AWS::ApiGateway::Resource', 18);
+    template.resourceCountIs('AWS::ApiGateway::Resource', 19);
     const resources = template.findResources('AWS::ApiGateway::Resource');
     const paths = Object.values(resources).map((r: any) => r.Properties.PathPart);
-    expect(paths.sort()).toEqual(['cancel', 'chat', 'client-diagnostics', 'download', 'exports', 'exports', 'history', 'internal', 'jobs', 'sessions', 'stream', 'token-refresh', 'trace', 'turns', '{exportId}', '{jobId}', '{messageId}', '{sessionId}']);
+    expect(paths.sort()).toEqual(['cancel', 'chat', 'client-diagnostics', 'download', 'exports', 'exports', 'history', 'internal', 'jobs', 'sessions', 'stream', 'token-refresh', 'trace', 'turns', 'ui-actions', '{exportId}', '{jobId}', '{messageId}', '{sessionId}']);
     const idFor = (part: string) => Object.entries(resources).find(([, resource]: [string, any]) => resource.Properties.PathPart === part)![0];
     const stream = resources[idFor('stream')] as any;
     const trace = resources[idFor('trace')] as any;

@@ -799,12 +799,49 @@ export class BackendStack extends cdk.Stack {
       environment: { CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName, CEI_CHAT_HISTORY_TABLE: chatHistoryTable.tableName, CEI_ACTIVE_RUNS_TABLE: activeRunsTable.tableName, CEI_ROUTER_FUNCTION: router.function.functionName, ALLOWED_ORIGINS: allowedOrigins.join(',') },
     });
     suppressXrayWildcard(runnerRole);
+
+    // F13: POST /ui-actions — a typed HITL action resumes the session's own runtime with the caller's token (B102).
+    // ADR: STREAM mode | Rationale: a resumed analysis runs for minutes, beyond a buffered integration's 29 s
+    // limit; the Node Lambda writes one JSON body | Alternative: buffered + async self-invoke rejected (the user
+    // token would sit in the async event queue)
+    const uiActionsLogs = new logs.LogGroup(this, 'UiActionsLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY });
+    const uiActionsRole = new iam.Role(this, 'UiActionsRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
+    uiActionsLogs.grantWrite(uiActionsRole);
+    uiActionsRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }));
+    const uiActions = new lambda.Function(this, 'UiActions', {
+      tracing: lambda.Tracing.ACTIVE,
+      runtime: lambda.Runtime.NODEJS_24_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', 'ui-actions'), { exclude: ['*.test.js'] }),
+      role: uiActionsRole,
+      logGroup: uiActionsLogs,
+      timeout: Duration.minutes(14),
+      memorySize: 256,
+      environment: {
+        CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName,
+        AGENT_URLS: this.toJsonString(agentRuntimes.invocationUrls),
+        ALLOWED_ORIGINS: allowedOrigins.join(','),
+      },
+    });
+    suppressXrayWildcard(uiActionsRole);
+    const uiActionsResource = api.root.addResource('ui-actions', { defaultCorsPreflightOptions: corsOptions });
+    uiActionsResource.addMethod('POST', new apigw.LambdaIntegration(uiActions, { responseTransferMode: apigw.ResponseTransferMode.STREAM, timeout: Duration.minutes(14) }), methodOptions);
+    for (const child of uiActionsResource.node.findAll()) {
+      if (child instanceof apigw.CfnMethod && child.httpMethod === 'OPTIONS') {
+        child.requestValidatorId = requestValidator.requestValidatorId;
+        NagSuppressions.addResourceSuppressions(child, [
+          { id: 'AwsSolutions-APIG4', reason: 'ADR: CORS preflight without authorizer | Rationale: browsers do not send credentials on preflight | Alternative: authenticated preflight rejected because browsers cannot satisfy it' },
+          { id: 'AwsSolutions-COG4', reason: 'ADR: CORS preflight without Cognito | Rationale: browsers do not send credentials on preflight | Alternative: authenticated preflight rejected because browsers cannot satisfy it' },
+        ]);
+      }
+    }
+
     new Observability(this, 'Observability', {
       api,
       adminEmail: this.config?.adminEmail,
       functions: {
         PreSignUp: preSignUpFn, SessionMetadata: sessionMetadata.fn, SessionHistory: sessionHistory.fn,
-        AgentProxy: agentProxyFn, SessionRouter: router.function, SessionRunner: runner,
+        AgentProxy: agentProxyFn, SessionRouter: router.function, SessionRunner: runner, UiActions: uiActions,
         ClientDiagnostics: clientDiagnostics.fn, Exports: exportsHandler.fn, LifeSciencesOperations: gateway.operationsFunction,
         NcbiReadOnly: gateway.ncbiFunction, Jobs: backgroundJobs.jobsFunction, JobWatchdog: backgroundJobs.watchdogFunction,
         PreToken: gateway.preTokenFunction, TokenRefresh: gateway.tokenRefreshFunction,
@@ -824,6 +861,7 @@ export class BackendStack extends cdk.Stack {
         SessionHistory: { logGroup: sessionHistory.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         Exports: { logGroup: exportsHandler.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         NcbiReadOnly: { logGroup: gateway.ncbiFunction.logGroup, terms: ['ncbi_request_failed'] },
+        UiActions: { logGroup: uiActionsLogs, terms: ['resume_failed'] },
         Jobs: { logGroup: backgroundJobs.jobsFunction.logGroup, terms: ['handled_api_failure', 'unhandled error', 'runtime_stop_failed'] },
         TokenRefresh: { logGroup: gateway.tokenRefreshFunction.logGroup, terms: ['token_endpoint_error', 'token_refresh_scope_mismatch', 'run_scopes_not_allowed', 'unhandled error'] },
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) =>
