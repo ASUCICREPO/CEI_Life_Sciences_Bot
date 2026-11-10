@@ -21,7 +21,7 @@ from pipeline_manager.state import (
 from shared.grounding import build_corpus, ground_document
 from shared.presenters.markdown import render_document_markdown
 from shared.prompts.loader import PromptLoader
-from shared.runtime import JOB_REGISTRY
+from shared.runtime.durable_jobs import active_job_store
 from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
@@ -250,7 +250,7 @@ async def dispatch(state: PipelineState, config: RunnableConfig) -> dict[str, An
         for sid in ready_ids:
             status_by_id[sid].status = StepStatusValue.RUNNING
             if job_id:
-                JOB_REGISTRY.update_step(job_id, sid, "running")
+                active_job_store().update_step(job_id, sid, "running")
 
         results = await asyncio.gather(*(_run_one(sid, dependency_text) for sid in ready_ids), return_exceptions=True)
 
@@ -274,7 +274,7 @@ async def dispatch(state: PipelineState, config: RunnableConfig) -> dict[str, An
             status.result = {"text": outcome.text, "document": outcome.document}
             trace.extend(outcome.trace)
             if job_id:
-                JOB_REGISTRY.update_step(
+                active_job_store().update_step(
                     job_id, sid, status.status.value, error=status.error, detail=_plain_detail(outcome.text)
                 )
 

@@ -94,6 +94,8 @@ StatusUiBuilder = Callable[[JobRecord], dict[str, Any]]
 class JobRegistry:
     """Thread-safe, bounded job store. Every change bumps ``revision``."""
 
+    durable = False
+
     def __init__(self, limit: int = MAX_JOBS, status_ui_builder: StatusUiBuilder | None = None) -> None:
         self._limit = limit
         self._lock = threading.Lock()
@@ -162,6 +164,10 @@ class JobRegistry:
             if detail is not None:
                 step.detail = detail
             self._touch(record)
+
+    def heartbeat(self, job_id: str) -> bool:
+        """Local jobs have no external cancel path; the durable store reports cancellation here."""
+        return False
 
     def finish(
         self,
