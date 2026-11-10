@@ -281,6 +281,8 @@ An action `value` can contain JSON scalars, arrays, and objects. It has these bo
 
 ## Preview Proxy Security
 
+**Archived.** This section describes the Next.js preview proxies in `archive/frontend-next/`. They are not deployed. The production frontend is the Vite SPA in `frontend/`. It calls the AgentProxy Lambda function URL for agent runs and `POST /ui-actions` for typed actions. In the Vite SPA, `frontend/src/lib/agentClient.ts` drops a `ui` that fails validation and sets `ui_error`.
+
 The local Next.js agent and action proxies are disabled by default. They return `404` unless the server-side environment variable `CEI_ENABLE_LOCAL_PROXY` is exactly `true`. These routes are for local preview only. They do not provide production authentication. The static S3 and CloudFront build cannot host Next.js server routes.
 
 At a high level, the agent proxy accepts a request body of at most 64 KiB, accepts an upstream response of at most 8 MiB, and has a 10-minute upstream timeout. It also limits prompts to 12,000 characters. The action proxy accepts request and response bodies of at most 1 MiB and has a 15-second upstream timeout. Both proxies reject invalid JSON and validate data before they return it. When the upstream `ui` fails validation, the agent proxy omits `ui` and adds `ui_error` rather than failing the request (see "Text Fallback" above).
@@ -289,7 +291,7 @@ The agent proxy filters export metadata. It returns at most 20 entries. Each ent
 
 ## SSE Diagnostic Safety
 
-The repository contains an SSE serialization helper, but no production streaming route uses it. The helper can buffer at most 500 events. Public text deltas are truncated to 20,000 characters.
+The repository contains an SSE serialization helper (`backend/agents/shared/transport/sse.py`). The Research CEI UI 1.2 stream does not use it; it uses `backend/agents/shared/streaming/research.py`. The helper can buffer at most 500 events. Public text deltas are truncated to 20,000 characters.
 
 Diagnostic events do not expose private input or execution data:
 
@@ -299,23 +301,26 @@ Diagnostic events do not expose private input or execution data:
 - Error messages are replaced with `The request could not be completed.`.
 - Error codes are limited to `invalid_request`, `rate_limited`, `service_unavailable`, and `internal_error`. Any other code becomes `internal_error`.
 
-The helper emits complete CEI UI surfaces as `ui_surface` events. It does not implement progressive patches. This helper does not mean that production SSE delivery is implemented.
+The helper emits complete CEI UI surfaces as `ui_surface` events. It does not implement progressive patches.
 
 ## Transport Status
 
-The implemented agent response is completed JSON with optional `ui`. The local action proxy can validate and forward typed actions when `AGENTCORE_ACTION_URL` is configured, but the repository has no Session Runner and no LangGraph pause and resume flow.
+- Drafting, Analysis, and Pipeline Manager return completed JSON with optional `ui` (version `1.1`).
+- Research can stream CEI UI 1.2 events over `POST /chat/stream` (Session Runner). The SPA uses this stream only when `/config.json` has `researchStreamingEnabled: true`.
+- Typed actions go to `POST /ui-actions` (UiActions Lambda, STREAM mode). It checks session ownership and resumes the owning agent. Today only Analysis and Pipeline Manager pause and resume.
+- Production authentication (Cognito) and history persistence exist.
 
-Production authentication, Session Runner routing, persistence, replay protection, and graph resume remain planned work. Final production SSE delivery and progressive surface patches are also deferred.
+Still planned: pause and resume for Research and Drafting (F13), durable checkpoints for the agents other than Research, and streaming for the agents other than Research.
 
-## Planned: CEI UI 1.2 progressive streaming
+## CEI UI 1.2 progressive streaming
 
-**Status: Planned — not built.** This section does not change anything above. The 1.1 contract in this document — the component allowlist, structural limits, artifact security model, grounding rules, and action contract — stays exactly as written and applies unchanged to 1.2.
+**Status: Partly built.** The Research runtime emits `version: "1.2"` events (`backend/agents/shared/streaming/research.py`). The frontend accepts `"1.0"`, `"1.1"`, and `"1.2"` (`frontend/src/lib/stream/events.ts`). The other agents do not stream yet. This section does not change anything above. The 1.1 contract in this document — the component allowlist, structural limits, artifact security model, grounding rules, and action contract — stays exactly as written and applies unchanged to 1.2.
 
-CEI UI 1.2 adds a transport-level addition only: progressive SSE patch events, so the client can build the answer while the agent is still working instead of receiving one completed surface at the end. Servers will emit `version: "1.2"` on new streams; clients and stored history will continue to accept `"1.0"`, `"1.1"`, and `"1.2"`. A fully replayed 1.2 stream produces the same `CEIUISurface` object that 1.1 produces today — only the `version` string differs.
+CEI UI 1.2 adds a transport-level addition only: progressive SSE patch events, so the client can build the answer while the agent is still working instead of receiving one completed surface at the end. Servers emit `version: "1.2"` on new streams; clients and stored history accept `"1.0"`, `"1.1"`, and `"1.2"`. A fully replayed 1.2 stream produces the same `CEIUISurface` object that 1.1 produces today — only the `version` string differs.
 
-The planned event catalog includes `surface_begin`, `component_add`, `text_delta`, `component_update`, `grounding_update`, `trace_event`, `progress`, `usage`, `hitl_request`, `job_handoff`, `heartbeat`, `surface_end`, and `error`. These events also populate the collapsible "thinking block" (rendered from `trace_event`) and the live token/cost counter (`usage`) called for elsewhere in this project's design.
+The event catalog includes `surface_begin`, `component_add`, `text_delta`, `component_update`, `grounding_update`, `trace_event`, `progress`, `usage`, `hitl_request`, `job_handoff`, `surface_end`, and `error`. The heartbeat is not an event: the Session Runner sends the SSE comment `: heartbeat` every 17 seconds, with no `seq`. The client makes a local `heartbeat` record from it. These events also populate the collapsible "thinking block" (rendered from `trace_event`) and the live token/cost counter (`usage`) called for elsewhere in this project's design.
 
-`job_handoff` is decided once, from the plan step's own duration estimate, before the run streams any part of the answer — a run never switches to a background job mid-stream after content has already started. This same event catalog and transport also carries a separate single-source "tool agent" chat route; nothing here is specific to the main chat route.
+`job_handoff` is decided once, from the plan step's own duration estimate, before the run streams any part of the answer — a run never switches to a background job mid-stream after content has already started. This same event catalog and transport will also carry a separate single-source "tool agent" chat route (planned, not built); nothing here is specific to the main chat route.
 
 Full event shapes, ordering rules, reconnect behavior, and worked examples: `.agents/specs/streaming-protocol.md`.
 
