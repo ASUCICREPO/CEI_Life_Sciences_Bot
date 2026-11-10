@@ -13,7 +13,7 @@ Two stacks now exist: `BackendStack` (`backend/lib/backend-stack.ts`, deploys to
 | Resource | Service | Status | Notes |
 |---|---|---|---|
 | Code Interpreter (`ceiLifeSciencesCI`) | AgentCore Code Interpreter | Provisioned via CDK | `CodeInterpreterCustom` construct; public network mode (needed for calls to external database APIs and Python package installs) |
-| `CodeInterpreterId` stack output | CloudFormation output | Provisioned via CDK | Exported as `CeiCodeInterpreterId`; intended to be passed to future runtimes/Lambdas as `CEI_CODE_INTERPRETER_ID` |
+| `CodeInterpreterId` stack output | CloudFormation output | Provisioned via CDK | Exported as `CeiCodeInterpreterId`; the four agent runtimes get it as `CEI_CODE_INTERPRETER_ID` and have use of the Code Interpreter (`grantUse`) |
 | `WebSearchEnabled` stack output | CloudFormation output | Provisioned via CDK, only when a deploy config is present | Set by `backend/scripts/preflight.ts` from the Region (`true` only in us-east-1, eu-west-1, ap-northeast-1); read at build time by later phases that wire the Web Search connector (F12) |
 | Pre-sign-up domain check Lambda | AWS Lambda (Python 3.14) | Provisioned via CDK | `PreSignUpDomainCheckFn`; own log group, own hand-rolled role (log permissions only, no `AWSLambdaBasicExecutionRole`); env var `ALLOWED_EMAIL_DOMAINS` from the deploy config (B16) |
 | Cognito User Pool | Amazon Cognito | Provisioned via CDK | Self sign-up, email sign-in, auto-verify email, `AccountRecovery.EMAIL_ONLY`, MFA off (B14), password policy (min 12 chars, upper/lower/digit/symbol), the pre-sign-up trigger above attached, `deletionProtection: true`, `RemovalPolicy.RETAIN` |
@@ -22,9 +22,24 @@ Two stacks now exist: `BackendStack` (`backend/lib/backend-stack.ts`, deploys to
 | Access-logs bucket | Amazon S3 | Provisioned via CDK | Private, `OBJECT_WRITER` ownership (required for classic S3/CloudFront log delivery ACLs), SSL-only, S3-managed encryption, `RemovalPolicy.RETAIN` |
 | Site bucket | Amazon S3 | Provisioned via CDK | Private (`BLOCK_ALL`), SSL-only, S3-managed encryption, server access logs to the access-logs bucket, `RemovalPolicy.RETAIN` |
 | Response headers policy | Amazon CloudFront | Provisioned via CDK | `SecurityHeadersPolicy`: baseline CSP, HSTS, `X-Content-Type-Options`, frame `DENY`, strict referrer policy |
-| CloudFront distribution | Amazon CloudFront | Provisioned via CDK | `S3BucketOrigin.withOriginAccessControl` over the site bucket; `defaultRootObject: index.html`; 403/404 → `/index.html` (HTTP 200) for SPA client-side routing; standard access logging to the access-logs bucket; `webAclId` from `EdgeWafStack` |
+| CloudFront distribution | Amazon CloudFront | Provisioned via CDK | `S3BucketOrigin.withOriginAccessControl` over the site bucket; `defaultRootObject: index.html`; SPA routing uses the CloudFront Function `SpaFallback` on the default (S3) behavior only: a viewer-request path with no `.` becomes `/index.html` (there are no distribution-wide 403/404 rewrites, so API errors stay API errors); the `chat/stream` behavior goes to the REST API origin (`/v1`) with caching off; standard access logging to the access-logs bucket; `webAclId` from `EdgeWafStack` |
 | `SiteAssetsDeployment` / `RuntimeConfigDeployment` | S3 bucket deployment (`aws-s3-deployment`) | Provisioned via CDK | Two `BucketDeployment`s in order: the built SPA (`frontendAssetPath`, resolved to `../frontend/dist`), then `/config.json` (`Source.jsonData`, `Cache-Control: no-cache`, `prune: false`) with a distribution invalidation on each |
-| `UserPoolId`, `UserPoolArn`, `UserPoolClientId`, `CognitoDomain`, `DistributionDomainName`, `SiteUrl` stack outputs | CloudFormation outputs | Provisioned via CDK | For F3's REST API authorizer and the SPA runtime config |
+| Attachments bucket | Amazon S3 | Provisioned via CDK | `AttachmentsBucket`; private, `RemovalPolicy.RETAIN`; its name reaches the agents as `CEI_ATTACHMENTS_BUCKET` and is the `AttachmentsBucketName` output. The upload routes (F10) are not built |
+| Exports bucket | Amazon S3 | Provisioned via CDK | `ExportsBucket`; private, `RemovalPolicy.RETAIN`; holds export files that `GET /exports/{exportId}/download` signs |
+| REST API | Amazon API Gateway (REST, Regional) | Provisioned via CDK | `cei-life-sciences-api`, stage `v1`; Cognito authorizer (scope `openid`); stage throttle; access logs; X-Ray tracing. Routes: [API documentation](./APIDoc.md) |
+| DynamoDB tables | Amazon DynamoDB | Provisioned via CDK | `ChatMetadataStore`, `ChatHistoryStore`, `ExportMetadataStore`, `ActiveRunsStore` (`backend-stack.ts`); `JobIdStore` (`constructs/background-jobs.ts`); `NcbiRateLimiter` (`constructs/tool-gateway.ts`) |
+| Session API Lambdas | AWS Lambda (Python 3.14) | Provisioned via CDK | `SessionMetadataHandler`, `SessionHistoryHandler`, `ExportsHandler`, `ClientDiagnostics` |
+| Agent proxy Lambda + function URL | AWS Lambda (Python 3.14) | Provisioned via CDK | `AgentProxyFn`; buffered function URL (`authType: NONE`; AgentCore checks the forwarded Cognito token); forwards to the runtime invocation URLs (`AGENT_URLS`) |
+| Session Router Lambda | AWS Lambda (Python 3.14) | Provisioned via CDK | `constructs/session-router.ts`; deterministic routing only (the free-text classifier of F9 is not wired) |
+| Session Runner Lambda | AWS Lambda (Node.js 24) | Provisioned via CDK | `SessionRunner`; serves `POST /chat/stream` in STREAM mode (14-minute integration timeout) |
+| UI actions Lambda | AWS Lambda (Node.js 24) | Provisioned via CDK | `UiActions`; serves `POST /ui-actions` in STREAM mode |
+| Background jobs | AWS Lambda + Amazon EventBridge | Provisioned via CDK | `JobsHandler` (the `/jobs` routes) and `JobWatchdog`, run by a 5-minute EventBridge rule (`constructs/background-jobs.ts`) |
+| AgentCore Gateway + tool Lambdas | AgentCore Gateway, AWS Lambda | Provisioned via CDK | `constructs/tool-gateway.ts`: Gateway, `PolicyEngine` with one Cedar policy per target (mode from deploy config, default `LOG_ONLY`), the 12 data-source Lambdas, `NcbiReadOnly` targets, `PreTokenGeneration` trigger, `TokenRefresh` Lambda (`POST /internal/token-refresh`, `AWS_IAM`), the Router M2M secret (`RouterM2MSecret`), and Gateway log delivery |
+| Life Sciences Operations Lambda | AWS Lambda (container image) + Gateway target | Provisioned via CDK | `constructs/life-sciences-operations.ts` (`lsops`), with its own Cedar policy |
+| Agent runtimes | AgentCore Runtime | Provisioned via CDK | `CEIResearchAgent`, `CEIDraftingAgent`, `CEIAnalysisAgent`, `CEIPipelineManager` (`constructs/agent-runtimes.ts`); Cognito JWT authorizer; each runtime has use of the Code Interpreter |
+| Agent memory | AgentCore Memory | Provisioned via CDK | `CEIResearchMemory` (`CfnMemory`), 365-day event expiry, long-term strategies `user_preferences` and `semantic_facts`; used by the Research runtime only; `RemovalPolicy.RETAIN` |
+| Alarms, SNS topic, dashboard | Amazon CloudWatch, Amazon SNS | Provisioned via CDK | `constructs/observability.ts`: alert topic (email subscription when an admin email is set), Lambda error/throttle alarms, DynamoDB throttle alarms, API 5xx alarm, handled-failure alarms, and the `<stack>-operations` dashboard. See [Observability](./observability.md) |
+| `UserPoolId`, `UserPoolArn`, `UserPoolClientId`, `CognitoDomain`, `DistributionDomainName`, `SiteUrl`, `ApiBaseUrl`, `AgentProxyUrl`, `AttachmentsBucketName`, runtime ARN stack outputs | CloudFormation outputs | Provisioned via CDK | For the SPA runtime config (`/config.json`) and operators |
 
 ### `EdgeWafStack` (always `us-east-1`, B88)
 
@@ -33,7 +48,7 @@ Two stacks now exist: `BackendStack` (`backend/lib/backend-stack.ts`, deploys to
 | `EdgeWebAcl` (`cei-life-sciences-edge-waf`) | AWS WAFv2 | Provisioned via CDK | `CLOUDFRONT`-scope `CfnWebACL`; `AWSManagedRulesCommonRuleSet`, `AWSManagedRulesKnownBadInputsRuleSet`, `AWSManagedRulesAmazonIpReputationList`, and a rate-based rule (1000 requests / 5 min per IP — a proposal, values TBD per `security.md` T5); CloudWatch metrics on for every rule |
 | `WebAclArn` stack output | CloudFormation output | Provisioned via CDK | Consumed by `BackendStack` through `crossRegionReferences: true` |
 
-No IAM role other than the pre-sign-up Lambda's, no DynamoDB table, no API Gateway, and no SQS queue is defined in the CDK code yet.
+No SQS queue, Bedrock Knowledge Base, S3 Vectors index, or Bedrock Guardrail is attached in the stack yet. (`constructs/model-guardrail.ts` exists but `BackendStack` does not use it.) `backend/lambdas/delete-worker/` is a tested foundation only; no CDK resource uses it.
 
 ## What `deploy.sh` creates outside CDK (F1, B87, B91)
 
@@ -52,17 +67,15 @@ No IAM role other than the pre-sign-up Lambda's, no DynamoDB table, no API Gatew
 
 ## What exists outside CDK (not AWS-provisioned)
 
-These run locally today and are not deployed AWS resources:
+These are local tools, not deployed AWS resources:
 
-- **Research and Drafting agent graphs** (`backend/agents/research/`, `backend/agents/drafting/`) — run locally via the AgentCore CLI, using `InMemorySaver` as the checkpointer (not `AgentCoreMemorySaver`).
-- **Analysis and Pipeline Manager agent graphs** — wired, but every node raises `NotImplementedError`.
-- **Data source calls** (`backend/agents/shared/tools/data_sources/`) — direct HTTP calls to PubMed, ClinicalTrials.gov, bioRxiv, medRxiv, ChEMBL, Open Targets, CMS Coverage, ICD-10, NPI Registry, and PubChem. No AgentCore Gateway, no Lambda deployment.
-- **CEI UI 1.1 presenters and schemas** (`backend/agents/shared/presenters/`, `backend/agents/shared/schemas/`) — produce completed JSON `ui` surfaces locally.
+- **Local agent development** (`backend/agents/agentcore/`) — the AgentCore CLI project for `agentcore dev`. It is for local use only; CDK does not ship it.
+- **Tool agent** (`backend/agents/tool_agent/`) — the graph and YAML profiles exist, but no runtime deploys them yet (F15).
 - **Frontend** (`frontend/`) — the `founder-ai-dashboard` Vite SPA (React 19, Tailwind 4, react-router), the production frontend (B1/B66). It is built and deployed to the CDK-provisioned S3 bucket and served through CloudFront (see the `BackendStack` table above). The archived Next.js test harness and its local proxy routes/CEI UI preview renderer now live in `archive/frontend-next/` and are not deployed. The NCBI Vite dev proxy in `frontend/` is still in place (B21 removes it in F15).
 
 ## What is not deployed and not built at all
 
-Everything else in the target architecture — the REST API Gateway, the Session Runner and Session Router Lambdas, the AgentCore Gateway and Cedar Policy engine, the tool-agent runtime, DynamoDB tables (Session Metadata, Chat History, Job ID, User Metadata, Attachment Metadata), the Attachments S3 bucket, S3 Vectors, the product API Key Store in Secrets Manager, SQS, Bedrock Knowledge Base, Bedrock Guardrails, AgentCore Memory (short- and long-term), the Web Search connector, the Life Sciences Operations Lambda, and CloudWatch alarms/SNS — is **planned, not built**. (The one Secrets Manager secret that does exist, `cei/deploy/github-pat`, belongs to the deploy mechanism, not the product — see the table above.) See [Architecture Deep Dive](./architectureDeepDive.md) for the full component table, status per component, and `.agents/specs/architecture.md` for detail.
+These parts of the target architecture are **planned, not built**: the tool-agent runtime, the User Metadata and Attachment Metadata tables, S3 Vectors, the product API Key Store routes, SQS, Bedrock Knowledge Base, Bedrock Guardrails in the stack, the Web Search connector, and the deletion cascade. (The one Secrets Manager secret that does exist, `cei/deploy/github-pat`, belongs to the deploy mechanism, not the product — see the table above.) See [Architecture Deep Dive](./architectureDeepDive.md) for the full component table, status per component, and `.agents/specs/architecture.md` for detail.
 
 ---
 
