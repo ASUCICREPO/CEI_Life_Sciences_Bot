@@ -1,5 +1,5 @@
 # F12 — Web search + LS Ops
-Status: partial (Life Sciences Operations Lambda and Gateway target built; Web Search connector not wired, only the `WebSearchEnabled` output) | Depends on: F4 | Decisions: B40, B42, B44, B70, B86 | Specs: ../specs/tools.md, ../specs/architecture.md, ../specs/auth-and-tool-scope.md
+Status: partial (Life Sciences Operations Lambda and Gateway target built; Web Search target, Cedar permit, `InvokeWebSearch` grant, `CEI_WEB_SEARCH_ENABLED`, agent tool, and Research triage wiring built behind `webSearchEnabled`, default false (B103); Analysis/Pipeline web search not built; not verified on AWS) | Depends on: F4 | Decisions: B40, B42, B44, B70, B86 | Specs: ../specs/tools.md, ../specs/architecture.md, ../specs/auth-and-tool-scope.md
 
 ## Goal
 Give every agent two more tools: a built-in AgentCore web search connector for general research, and a deterministic Life Sciences Operations (LS Ops) Lambda for common life-sciences calculations (sequence, protein/primer, chemistry, lab math) that need no model call.
@@ -97,6 +97,13 @@ slice would have raised. No change was needed in `shared/tools/web_search.py` it
 - Resolved: B70 states plainly that "all agents and tool agents always get" the shared `cei-tools/common` scope, and B86 confirms the Code Interpreter is not a Gateway target at all (so it is outside this Cedar scope question entirely — it is controlled by the runtime binding). This phase implements the granted-by-default reading for LS Ops and Web Search; no further decision is needed. If `auth-and-tool-scope.md` still shows this as open when you read it, follow B70/B86, not the older spec text — the parallel spec-update agent may not have applied them yet.
 - Upstream rate limits are not a concern here (LS Ops has no external API calls), but the Web Search connector's $7/1,000-query cost is an unbudgeted MVP cost (B16 has no token/cost budget) — accepted gap, not a blocker.
 - RDKit container image size/cold start is a build risk; if it is too slow, revisit as a Lambda-behind-Fargate-like pattern — but note B25 already removed Fargate from the architecture, so any such change needs a new decision, not an assumption.
+
+## Needs live AWS verification
+- A deploy with `webSearchEnabled: true` in a supported Region creates the `WebSearchTarget` and `permit_web_search`.
+- The connector's real MCP tool name on `tools/list` matches `web-search___WebSearch` (S2 open item, B86).
+- The Cedar permit allows a token with `cei-tools/common` and denies one without it (in `ENFORCE` mode).
+- A Research turn that selects `web` returns `SourceType.WEB` citations, and the stored trace has only `url`/`title`/`snippet`.
+- With `webSearchEnabled: false`, triage never offers `web` and no target exists.
 
 ## Handoff notes
 - F15 (Tool agents) reuses the `cei-tools/common` scope pattern established here for its own profiles.

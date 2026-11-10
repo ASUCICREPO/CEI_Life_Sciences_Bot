@@ -54,5 +54,12 @@ Give the Research, Drafting, Analysis, and Pipeline Manager agents memory that l
 - **Proposal (not decided):** whether the Tool Agent runtime gets long-term memory at all (agents.md §5 implies no cross-source memory, but does not explicitly rule out long-term strategies). Flagged for F15 to resolve when the Tool Agent runtime is built.
 - Analysis and Pipeline Manager recall is now wired (wave2/memory, F11 follow-up). Pipeline's in-process research, drafting and analysis steps receive the parent's recalled context through `pipeline_manager/dispatcher.py`.
 
+## Needs live AWS verification
+- With `CEI_<AGENT>_LONG_TERM_ENABLED=true`, Drafting, Analysis, and Pipeline Manager each get recalled records from the shared Memory resource (`RetrieveMemoryRecords` only; no write grant).
+- A preference that Research stored in chat A shows in a Drafting or Analysis prompt in chat B, after the extraction window.
+- A Pipeline sub-run (research, drafting, analysis step) gets the parent's recalled context.
+- With the flag off (the default), or with no memory id, each agent runs with no long-term context and no error.
+- Not built: memory writes for the non-Research agents (they wait for F19 deletion), and tool-agent memory (F15).
+
 ## Handoff notes
 - F19 (data deletion) depends on this phase's namespace convention (`actor_id = user_id`) to delete a user's long-term memory on account delete.

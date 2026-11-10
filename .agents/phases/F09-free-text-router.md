@@ -1,6 +1,6 @@
 # F09 — Free-text router
 
-Status: not started | Depends on: F5 | Decisions: B15, B17, B80 | Specs: [`../specs/agents.md`](../specs/agents.md) §5–6 (Router classifier contract), [`../specs/api.md`](../specs/api.md) (`/chat/stream`)
+Status: partial (backend built: classifier in the Session Router, threshold 0.7, buffered-to-SSE adapter, ChoicePicker, `route-choice` action; SPA free-text input in progress; not verified on AWS; see "Implementation notes") | Depends on: F5 | Decisions: B15, B17, B80 | Specs: [`../specs/agents.md`](../specs/agents.md) §5–6 (Router classifier contract), [`../specs/api.md`](../specs/api.md) (`/chat/stream`)
 
 ## Goal
 
@@ -148,3 +148,14 @@ caller, same trust boundary as the Runner's `task_type: "live-research"`), never
   Guardrail + the fixed classifier model) and is out of scope for this environment.
 - A real classifier accuracy spot-check against `tests/fixture_prompts.py` with the live fixed model (F09
   task 5's non-blocking manual step) also requires a deployed Bedrock Guardrail/model and was not run here.
+
+### Needs live AWS verification
+
+- A free-text `/chat/stream` turn with no `task_type` calls the classifier and routes to the expected agent.
+- The classifier call is the same for two chats with different user-selected models.
+- A below-0.7 prompt gets the `ChoicePicker` as a terminal `hitl_request`.
+- A `route-choice` pick starts the chosen agent with the original message and deletes the pending record.
+- A pick after 600 seconds returns `status: rejected`, `code: expired`.
+- Drafting, Analysis, and Pipeline Manager answers arrive as SSE through the Runner adapter.
+- A Guardrail block returns `400`; a classifier failure returns `503` and mints no token.
+- The real classifier accuracy spot-check against the fixture set.

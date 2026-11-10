@@ -1,8 +1,8 @@
 # F08 — Model + mode controls
 
-Status: not started | Depends on: F6 | Decisions: B18, B51, B51a, B55, B76, D16 (kept, per B61) | Specs: [`../specs/agents.md`](../specs/agents.md) §6 (Cross-Agent Mechanisms), [`../specs/api.md`](../specs/api.md) (`/models`, `/settings`), [`../specs/security.md`](../specs/security.md) (Model calls)
+Status: partial (blocklist, Guardrail on every `get_model()`, model discovery, `GET /models`, `GET`/`PUT /settings`, UserMetadataTable, model picker, and Settings defaults built; prompt caching not built; saved defaults not applied to new chats; not verified on AWS; see "Implementation status") | Depends on: F6 | Decisions: B18, B51, B51a, B55, B76, D16 (kept, per B61) | Specs: [`../specs/agents.md`](../specs/agents.md) §6 (Cross-Agent Mechanisms), [`../specs/api.md`](../specs/api.md) (`/models`, `/settings`), [`../specs/security.md`](../specs/security.md) (Model calls)
 
-Implementation note: Research reads the saved chat mode and forwards its resolved
+Implementation note (historical, before the 2026-11-10 status below): Research reads the saved chat mode and forwards its resolved
 model through its graph. Until account model discovery and the global blocklist are
 wired, Research accepts only its configured runtime default and rejects a different
 saved selection instead of silently ignoring it. The deployment configuration
@@ -73,3 +73,23 @@ Let a user pick any (non-blocklisted) Bedrock model per chat, set science/busine
 - F14 (Analysis agent) and F17 (Pipeline Manager), once built, must call `get_model()` the same way this phase establishes for Research/Drafting — no new mechanism needed, just the same call-site pattern.
 - F18 (User API keys) extends the same `UserMetadataTable` this phase starts using for `default_model_id`/`default_mode` — coordinate on the repository module (`shared/persistence/` — note if a `user_metadata.py` module is added here, so F18 extends it rather than duplicating it).
 - F21 (Hardening) should specifically re-review the Guardrail PII filter mode this phase ships as a placeholder default, since it is an explicitly open security item.
+
+## Implementation status (2026-11-10)
+
+- Blocklist: the built-in D3 patterns (`shared/config.py` `D3_BLOCKED_MODEL_PATTERNS`) merged with `CEI_BLOCKED_MODELS` (deploy config `blockedModelIds`). The env var reaches the runtimes, the Router, SessionMetadata, and ModelSettings.
+- Guardrail: `ModelGuardrail` is now in `BackendStack`. `get_model()` (`shared/utils.py`) attaches it through the Converse `guardrailConfig`, with trace disabled. Each runtime role gets `bedrock:ApplyGuardrail` on that one ARN.
+- Discovery: `shared/runtime/model_discovery.py` uses `ListFoundationModels`, `ListInferenceProfiles`, and `GetInferenceProfile`.
+- Routes: the new `models-settings-handler` Lambda (`constructs/model-settings.ts`) serves `GET /models` and `GET`/`PUT /settings`. The new UserMetadataTable holds `default_model_id` and `default_mode`.
+- Sessions: `POST /sessions` validates `model_id` against discovery and the blocklist (fail closed). `PATCH /sessions/{id}` still accepts only `title` and `mode`.
+- Frontend: a model picker for new chats only; it locks after the chat starts. The Settings page edits the defaults.
+- Inference IAM stays Anthropic-only. A discovered non-Anthropic model can show in the list but fail at run time.
+- Not built: prompt caching (`cachePoint`). Gap: the saved `default_model_id`/`default_mode` are stored, but no code applies them to a new chat yet.
+
+## Needs live AWS verification
+
+- `GET /models` returns the real account model list, with blocked models removed.
+- `PUT /settings` then `GET /settings` round-trip on the deployed UserMetadataTable.
+- `POST /sessions` with a not-available `model_id` returns `400`.
+- The Guardrail masks synthetic PII in user input, and does not mask tool results or model output.
+- No Guardrail ID or model ID shows in a trace or error payload.
+- A chat that uses a non-default Anthropic model runs end to end.
