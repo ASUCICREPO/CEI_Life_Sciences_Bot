@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from urllib.parse import parse_qs, urlsplit
 import boto3
 import pytest
 from moto import mock_aws
@@ -40,6 +41,15 @@ def test_review_required_and_s3_intelligent_tiering(repository):
     assert s3.head_object(Bucket="cei-export-test", Key=item["s3_key"])["StorageClass"] == "INTELLIGENT_TIERING"
     assert repo.get("bob", item["export_id"]) is None
     assert repo.get("alice", item["export_id"])["turn_id"] == "turn-1"
+    query = parse_qs(urlsplit(repo.download_url(item)).query)
+    assert query["response-content-disposition"] == ["attachment; filename*=UTF-8''report.pdf"]
+
+
+def test_export_rejects_header_control_characters(repository):
+    repo, _ = repository
+    with pytest.raises(ValueError):
+        repo.save(user_id="alice", session_id=S1, turn_id="t1", filename="bad\r\nname.pdf",
+                  format="pdf", data=b"report", reviewed=True)
 
 
 def test_strongly_consistent_session_pagination_and_deletion(repository):

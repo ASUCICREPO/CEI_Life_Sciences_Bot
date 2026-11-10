@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import boto3
@@ -40,7 +41,9 @@ class ExportRepository:
             raise ValueError("review acknowledgment is required")
         if not user_id or not is_session_uuid(session_id) or not turn_id:
             raise ValueError("owner, session and turn are required")
-        if format not in _FORMATS or not isinstance(data, bytes) or not filename or "/" in filename or "\\" in filename:
+        if (format not in _FORMATS or not isinstance(data, bytes) or not isinstance(filename, str)
+                or not 1 <= len(filename) <= 255 or "/" in filename or "\\" in filename
+                or any(ord(char) < 32 or ord(char) == 127 for char in filename)):
             raise ValueError("invalid export")
         export_id = f"{session_id.lower()}_{uuid4().hex}"
         # Neither the client-provided filename nor the user ID is needed in the object key.
@@ -85,7 +88,12 @@ class ExportRepository:
                     next_key=result.get("LastEvaluatedKey"))
 
     def download_url(self, item: dict[str, Any]) -> str:
-        return self._s3.generate_presigned_url("get_object", Params={"Bucket": self._bucket, "Key": item["s3_key"]},
+        filename = item.get("filename")
+        if not isinstance(filename, str) or not 1 <= len(filename) <= 255 or any(ord(char) < 32 or ord(char) == 127 for char in filename):
+            raise ValueError("invalid export filename")
+        disposition = "attachment; filename*=UTF-8''" + quote(filename, safe="")
+        return self._s3.generate_presigned_url("get_object", Params={"Bucket": self._bucket, "Key": item["s3_key"],
+                                                                  "ResponseContentDisposition": disposition},
                                                ExpiresIn=900)
 
     def delete(self, user_id: str, export_id: str) -> None:
