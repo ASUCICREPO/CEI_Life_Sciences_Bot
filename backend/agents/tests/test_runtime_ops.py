@@ -20,11 +20,11 @@ from shared.runtime import (
     parse_op,
     resume_value,
 )
-from shared.tools.hitl.inline_functions import InlineFunctionRegistry, PlanStepInput
+from shared.tools.hitl.inline_functions import PlanStepInput, build_plan_approval_surface
 
 
 def _plan_surface() -> dict:
-    return InlineFunctionRegistry()._request_plan_approval(
+    return build_plan_approval_surface(
         plan_summary="Two steps",
         steps=[PlanStepInput(title="Research", description="Find sources")],
     )

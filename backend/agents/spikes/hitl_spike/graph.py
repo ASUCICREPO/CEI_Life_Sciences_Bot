@@ -8,7 +8,7 @@ from langgraph.types import Command, interrupt
 
 from shared.memory.agentcore import build_invocation_config
 from shared.runtime.ops import PendingInterrupts, check_resume, parse_action, resume_value
-from shared.tools.hitl.inline_functions import InlineFunctionRegistry
+from shared.tools.hitl.inline_functions import build_ask_user_question_surface
 
 
 class State(TypedDict, total=False):
@@ -19,7 +19,8 @@ class State(TypedDict, total=False):
 
 
 def _ask(state: State) -> dict:
-    surface = InlineFunctionRegistry()._ask_user_question(state["question"], state["options"])
+    # ADR: use the pure builder, not the tool method | the tool method already interrupts itself (F13)
+    surface = build_ask_user_question_surface(state["question"], state["options"])
     return {"answer": interrupt(surface)}
 
 

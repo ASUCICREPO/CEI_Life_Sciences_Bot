@@ -25,7 +25,7 @@ from shared.runtime.durable_jobs import active_job_store
 from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
-from shared.tools.hitl.inline_functions import InlineFunctionRegistry, PlanStepInput
+from shared.tools.hitl.inline_functions import PlanStepInput, build_plan_approval_surface
 from shared.utils import extract_tokens, get_model, last_human_message
 
 logger = logging.getLogger(__name__)
@@ -173,7 +173,7 @@ def approve(state: PipelineState) -> dict[str, Any]:
         )
         for step in plan_obj.steps
     ]
-    surface = InlineFunctionRegistry()._request_plan_approval(plan_obj.summary, steps_input)
+    surface = build_plan_approval_surface(plan_obj.summary, steps_input)
     decision = interrupt(surface)
     approved = _decision_action_id(decision) == "approve-plan"
     logger.info({"event": "approve_complete", "approved": approved})
