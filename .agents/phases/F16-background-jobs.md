@@ -61,6 +61,15 @@ Let a run that will take more than 15 minutes finish as a background job instead
 - Token TTL vs. long async sessions (up to 8h) is flagged in `auth-and-tool-scope.md` §8 as unresolved beyond B67's basic refresh mechanism — B67 covers the common case (refresh before expiry); this phase should confirm the refresh endpoint is called on a schedule that comfortably beats the 1-hour TTL, but the exact refresh cadence is a **Proposal (not decided)** — propose refreshing at 45 minutes into a 60-minute token life.
 - Long HITL waits inside an async job (checkpoint, stop session, resume in a new session after approval, per B25) depend on F13's checkpoint mechanism; if F13 has not landed, this phase can build the async-session plumbing but cannot fully test the pause-resume-within-async-job path end to end.
 
+## Implementation status (2026-11-10)
+Built on `complete-cei-workflows` (statically reviewed; tests and deployment pending in CodeBuild):
+- Job ID Store `shared/persistence/jobs.py` and CDK `constructs/background-jobs.ts`: PK `user_id`, SK `job_id` (time-ordered `job_<ms>_<hex>`), KEYS_ONLY `status-updated_at` index. Every transition is conditional; terminal jobs never change; cancellation beats a late completion; step updates write only their own step; `progress_pct` is derived on read.
+- Polling Lambda `lambdas/jobs-handler` with `GET /jobs`, `GET /jobs/{jobId}`, `POST /jobs/{jobId}/cancel`. Cancel sets the flag, makes a best-effort `StopRuntimeSession` with the caller's own bearer token (the runtimes accept only SPA user tokens), finalizes `cancelled` and frees the slot.
+- Watchdog `lambdas/watchdog` every 5 minutes: fails running jobs with no write for 600 s and pending jobs older than 3600 s, conditional on no newer write, and frees their slot (the counter-leak repair). Checkpoint requeue is coded but disabled (`CEI_WATCHDOG_RESUME_ENABLED=false`, B102).
+- Single background slot (`ActiveRunRepository.acquire_background`, 9-hour lease).
+- Token refresh accepts `job_id` + `user_id`: authorized by the runtime role allowlist and a running, uncancelled job for that user and session; scopes come from the job record.
+Still open: the `async_task.py` rewrite and the 600 s estimate handoff for Research/Drafting/Analysis (B79/B100), and every S3 proof (one-hour run, HealthyBusy, hard cancel, recovery, redeploy). The `StopRuntimeSession` data-plane path `/runtimes/{arn}/stopruntimesession` must be confirmed live.
+
 ## Handoff notes
 - F17 (Pipeline Manager) is the primary consumer of this phase's "always async" path and the `/jobs` polling contract that its `/pipeline` UI will read from.
 - F19 (data deletion) must be able to find and stop any in-flight job for a user being deleted — coordinate the Job ID Store's `user_id` PK with F19's account-delete cascade.
