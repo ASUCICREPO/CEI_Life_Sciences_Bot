@@ -8,9 +8,12 @@ phases:
     commands:
       - cd "$CODEBUILD_SRC_DIR/backend" && npm ci
       - cd "$CODEBUILD_SRC_DIR/frontend" && npm ci
+      - python3 -m pip install --quiet uv
+      - cd "$CODEBUILD_SRC_DIR/backend/agents" && uv sync --frozen
   build:
     commands:
       - cd "$CODEBUILD_SRC_DIR/frontend" && npm test
       - cd "$CODEBUILD_SRC_DIR/frontend" && npm run build
       - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
       - cd "$CODEBUILD_SRC_DIR/backend" && npm test -- --runInBand
+      - cd "$CODEBUILD_SRC_DIR/backend/agents" && AWS_EC2_METADATA_DISABLED=true .venv/bin/python -m pytest tests -q
