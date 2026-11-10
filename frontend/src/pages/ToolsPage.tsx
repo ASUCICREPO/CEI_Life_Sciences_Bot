@@ -58,7 +58,6 @@ const ncbiToolIcon: Record<NcbiToolId, typeof Dna> = {
 
 export function ToolsPage() {
   const { reportTourEvent } = useProductTour();
-  const { getAccessToken } = useAuth();
   const sessionsClient = useSessionsClient();
   const [selectedNcbiToolId, setSelectedNcbiToolId] = useState<NcbiToolId | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState<ToolSourceId | null>(null);
@@ -123,7 +122,6 @@ export function ToolsPage() {
 
     try {
       // Create a fresh session for this tool query so it appears in chat history
-      const sessionId = startNewSessionId(`tools-${source.id}`);
       const created = await sessionsClient.createSession({
         title: `${source.name}: ${query.slice(0, 80)}`,
         mode: 'science',
