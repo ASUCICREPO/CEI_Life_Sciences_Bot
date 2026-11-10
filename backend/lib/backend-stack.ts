@@ -232,7 +232,7 @@ export class BackendStack extends cdk.Stack {
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
       "font-src 'self'",
-      "img-src 'self' data:",
+      "img-src 'self' data: https:",
       `connect-src 'self' https://${cognitoIdpHost} ${cognitoDomainUrl} ${apiOrigin} ${agentProxyOriginPattern}`,
       "frame-ancestors 'none'",
       "object-src 'none'",

@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
-import { ProvenanceTrail } from '../design-system';
+
 import { useProductTour } from '../components/tour/ProductTour';
 import { NcbiToolCard } from '../components/NcbiToolCard';
 import { ncbiTools } from '../mocks/ncbiTools';
@@ -25,14 +25,10 @@ import {
 } from '../mocks/tools';
 import type { ToolSource, ToolSourceId } from '../mocks/tools';
 import { Dna, GitBranch, ListTree } from 'lucide-react';
-import {
-  AgentClientError,
-  getOrCreateSessionId,
-  invokeAgent,
-  type AgentEnvelope,
-} from '../lib/agentClient';
-import { CEIUISurface } from '../components/cei-ui/cei-ui-surface';
-import { SafeMarkdown } from '../components/cei-ui/markdown';
+import { startNewSessionId } from '../lib/agentClient';
+import { StreamingSurface } from '../components/streaming/StreamingSurface';
+import { useAuth } from '../lib/auth/AuthProvider';
+import { useSessionsClient } from '../lib/useSessions';
 
 type RunState = 'idle' | 'running' | 'success' | 'error';
 
@@ -62,12 +58,15 @@ const ncbiToolIcon: Record<NcbiToolId, typeof Dna> = {
 
 export function ToolsPage() {
   const { reportTourEvent } = useProductTour();
+  const { getAccessToken } = useAuth();
+  const sessionsClient = useSessionsClient();
   const [selectedNcbiToolId, setSelectedNcbiToolId] = useState<NcbiToolId | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState<ToolSourceId | null>(null);
   const [query, setQuery] = useState('');
   const [runState, setRunState] = useState<RunState>('idle');
   const [stageIndex, setStageIndex] = useState(0);
-  const [agentResponse, setAgentResponse] = useState<AgentEnvelope | null>(null);
+  const [streamBody, setStreamBody] = useState<Record<string, unknown> | null>(null);
+  const [streamSessionId, setStreamSessionId] = useState<string | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const timers = useRef<number[]>([]);
 
@@ -89,7 +88,8 @@ export function ToolsPage() {
     setQuery(nextSource.example);
     setRunState('idle');
     setStageIndex(0);
-    setAgentResponse(null);
+    setStreamBody(null);
+    setStreamSessionId(null);
     setAgentError(null);
     reportTourEvent({ type: 'TOOL_SOURCE_SELECTED', id: nextSource.id });
   };
@@ -100,7 +100,8 @@ export function ToolsPage() {
     setQuery('');
     setRunState('idle');
     setStageIndex(0);
-    setAgentResponse(null);
+    setStreamBody(null);
+    setStreamSessionId(null);
     setAgentError(null);
   };
 
@@ -110,32 +111,38 @@ export function ToolsPage() {
     clearTimers();
     setRunState('running');
     setStageIndex(0);
-    setAgentResponse(null);
+    setStreamBody(null);
+    setStreamSessionId(null);
     setAgentError(null);
 
-    // Animate the stages while the real request is in-flight
+    // Animate the stages while the session is being created
     const stageInterval = window.setInterval(() => {
       setStageIndex((prev) => Math.min(prev + 1, 3));
     }, 2500);
     timers.current.push(stageInterval);
 
     try {
-      const sessionId = getOrCreateSessionId(`tools-${source.id}`);
-      const result = await invokeAgent(
-        'research',
-        { prompt: `Using ${source.name} only: ${query}`, mode: 'science' },
-        sessionId,
-      );
+      // Create a fresh session for this tool query so it appears in chat history
+      const sessionId = startNewSessionId(`tools-${source.id}`);
+      const created = await sessionsClient.createSession({
+        title: `${source.name}: ${query.slice(0, 80)}`,
+        mode: 'science',
+      });
       clearTimers();
-      setStageIndex(4);
-      setAgentResponse(result);
+      const runId = crypto.randomUUID();
+      setStreamSessionId(created.session_id);
+      setStreamBody({
+        session_id: created.session_id,
+        run_id: runId,
+        message: `Using ${source.name} only: ${query}`,
+        task_type: 'live-research',
+        mode: 'science',
+      });
       setRunState('success');
       reportTourEvent({ type: 'TOOLS_RUN_COMPLETED' });
-    } catch (err) {
+    } catch (_err) {
       clearTimers();
-      const message =
-        err instanceof AgentClientError ? err.message : 'The search could not be completed. Try again.';
-      setAgentError(message);
+      setAgentError('Could not start the search. Make sure you are signed in and try again.');
       setRunState('error');
     }
   };
@@ -385,42 +392,20 @@ export function ToolsPage() {
           </section>
         )}
 
-        {runState === 'success' && agentResponse && (
+        {runState === 'success' && streamBody && streamSessionId && (
           <div data-tour="tools-results" className="space-y-5">
-            {agentResponse.ui ? (
-              <section className="rounded-xl border border-border-subtle bg-surface-elevated shadow-sm overflow-hidden">
-                <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-success">Search complete \u00b7 live data</p>
-                    <h2 className="text-sm font-semibold text-text-primary mt-1">{source.name} results</h2>
-                  </div>
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-success-bg px-2.5 py-1 text-xs font-medium text-success"><Check size={12} /> Live data</span>
+            <section className="rounded-xl border border-border-subtle bg-surface-elevated shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-success">Search complete · live data</p>
+                  <h2 className="text-sm font-semibold text-text-primary mt-1">{source.name} results</h2>
                 </div>
-                <div className="p-5"><CEIUISurface surface={agentResponse.ui} agent="research" sessionId={getOrCreateSessionId(`tools-${source.id}`)} /></div>
-              </section>
-            ) : (
-              <section className="rounded-xl border border-border-subtle bg-surface-elevated p-5 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-success">Search complete \u00b7 live data</p>
-                    <h2 className="text-sm font-semibold text-text-primary mt-1">{source.name} results</h2>
-                  </div>
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-success-bg px-2.5 py-1 text-xs font-medium text-success"><Check size={12} /> Live data</span>
-                </div>
-                <div className="prose prose-sm max-w-none text-text-primary">
-                  <SafeMarkdown content={agentResponse.text} />
-                </div>
-              </section>
-            )}
-            <ProvenanceTrail
-              steps={[
-                { id: 'interpret', action: 'Interpreted request', source: 'Research agent', detail: `Mapped the request to ${source.name} capabilities.`, duration: '', icon: 'compute' as const },
-                { id: 'query', action: 'Executed live query', source: source.name, detail: `Retrieved results from ${source.name} in real time.`, duration: '', icon: 'search' as const },
-                { id: 'normalize', action: 'Grounded and cited', source: 'Citation engine', detail: 'Every claim is backed by a source record with retrieval context.', duration: '', icon: 'database' as const },
-              ]}
-              totalDuration=""
-              defaultExpanded
-            />
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-success-bg px-2.5 py-1 text-xs font-medium text-success"><Check size={12} /> Live data</span>
+              </div>
+              <div className="p-5">
+                <StreamingSurface sessionId={streamSessionId} agent="research" body={streamBody} />
+              </div>
+            </section>
           </div>
         )}
       </div>
