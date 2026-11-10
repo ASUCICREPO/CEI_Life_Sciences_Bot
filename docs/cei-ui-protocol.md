@@ -1,6 +1,6 @@
 # CEI UI Protocol 1.1
 
-CEI UI is the implemented protocol for rich agent responses. It uses a small component catalog and deterministic presenters. The current implementation returns completed JSON responses. It does not provide a production streaming route or a LangGraph pause and resume flow.
+CEI UI is the implemented protocol for rich agent responses. It uses a small component catalog and deterministic presenters. The 1.1 contract describes completed JSON responses. The streaming route and the pause and resume flow are described in "Transport Status" and "CEI UI 1.2 progressive streaming" below.
 
 Version 1.1 adds six components (`Table`, `StatGrid`, `Callout`, `Timeline`, `Comparison`, `Artifact`) so research and drafting answers can look like a rich document instead of one block of prose. 1.1 is additive: every 1.0 surface stays valid, and no 1.0 field or component changed meaning.
 
@@ -307,14 +307,17 @@ The helper emits complete CEI UI surfaces as `ui_surface` events. It does not im
 
 - Drafting, Analysis, and Pipeline Manager return completed JSON with optional `ui` (version `1.1`).
 - Research can stream CEI UI 1.2 events over `POST /chat/stream` (Session Runner). The SPA uses this stream only when `/config.json` has `researchStreamingEnabled: true`.
-- Typed actions go to `POST /ui-actions` (UiActions Lambda, STREAM mode). It checks session ownership and resumes the owning agent. Today only Analysis and Pipeline Manager pause and resume.
+- On `/chat/stream`, the Session Runner changes the buffered envelope of Drafting, Analysis, or Pipeline Manager into 1.2 events (F9): `surface_begin`, one `component_add` per component (parent first), then `surface_end` with `final: true`. A buffered `awaiting_input` envelope becomes `surface_begin` and one terminal `hitl_request`.
+- Typed actions go to `POST /ui-actions` (UiActions Lambda, STREAM mode). It checks session ownership and resumes the owning agent. Research (clarifying question), Drafting (outline approval), Analysis (scope), and Pipeline Manager (plan) pause and resume (F13). A resume returns ONE JSON envelope (`status`, `text`, optional `ui`, `action_response`), not SSE.
+- **Stream HITL (F13).** When Research pauses on the stream path, `main.py` ends the stream with a terminal `hitl_request` that holds the question surface. There is no `surface_end` after it. The SPA renders this card and the user can answer it. The answer goes to `POST /ui-actions`.
+- **Router ChoicePicker (F9, B80).** When the free-text classifier confidence is below 0.7, the stream holds `surface_begin` and one terminal `hitl_request`. The surface (`version: "1.1"`, `surface_id` `router-choice-<run_id>`, `revision` 1) has one `ChoicePicker` with `id` and `interaction_id` `router-choice`, `multi: false`, and 4 options: `research`, `drafting`, `analysis`, `pipeline_manager`. Its action is `action_id: route-choice`. The user's pick goes to `POST /ui-actions` with the option value as `value`. The pending choice expires after 600 seconds. Then the action returns `status: rejected`.
 - Production authentication (Cognito) and history persistence exist.
 
-Still planned: pause and resume for Research and Drafting (F13), durable checkpoints for the agents other than Research, and streaming for the agents other than Research.
+Still planned: durable checkpoints for the agents other than Research, and progressive (token-by-token) streaming for the agents other than Research. The free-text input in the SPA is in progress. All F9 and F13 transport behavior still needs live AWS verification.
 
 ## CEI UI 1.2 progressive streaming
 
-**Status: Partly built.** The Research runtime emits `version: "1.2"` events (`backend/agents/shared/streaming/research.py`). The frontend accepts `"1.0"`, `"1.1"`, and `"1.2"` (`frontend/src/lib/stream/events.ts`). The other agents do not stream yet. This section does not change anything above. The 1.1 contract in this document — the component allowlist, structural limits, artifact security model, grounding rules, and action contract — stays exactly as written and applies unchanged to 1.2.
+**Status: Partly built.** The Research runtime emits `version: "1.2"` events (`backend/agents/shared/streaming/research.py`). The frontend accepts `"1.0"`, `"1.1"`, and `"1.2"` (`frontend/src/lib/stream/events.ts`). The other agents do not stream progressively yet; the Session Runner sends their completed surface as 1.2 events (F9). This section does not change anything above. The 1.1 contract in this document — the component allowlist, structural limits, artifact security model, grounding rules, and action contract — stays exactly as written and applies unchanged to 1.2.
 
 CEI UI 1.2 adds a transport-level addition only: progressive SSE patch events, so the client can build the answer while the agent is still working instead of receiving one completed surface at the end. Servers emit `version: "1.2"` on new streams; clients and stored history accept `"1.0"`, `"1.1"`, and `"1.2"`. A fully replayed 1.2 stream produces the same `CEIUISurface` object that 1.1 produces today — only the `version` string differs.
 
