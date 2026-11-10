@@ -1,0 +1,37 @@
+# Deletion cascade foundation
+
+This is a testable orchestration contract, **not a deployed Lambda**. The file has
+no Lambda entry point or production adapters and must not be connected to an SQS
+event source yet. Attachment and RAG cleanup are deferred by the user.
+
+Before activating either deletion route:
+
+1. Authenticate with the Cognito authorizer and derive the user solely from its
+   verified claims. Verify session ownership. Atomically write an account/chat
+   deletion fence and an owner-bound deletion job to durable storage. Use an
+   outbox/stream or equivalent retryable dispatcher so a crash between marking
+   and enqueueing cannot strand a job. The queue carries only `job_id`.
+2. Make every session, turn, replay, export, memory and job writer atomically
+   reject a fenced chat/account. Cancel active jobs, stop AgentCore sessions, and
+   confirm quiescence; initiating cancellation is insufficient. Account deletion
+   must fence the account before listing sessions so no new sessions can appear.
+3. Implement the `DeletionBackend` operations using the actual storage schemas.
+   Each must handle pagination, retries and already-deleted data and raise on
+   any unprocessed item, missing adapter or uncertain result. Remove S3 export
+   objects before their metadata. Include ordinary history and all replay-indexed
+   partitions, AgentCore short-term checkpoints, and session metadata last.
+4. Account deletion additionally removes both long-term memory namespaces, user
+   API keys, user metadata, active-run records, and the Cognito user. Ensure
+   asynchronous Secrets Manager deletion meets the intended deletion semantics.
+   Never delete user-scoped memory or secrets for a chat-only deletion.
+5. `complete_job` must use a conditional, owner-bound state transition and retain
+   an idempotency tombstone; completion must never be reported when an adapter is
+   unavailable or an underlying operation fails. Configure SQS partial batch
+   responses, redrive/DLQ, alarms, scoped IAM and reconciliation for stalled jobs.
+6. Only then expose `DELETE /sessions/{sessionId}` and `POST /account/delete`,
+   returning 202 after the fence and durable job are committed. Add deployed
+   tests for pagination, crashes at each step, SQS redelivery, duplicate requests,
+   concurrent writes, cancellation, cross-user access, and missing dependencies.
+
+`process` assumes the backend supplies a trusted job and a deletion fence covering
+its owner and scope. The current implementation does not itself provide either.
