@@ -246,7 +246,8 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
       surface: envelope.ui,
       uiError: envelope.ui_error,
       isError: isError || failed,
-      routedAgent: typeof routedValue === 'string' ? agentForAgentType(routedValue) ?? undefined : undefined,
+      // Only label a successful resume: an expired/stale pick never ran the named agent.
+      routedAgent: !failed && typeof routedValue === 'string' ? agentForAgentType(routedValue) ?? undefined : undefined,
     }]);
     if (envelope.job_id) {
       setJobSession(envelope.job_id, sessionId);
