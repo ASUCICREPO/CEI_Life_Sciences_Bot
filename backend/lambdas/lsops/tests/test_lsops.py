@@ -1,4 +1,7 @@
 from types import SimpleNamespace
+import inspect
+import json
+from pathlib import Path
 
 import pytest
 
@@ -6,7 +9,19 @@ import chemistry
 import lab_calculations as lab
 import protein_primer
 import sequence_basics as seq
-from handler import handler
+from handler import OPERATIONS, handler
+
+
+def test_gateway_schemas_match_all_operation_signatures():
+    schemas = json.loads((Path(__file__).parents[1] / "tool-schemas.json").read_text())
+    assert {schema["name"] for schema in schemas} == set(OPERATIONS)
+    assert len(schemas) == len(OPERATIONS) == 20
+    for schema in schemas:
+        parameters = inspect.signature(OPERATIONS[schema["name"]]).parameters
+        assert set(schema["inputSchema"]["properties"]) == set(parameters)
+        assert set(schema["inputSchema"]["required"]) == {
+            name for name, param in parameters.items() if param.default is inspect.Parameter.empty
+        }
 
 
 def test_sequence_operations_and_frames():

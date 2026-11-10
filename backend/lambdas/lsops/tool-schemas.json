@@ -1,0 +1,421 @@
+[
+  {
+    "name": "validate_sequence",
+    "description": "Validate an IUPAC DNA, RNA or protein sequence.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Sequence alphabet: dna, rna or protein as supported by the operation."
+        }
+      },
+      "required": [
+        "seq"
+      ]
+    }
+  },
+  {
+    "name": "transcribe",
+    "description": "Transcribe DNA into RNA.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        }
+      },
+      "required": [
+        "seq"
+      ]
+    }
+  },
+  {
+    "name": "reverse_complement",
+    "description": "Calculate a DNA or RNA reverse complement.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Sequence alphabet: dna, rna or protein as supported by the operation."
+        }
+      },
+      "required": [
+        "seq"
+      ]
+    }
+  },
+  {
+    "name": "translate",
+    "description": "Translate DNA in one of six frames using a specified genetic code.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        },
+        "frame": {
+          "type": "integer",
+          "description": "Reading frame 1 through 6; 4 through 6 are reverse complement."
+        },
+        "table": {
+          "type": "integer",
+          "description": "NCBI genetic code table ID."
+        }
+      },
+      "required": [
+        "seq"
+      ]
+    }
+  },
+  {
+    "name": "orf_finder",
+    "description": "Find complete open reading frames with start and stop codons.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        },
+        "min_codons": {
+          "type": "integer",
+          "description": "Minimum coding length in codons excluding stop."
+        },
+        "table": {
+          "type": "integer",
+          "description": "NCBI genetic code table ID."
+        }
+      },
+      "required": [
+        "seq"
+      ]
+    }
+  },
+  {
+    "name": "gc_content",
+    "description": "Calculate GC fraction.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Sequence alphabet: dna, rna or protein as supported by the operation."
+        }
+      },
+      "required": [
+        "seq"
+      ]
+    }
+  },
+  {
+    "name": "composition",
+    "description": "Count sequence symbols.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Sequence alphabet: dna, rna or protein as supported by the operation."
+        }
+      },
+      "required": [
+        "seq"
+      ]
+    }
+  },
+  {
+    "name": "protein_properties",
+    "description": "Calculate protein molecular weight, isoelectric point, extinction coefficient and GRAVY.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        }
+      },
+      "required": [
+        "seq"
+      ]
+    }
+  },
+  {
+    "name": "primer_tm",
+    "description": "Estimate primer melting temperature with nearest-neighbor defaults.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        }
+      },
+      "required": [
+        "seq"
+      ]
+    }
+  },
+  {
+    "name": "primer_hairpin_dimer",
+    "description": "Calculate primer hairpin and dimer thermodynamics.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        },
+        "other_seq": {
+          "type": "string",
+          "description": "Optional second primer sequence."
+        }
+      },
+      "required": [
+        "seq"
+      ]
+    }
+  },
+  {
+    "name": "restriction_sites",
+    "description": "Identify restriction enzyme cut sites.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "string",
+          "description": "Sequence text."
+        },
+        "enzymes": {
+          "type": "array",
+          "description": "Restriction enzyme names, such as EcoRI.",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "seq",
+        "enzymes"
+      ]
+    }
+  },
+  {
+    "name": "validate_structure",
+    "description": "Validate a SMILES or InChI structure.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {
+          "type": "string",
+          "description": "SMILES or InChI text."
+        },
+        "format": {
+          "type": "string",
+          "description": "Input format; smiles or inchi for chemistry, fasta or genbank for parsing."
+        }
+      },
+      "required": [
+        "structure"
+      ]
+    }
+  },
+  {
+    "name": "molecular_descriptors",
+    "description": "Calculate molecular weight, LogP, TPSA, donors and acceptors.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {
+          "type": "string",
+          "description": "SMILES or InChI text."
+        },
+        "format": {
+          "type": "string",
+          "description": "Input format; smiles or inchi for chemistry, fasta or genbank for parsing."
+        }
+      },
+      "required": [
+        "structure"
+      ]
+    }
+  },
+  {
+    "name": "lipinski_check",
+    "description": "Check Lipinski Rule of Five violations.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {
+          "type": "string",
+          "description": "SMILES or InChI text."
+        },
+        "format": {
+          "type": "string",
+          "description": "Input format; smiles or inchi for chemistry, fasta or genbank for parsing."
+        }
+      },
+      "required": [
+        "structure"
+      ]
+    }
+  },
+  {
+    "name": "tanimoto_similarity",
+    "description": "Calculate Morgan fingerprint Tanimoto similarity.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure_a": {
+          "type": "string",
+          "description": "First structure."
+        },
+        "structure_b": {
+          "type": "string",
+          "description": "Second structure."
+        },
+        "format": {
+          "type": "string",
+          "description": "Input format; smiles or inchi for chemistry, fasta or genbank for parsing."
+        }
+      },
+      "required": [
+        "structure_a",
+        "structure_b"
+      ]
+    }
+  },
+  {
+    "name": "molarity",
+    "description": "Calculate molarity from mass, molecular weight and volume.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mass_g": {
+          "type": "number",
+          "description": "Mass in grams."
+        },
+        "molecular_weight_g_mol": {
+          "type": "number",
+          "description": "Molecular weight in g/mol."
+        },
+        "volume_l": {
+          "type": "number",
+          "description": "Volume in liters."
+        }
+      },
+      "required": [
+        "mass_g",
+        "molecular_weight_g_mol",
+        "volume_l"
+      ]
+    }
+  },
+  {
+    "name": "dilution",
+    "description": "Calculate a dilution using C1V1=C2V2.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "stock_concentration": {
+          "type": "number",
+          "description": "Stock concentration, in the same unit as target concentration."
+        },
+        "target_concentration": {
+          "type": "number",
+          "description": "Target concentration, in the same unit as stock concentration."
+        },
+        "final_volume": {
+          "type": "number",
+          "description": "Final volume, in any unit used consistently."
+        }
+      },
+      "required": [
+        "stock_concentration",
+        "target_concentration",
+        "final_volume"
+      ]
+    }
+  },
+  {
+    "name": "unit_convert",
+    "description": "Convert compatible mass, volume, amount or concentration units.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "number",
+          "description": "Nonnegative number to convert."
+        },
+        "from_unit": {
+          "type": "string",
+          "description": "Input unit."
+        },
+        "to_unit": {
+          "type": "string",
+          "description": "Output unit."
+        }
+      },
+      "required": [
+        "value",
+        "from_unit",
+        "to_unit"
+      ]
+    }
+  },
+  {
+    "name": "hgvs_check",
+    "description": "Check HGVS syntax without verifying the reference sequence.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "variant": {
+          "type": "string",
+          "description": "HGVS notation to parse; syntax only."
+        }
+      },
+      "required": [
+        "variant"
+      ]
+    }
+  },
+  {
+    "name": "parse_fasta_genbank",
+    "description": "Parse FASTA or GenBank sequence text.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "FASTA or GenBank text."
+        },
+        "format": {
+          "type": "string",
+          "description": "Input format; smiles or inchi for chemistry, fasta or genbank for parsing."
+        }
+      },
+      "required": [
+        "content"
+      ]
+    }
+  }
+]
