@@ -15,6 +15,7 @@ sys.path.insert(0, str(LAMBDAS / "shared"))
 spec = importlib.util.spec_from_file_location("export_handler", LAMBDAS / "exports-handler" / "handler.py")
 handler = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(handler)
+sys.path.remove(str(LAMBDAS / "shared"))
 
 SESSION = "6f1c2d3e-0000-4000-8000-000000000001"
 EXPORT = SESSION + "_" + "a" * 32

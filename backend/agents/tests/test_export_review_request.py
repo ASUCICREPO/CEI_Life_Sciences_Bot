@@ -13,6 +13,8 @@ sys.path.insert(0, str(LAMBDAS / "exports-handler"))
 
 from http_errors import ApiError
 from review_request import prepare_reviewed_export
+sys.path.remove(str(LAMBDAS / "exports-handler"))
+sys.path.remove(str(LAMBDAS / "shared"))
 from shared.persistence.chat_history import MessageRole
 from shared.persistence.page import Page
 
