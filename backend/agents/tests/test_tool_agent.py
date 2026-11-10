@@ -84,6 +84,24 @@ def test_ncbi_tools_require_gateway_and_call_only_named_targets(monkeypatch):
                      ("ncbi-sequence", "efetch", {"accession": "ABC123", "database": "protein", "format": "fasta"})]
 
 
+@pytest.mark.asyncio
+async def test_ncbi_graph_rejects_other_source_tools(monkeypatch):
+    from tool_agent import ncbi_tools as module
+    taxonomy, sequence = FakeTool("taxonomy"), FakeTool("sequence")
+    monkeypatch.setattr(module, "ncbi_tools", lambda: [taxonomy, sequence])
+
+    class NcbiModel(FakeModel):
+        def bind_tools(self, tools):
+            assert {item.name for item in tools} == {"taxonomy", "sequence"}
+            return self
+
+    graph = compile_graph(load_profile("ncbi"), InMemorySaver(), model=NcbiModel("taxonomy"))
+    result = await graph.ainvoke({"messages": [HumanMessage(content="question")], "tool_rounds": 0},
+                                 {"configurable": {"thread_id": "ncbi-session"}})
+    assert taxonomy.calls == [{"query": "x"}] and sequence.calls == []
+    assert "rejected" in result["messages"][-3].content
+
+
 def test_grant_must_match_user_session_and_exact_source():
     profile = load_profile("pubmed")
     class Verifier:
