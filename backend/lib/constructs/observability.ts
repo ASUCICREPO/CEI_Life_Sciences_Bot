@@ -102,15 +102,19 @@ export class Observability extends Construct {
       metricNamespace: 'CEI/Application', metricName: `${scope.node.id}-AgentApplicationErrors`, metricValue: '1',
     }).metric({ period: interval, statistic: 'Sum', label: 'Agent application errors' });
     dashboard.addWidgets(new cloudwatch.GraphWidget({ title: 'Agent application errors', left: [agentApplicationErrors] }));
-    // Initial threshold: five sanitized browser failure reports in five minutes.
+    // Dashboard only: B75 does not include a separate browser-failure alarm.
     const browser = new logs.MetricFilter(this, 'BrowserFailuresFilter', {
       logGroup: props.clientLogs, filterPattern: logs.FilterPattern.anyTerm('browser_failure'),
       metricNamespace: 'CEI/Application', metricName: `${scope.node.id}-BrowserFailures`, metricValue: '1',
     }).metric({ period: interval, statistic: 'Sum', label: 'Browser failures' });
-    alarm('BrowserFailuresSpike', browser, 5, 'Browser failures exceeded the starting threshold.');
     dashboard.addWidgets(new cloudwatch.GraphWidget({ title: 'Browser failures', left: [browser] }));
     // Starting security thresholds: 20 sign-up attempts or 5 policy denies in five minutes.
     const securityMetrics: cloudwatch.IMetric[] = [];
+    // TODO(F8): add a Guardrail intervention alarm after the production Guardrail
+    // and its verified metric are connected. The existing Guardrail construct is
+    // not wired to the application and has no traffic to monitor.
+    // TODO(F20): confirm the Gateway log schema in the deployed environment;
+    // the DENY filter below is provisional until a real policy denial is observed.
     for (const [name, logGroup, term, threshold] of [
       ['SignUpAttempts', props.signupLogs, 'pre_signup_domain_check', 20],
       ['PolicyDenials', props.gatewayLogs, 'DENY', 5],

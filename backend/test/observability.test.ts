@@ -59,6 +59,8 @@ describe('operational monitoring', () => {
     expect(filters.some((f) => f.Properties.FilterPattern.includes('agent_proxy_application_error'))).toBe(true);
     expect(filters.some((f) => f.Properties.FilterPattern.includes('cms_ncd_detail_error'))).toBe(true);
     expect(filters.some((f) => f.Properties.FilterPattern.includes('api_key_lookup_failed'))).toBe(true);
+    expect(filters.some((f) => f.Properties.FilterPattern.includes('ncbi_request_failed'))).toBe(true);
+    expect(filters.filter((f) => f.Properties.FilterPattern.includes('handled_api_failure')).length).toBeGreaterThanOrEqual(3);
     expect(filters.some((f) => f.Properties.FilterPattern.includes('DENY'))).toBe(true);
     const tables = Object.keys(template.findResources('AWS::DynamoDB::Table'));
     const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm')) as any[];
@@ -67,6 +69,13 @@ describe('operational monitoring', () => {
         m.MetricStat?.Metric?.Namespace === 'AWS/DynamoDB' && m.MetricStat.Metric.MetricName === 'ThrottledRequests' &&
         JSON.stringify(m.MetricStat.Metric.Dimensions).includes(table) &&
         m.MetricStat.Metric.Dimensions.some((d: any) => d.Name === 'Operation')))).toBe(true);
+    }
+  });
+
+  it('keeps browser and stale-job signals out of the alarm set', () => {
+    const alarms = Object.entries(template.findResources('AWS::CloudWatch::Alarm'));
+    for (const [id, alarm] of alarms as [string, any][]) {
+      expect(`${id} ${alarm.Properties.AlarmDescription ?? ''}`).not.toMatch(/browser|stale.?job|agent.?health/i);
     }
   });
 });

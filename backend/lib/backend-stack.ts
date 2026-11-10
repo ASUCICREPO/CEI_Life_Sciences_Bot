@@ -806,6 +806,8 @@ export class BackendStack extends cdk.Stack {
         AgentProxy: { logGroup: agentProxyLogGroup, terms: ['agent_proxy_failure', 'agent_proxy_invalid_json'] },
         SessionMetadata: { logGroup: sessionMetadata.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         SessionHistory: { logGroup: sessionHistory.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
+        Exports: { logGroup: exportsHandler.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
+        NcbiReadOnly: { logGroup: gateway.ncbiFunction.logGroup, terms: ['ncbi_request_failed'] },
         TokenRefresh: { logGroup: gateway.tokenRefreshFunction.logGroup, terms: ['token_endpoint_error', 'token_refresh_scope_mismatch', 'run_scopes_not_allowed', 'unhandled error'] },
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) =>
           [`Source${name}`, { logGroup: fn.logGroup, terms: ['upstream_error', 'exception', 'api_key_lookup_failed', ...(name === 'cmscoverage' ? ['cms_ncd_detail_error'] : [])] }])),
