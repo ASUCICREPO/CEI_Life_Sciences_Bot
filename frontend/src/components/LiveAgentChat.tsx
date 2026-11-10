@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Bot, Loader2, Send, User, Paperclip } from 'lucide-react';
+import { Bot, Loader2, Send, User } from 'lucide-react';
 import { CEIUISurface } from './cei-ui/cei-ui-surface';
 import { SafeMarkdown } from './cei-ui/markdown';
-import { FileUpload } from './FileUpload';
 import {
   AgentClientError,
   buildRunPayload,
@@ -388,17 +387,6 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
       <div className="border-t border-border-subtle bg-surface-elevated px-6 py-4 flex-shrink-0">
         <form id={formId} onSubmit={handleSend} className="max-w-2xl mx-auto">
           <div className="relative">
-            <div className="absolute left-2 top-2.5">
-              <FileUpload
-                sessionId={sessionId}
-                compact
-                disabled={isRunning || historyLoading}
-                onUploadComplete={(attachmentId, filename) => {
-                  // eslint-disable-next-line no-console
-                  console.log('Uploaded:', attachmentId, filename);
-                }}
-              />
-            </div>
             <textarea
               value={inputValue}
               onChange={(event) => setInputValue(event.target.value)}
@@ -411,7 +399,7 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
               rows={1}
               disabled={isRunning || historyLoading}
               placeholder={placeholder}
-              className="w-full resize-y pl-12 pr-12 py-3 rounded-xl border border-border-subtle bg-surface-panel text-sm placeholder:text-text-tertiary focus:border-cei-blue-light focus:ring-2 focus:ring-cei-blue-light/20 transition-all disabled:opacity-60"
+              className="w-full resize-y pl-4 pr-12 py-3 rounded-xl border border-border-subtle bg-surface-panel text-sm placeholder:text-text-tertiary focus:border-cei-blue-light focus:ring-2 focus:ring-cei-blue-light/20 transition-all disabled:opacity-60"
               aria-label={placeholder}
             />
             <button
