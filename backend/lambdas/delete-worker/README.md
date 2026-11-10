@@ -4,6 +4,17 @@ This is a testable orchestration contract, **not a deployed Lambda**. The file h
 no Lambda entry point or production adapters and must not be connected to an SQS
 event source yet. Attachment and RAG cleanup are deferred by the user.
 
+`shared.persistence.writer_fence.WriterFence` defines a proposed concrete gate:
+a DynamoDB table keyed by `(user_id, scope)` stores account/chat deletion gates
+and durable in-flight writer tokens. A writer atomically checks both gates and
+session existence while registering its token; report generation holds the token
+through the final storage write. A deletion gate must be installed before a
+strongly consistent query establishes quiescence. A token is never cleared just
+because time passed: recovery must establish that the runtime and all uncertain
+remote writes have stopped before releasing it. This foundation has no deployed
+table, job/outbox transaction, worker recovery adapter, or universal writer
+integration yet; it cannot by itself authorize either deletion route.
+
 Before activating either deletion route:
 
 1. Authenticate with the Cognito authorizer and derive the user solely from its

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -12,7 +13,8 @@ SESSION = "6f1c2d3e-0000-4000-8000-000000000001"
 
 
 def invoke(repository, **overrides):
-    args = {"repository": repository, "user_id": "alice", "session_id": SESSION, "turn_id": "turn-1",
+    fence = SimpleNamespace(writing=lambda *_: nullcontext())
+    args = {"repository": repository, "writer_fence": fence, "user_id": "alice", "session_id": SESSION, "turn_id": "turn-1",
             "reviewed": True, "format": "md", "title": "Report", "sections": [{"heading": "Results", "content": "Text"}]}
     return generate_reviewed_export(**(args | overrides))
 
@@ -22,6 +24,15 @@ def test_review_required_before_any_generation():
     factory = Mock()
     with pytest.raises(ValueError, match="review"):
         invoke(repo, reviewed=False, export_tool_factory=factory)
+    factory.assert_not_called()
+    repo.save.assert_not_called()
+
+
+def test_writer_fence_is_required_before_any_generation():
+    repo = Mock()
+    factory = Mock()
+    with pytest.raises(ValueError, match="writer fence"):
+        invoke(repo, writer_fence=None, export_tool_factory=factory)
     factory.assert_not_called()
     repo.save.assert_not_called()
 
