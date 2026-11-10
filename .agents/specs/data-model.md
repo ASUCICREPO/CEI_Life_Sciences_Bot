@@ -147,7 +147,7 @@ Attributes (planned): `active_realtime_runs` (integer, max 2 per B22), `active_b
 | Static site bucket | Hosts the built frontend | CloudFront origin, private, OAC | F2 |
 | Attachments bucket | User uploads | Presigned POST with a `content-length-range` condition capping uploads at 55 MB (B32); key scheme proposal: `{user_id}/{session_id}/{file_id}/{filename}`; SQS-triggered processing (existing `AttachmentProcessor` role in `docs/architectureDeepDive.md`) | F10 |
 | KB source / S3 Vectors bucket | Bedrock Knowledge Base source documents and the S3 Vectors index (B33) | Every chunk carries `user_id`, `session_id`, `file_id` metadata; every retrieval filters on this metadata | S5, F10 |
-| Export outputs bucket | Holds generated PDF/DOCX/MD/CSV/LaTeX/TXT files (B41) before a presigned download, produced either by an agent during a run or by a user-triggered export request (B74) | Exists (partial) as local files today (`shared/tools/export.py` writes to `output_dir` on local disk); production needs an S3 bucket with short-lived presigned GET URLs. Download URL TTL is decided: 15 minutes (B78). Proposal (not decided): bucket name and key scheme. | F7 |
+| Export outputs bucket | Holds generated PDF/DOCX/MD/CSV/LaTeX/TXT files (B41) produced either by an agent during a run or by a user-triggered request (B74) | B101: S3 Intelligent-Tiering with no archive tier or automatic expiry. Export metadata is keyed by user and export ID, with a session-prefixed ID allowing a chat query without scanning S3. A 15-minute presigned GET is issued only on a user download click (B78/B101). Delete chat/account removes its report objects and records. Bucket name remains deployment-generated. | F7 |
 
 ---
 
@@ -199,7 +199,7 @@ Decided (B73): `DELETE /sessions/{sessionId}` and `POST /account/delete` mark th
 - TBD: Chat History Store GSI for direct user-wide trace queries (avoided by cascading through Session Metadata Store instead).
 - TBD: exact SK scheme interleaving turns, trace events, and SSE-replay events (B68) in Chat History Store.
 - TBD: Active-run counters table name, and leaked-counter recovery path.
-- TBD: Export outputs bucket name and key scheme (download URL TTL is decided: 15 min, B78).
+- Export bucket name is deployment-generated; B101 fixes the indexed metadata and Intelligent-Tiering behavior.
 - TBD: User Metadata Table email duplication vs. live Cognito read.
 - TBD: synchronous vs. fanned-out Deletion Worker execution for large accounts (B73).
 
