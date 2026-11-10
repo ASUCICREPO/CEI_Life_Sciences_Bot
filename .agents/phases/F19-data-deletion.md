@@ -1,5 +1,5 @@
 # F19 — Data deletion
-Status: not started | Depends on: F10, F11 | Decisions: B31, B32, B33, B58, B73 | Specs: ../specs/data-model.md, ../specs/api.md
+Status: not started (deferred by the user; `backend/lambdas/delete-worker/` is a tested foundation only, not deployed or wired) | Depends on: F10, F11 | Decisions: B31, B32, B33, B58, B73 | Specs: ../specs/data-model.md, ../specs/api.md
 
 ## Goal
 Let a user delete one chat, or their whole account, and have every trace of that data actually removed — history, trace, attachments, KB chunks, checkpoints, and (for account delete) long-term memory and API keys — with the delete request returning immediately and a worker doing the real cleanup.

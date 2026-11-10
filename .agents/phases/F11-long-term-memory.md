@@ -1,5 +1,5 @@
 # F11 — Long-term memory
-Status: not started | Depends on: F5 | Decisions: B28, B34, B36, B37, B57 | Specs: ../specs/agents.md, ../specs/data-model.md, ../specs/architecture.md
+Status: partial (`CEIResearchMemory` has `user_preferences` and `semantic_facts` strategies; Research reads them; other agents not wired) | Depends on: F5 | Decisions: B28, B34, B36, B37, B57 | Specs: ../specs/agents.md, ../specs/data-model.md, ../specs/architecture.md
 
 ## Goal
 Give the Research, Drafting, Analysis, and Pipeline Manager agents memory that lasts across chats. The agent should remember a user's stated preferences and useful facts about the user's work, without any explicit "remember" step and without a memory UI.

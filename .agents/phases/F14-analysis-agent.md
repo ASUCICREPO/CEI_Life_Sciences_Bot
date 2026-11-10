@@ -1,5 +1,5 @@
 # F14 — Analysis agent
-Status: not started | Depends on: F6, F13 | Decisions: B26, B30, B51, B72, B85 | Specs: ../specs/agents.md, ../specs/tools.md
+Status: partial (MVP slice, B94: Analysis runtime in CDK, scope pause and resume; `InMemorySaver`; full phase pending) | Depends on: F6, F13 | Decisions: B26, B30, B51, B72, B85 | Specs: ../specs/agents.md, ../specs/tools.md
 
 ## Goal
 Implement the Analysis Agent's real logic: gather evidence, analyze it, build comparison matrices, and produce a mode-aware competitor/market/legal-landscape report with citations, presented as CEI UI.

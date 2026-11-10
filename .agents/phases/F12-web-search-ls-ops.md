@@ -1,5 +1,5 @@
 # F12 — Web search + LS Ops
-Status: not started | Depends on: F4 | Decisions: B40, B42, B44, B70, B86 | Specs: ../specs/tools.md, ../specs/architecture.md, ../specs/auth-and-tool-scope.md
+Status: partial (Life Sciences Operations Lambda and Gateway target built; Web Search connector not wired, only the `WebSearchEnabled` output) | Depends on: F4 | Decisions: B40, B42, B44, B70, B86 | Specs: ../specs/tools.md, ../specs/architecture.md, ../specs/auth-and-tool-scope.md
 
 ## Goal
 Give every agent two more tools: a built-in AgentCore web search connector for general research, and a deterministic Life Sciences Operations (LS Ops) Lambda for common life-sciences calculations (sequence, protein/primer, chemistry, lab math) that need no model call.

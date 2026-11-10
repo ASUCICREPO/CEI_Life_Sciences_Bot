@@ -1,5 +1,5 @@
 # F13 — HITL
-Status: not started | Depends on: F6, S4 | Decisions: B28, B56, B57, B60, B72, B82 | Specs: ../specs/agents.md, ../specs/streaming-protocol.md, ../specs/api.md
+Status: partial (`POST /ui-actions` built; Analysis and Pipeline pause and resume; Research and Drafting HITL pending; see "Implementation status") | Depends on: F6, S4 | Decisions: B28, B56, B57, B60, B72, B82 | Specs: ../specs/agents.md, ../specs/streaming-protocol.md, ../specs/api.md
 
 ## Goal
 Make the four inline HITL tools (`ask_user_question`, `present_alternatives`, `request_plan_approval`, `get_user_input`) really pause a running agent and really resume it later, using a LangGraph `interrupt` and an `AgentCoreMemorySaver` checkpoint, with a very long but not infinite wait (B56, B57, refined by B82: the wait lasts up to AgentCore Memory's maximum short-term event expiry, expected 365 days — verify the real value — after which the checkpoint is gone and a resume attempt must show "expired, start again"). Add the production `POST /ui-actions` endpoint that resumes a paused run.
