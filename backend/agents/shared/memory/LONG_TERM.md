@@ -18,13 +18,9 @@ cross-chat retrieval, or cross-user isolation has been proven.
 Each runtime recalls at most once per new run, before `begin_turn`; a resumed
 HITL turn never re-recalls. Pipeline Manager loads its context once and keeps
 it in graph state, so a resumed background job reuses the checkpointed value.
-In-process sub-runs (`pipeline_manager/dispatcher.py`'s research/drafting
-steps, and Drafting's `research_subagent`) receive the parent's already-loaded
-context in their initial state and never call memory themselves. An analysis
-step dispatched by the Pipeline Manager is the one exception: `analysis/run.py`
-is outside this phase's file list and does not yet accept `long_term_context`,
-so that path does not receive the parent's recalled context — tracked here as
-a known gap, not a decision to skip it permanently. Recall-only: no agent calls
+In-process sub-runs (`pipeline_manager/dispatcher.py`'s research, drafting and
+analysis steps, and Drafting's `research_subagent`) receive the parent's already-loaded
+context in their initial state and never call memory themselves. Recall-only: no agent calls
 `record_completed_turn`; writes remain gated on the deletion-fencing work below.
 
 AgentCore Memory's built-in semantic and user-preference strategies process

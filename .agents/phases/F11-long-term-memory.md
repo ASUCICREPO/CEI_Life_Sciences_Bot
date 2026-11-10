@@ -52,8 +52,7 @@ Give the Research, Drafting, Analysis, and Pipeline Manager agents memory that l
 ## Risks and open items
 - AgentCore Memory short-term event expiry maximum is still unverified (B57, open item in decision log and in `data-model.md`/`agents.md`). It does not block this phase (that item is about short-term HITL waits), but the same SDK research should confirm long-term extraction timing while it is being done.
 - **Proposal (not decided):** whether the Tool Agent runtime gets long-term memory at all (agents.md §5 implies no cross-source memory, but does not explicitly rule out long-term strategies). Flagged for F15 to resolve when the Tool Agent runtime is built.
-- Analysis and Pipeline Manager recall is now wired (wave2/memory, F11 follow-up); an analysis step dispatched by the Pipeline Manager's in-process dispatcher is a known exception — `analysis/run.py` does not yet forward the parent's recalled context (see `shared/memory/LONG_TERM.md`).
+- Analysis and Pipeline Manager recall is now wired (wave2/memory, F11 follow-up). Pipeline's in-process research, drafting and analysis steps receive the parent's recalled context through `pipeline_manager/dispatcher.py`.
 
 ## Handoff notes
-- `analysis/run.py` (the Pipeline Manager's callable entry point into the Analysis graph) still needs a `long_term_context` parameter so a pipeline-dispatched analysis step can receive the parent's already-loaded context, matching `pipeline_manager/dispatcher.py`'s research/drafting steps.
 - F19 (data deletion) depends on this phase's namespace convention (`actor_id = user_id`) to delete a user's long-term memory on account delete.

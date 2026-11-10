@@ -102,7 +102,9 @@ class InProcessDispatcher:
                     prompt, mode, user_id, sub_session_id, step.step_id, step.document_type, long_term_context,
                 )
             if step.agent == "analysis":
-                return await self._run_analysis(prompt, mode, sub_session_id, step.step_id, step.analysis_type, step.scope)
+                return await self._run_analysis(
+                    prompt, mode, sub_session_id, step.step_id, step.analysis_type, step.scope, long_term_context,
+                )
             return StepOutcome(status="failed", error=f"unknown agent {step.agent!r}")
         except Exception as exc:  # ADR: catch-all | one bad step must not crash the pipeline run
             logger.error({"event": "dispatch_step_error", "step_id": step.step_id, "agent": step.agent, "error_type": type(exc).__name__})
@@ -190,14 +192,14 @@ class InProcessDispatcher:
         step_id: str,
         analysis_type: str | None,
         scope: dict[str, Any] | None,
+        long_term_context: list[str] = (),
     ) -> StepOutcome:
-        # ADR: analysis/run.py is outside this phase's file list | its run_analysis() helper
-        # does not yet accept long_term_context, so an analysis step dispatched by the Pipeline
-        # Manager does not receive the parent's recalled context (tracked in LONG_TERM.md).
         from analysis.run import run_analysis
 
         resolved_type = analysis_type if analysis_type in _VALID_ANALYSIS_TYPES else None
-        outcome = await run_analysis(prompt, mode, session_id, analysis_type=resolved_type, scope=scope)
+        outcome = await run_analysis(
+            prompt, mode, session_id, analysis_type=resolved_type, scope=scope, long_term_context=long_term_context,
+        )
         return StepOutcome(
             status="completed",
             text=outcome.text,
