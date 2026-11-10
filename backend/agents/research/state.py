@@ -12,6 +12,8 @@ class TriagePlan(BaseModel):
     model_config = ConfigDict(frozen=True)
     selected_sources: list[SourceType]
     source_queries: dict[str, str] = {}
+    # B72: triage asks the user to clarify instead of silently falling back to PubMed.
+    ambiguous: bool = False
     reasoning: str
 
 
@@ -25,3 +27,8 @@ class ResearchState(BaseAgentState):
     retrieved_results: list[DataSourceResult]
     synthesis: str
     response_document: ResponseDocument | None
+    # B72 clarify loop: the user's answer, fed back into the next `triage` pass; `clarified`
+    # stops the loop after one round and is forced True for in-process subagent calls (drafting)
+    # which have no interactive user and must keep today's silent PubMed fallback.
+    clarification_answer: str | None
+    clarified: bool

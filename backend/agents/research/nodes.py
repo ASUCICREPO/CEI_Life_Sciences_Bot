@@ -6,12 +6,22 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage
+from langgraph.types import interrupt
 
 from research.state import ResearchState, TriagePlan
 from shared.grounding import build_corpus, ground_document
 from shared.presenters.markdown import render_document_markdown
 from shared.prompts.loader import PromptLoader
 from shared.schemas.citation import SourceType
+from shared.schemas.cei_ui import (
+    ActionDescriptor,
+    CEIUISurface,
+    ChoiceOption,
+    ChoicePickerComponent,
+    ColumnComponent,
+    TextComponent,
+    TextFieldComponent,
+)
 from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
@@ -52,11 +62,13 @@ RULES:
    - ICD-10: use disease names or codes
    - NPI Registry: use provider names or specialties
 4. Presentation requests do not determine source selection. Ignore requests to use a UI protocol, show UI elements, create interactive graphics or charts, or apply output formatting. Select sources using only the substantive life-sciences research question.
+5. Set ambiguous=true when the request could reasonably mean more than one thing and you need the user to clarify before searching — even if you also made a best-guess source selection. Leave it false whenever the request is clear enough to search directly, including when no source matches it.
 
 Respond ONLY with valid JSON matching this schema:
 {
   "selected_sources": ["source_key", ...],
   "source_queries": {"source_key": "optimized query for this source", ...},
+  "ambiguous": false,
   "reasoning": "brief explanation of source selection and query strategy"
 }
 
@@ -107,6 +119,9 @@ def triage(state: ResearchState) -> dict[str, Any]:
     source_list = "\n".join(f"- {k.value}: {v}" for k, v in _SOURCE_DESCRIPTIONS.items())
     recalled = render_untrusted_memories(state.get("long_term_context", []))
     user_prompt = f"Available sources:\n{source_list}\n\nUser query: {query}"
+    clarification = state.get("clarification_answer")
+    if clarification:
+        user_prompt += f"\n\nUser clarification: {clarification}"
     if recalled:
         user_prompt += f"\n\n{recalled}"
 
@@ -129,8 +144,87 @@ def triage(state: ResearchState) -> dict[str, Any]:
         output_tokens=out_tok,
     )
 
-    logger.info({"event": "triage_complete", "sources": [s.value for s in plan.selected_sources]})
-    return {"query": query, "triage_plan": plan, "trace": [trace]}
+    logger.info({"event": "triage_complete", "sources": [s.value for s in plan.selected_sources], "ambiguous": plan.ambiguous})
+    return {"query": query, "triage_plan": plan, "clarification_answer": None, "trace": [trace]}
+
+
+def route_after_triage(state: ResearchState) -> str:
+    """B72: ask once when triage selected nothing or flagged the request as ambiguous.
+
+    Subagent calls (drafting's in-process research, no interactive user) set
+    ``clarified=True`` up front so this always routes straight to ``retrieve``,
+    preserving today's silent PubMed fallback for that path.
+    """
+    plan = state.get("triage_plan")
+    if plan is None or state.get("clarified"):
+        return "retrieve"
+    if not plan.selected_sources or plan.ambiguous:
+        return "clarify"
+    return "retrieve"
+
+
+def build_clarify_surface(
+    query: str,
+    *,
+    surface_id: str = "research-clarify",
+    revision: int = 1,
+) -> dict[str, Any]:
+    """ChoicePicker of sources + free-text rephrase for B72's triage clarifying question."""
+    options = [
+        ChoiceOption(label=source.value, value=source.value, description=description)
+        for source, description in _SOURCE_DESCRIPTIONS.items()
+    ]
+    surface = CEIUISurface(
+        surface_id=surface_id,
+        revision=revision,
+        root_id="clarify-root",
+        components=[
+            ColumnComponent(id="clarify-root", children=["clarify-intro", "clarify-sources", "clarify-rephrase"]),
+            TextComponent(
+                id="clarify-intro",
+                content=f"I could not confidently match a source for: {query!r}. Pick a source, or rephrase your question below.",
+            ),
+            ChoicePickerComponent(
+                id="clarify-sources",
+                interaction_id="research-clarify-source",
+                label="Which source should I search?",
+                options=options,
+                action=ActionDescriptor(action_id="select-clarify-source", label="Use this source"),
+            ),
+            TextFieldComponent(
+                id="clarify-rephrase",
+                interaction_id="research-clarify-rephrase",
+                label="Or rephrase your question",
+                placeholder="For example: GLP-1 trials in type 2 diabetes",
+                multiline=True,
+                action=ActionDescriptor(action_id="submit-clarify-rephrase", label="Submit"),
+            ),
+        ],
+    )
+    return surface.model_dump(mode="json")
+
+
+def clarify(state: ResearchState) -> dict[str, Any]:
+    """Pause for a clarifying question (B72), then feed the answer back into `triage`."""
+    query = state.get("query", "")
+    surface = build_clarify_surface(query)
+    decision = interrupt(surface)
+    action_id = decision.get("action_id") if isinstance(decision, dict) else None
+    value = decision.get("value") if isinstance(decision, dict) else None
+
+    if action_id == "select-clarify-source" and isinstance(value, str) and value.strip():
+        clarification = f"Use only this source: {value.strip()}."
+    elif isinstance(value, str) and value.strip():
+        clarification = value.strip()
+    else:
+        clarification = ""
+
+    logger.info({"event": "clarify_complete", "action_id": action_id})
+    return {
+        "clarification_answer": clarification,
+        "clarified": True,
+        "trace": [TraceEntry(stage="CLARIFY", detail=f"action={action_id or 'none'}")],
+    }
 
 
 def retrieve(state: ResearchState) -> dict[str, Any]:
