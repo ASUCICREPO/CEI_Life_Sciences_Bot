@@ -32,6 +32,15 @@ export const AGENT_RUNTIMES = [
   { id: 'Pipeline', runtimeName: 'CEIPipelineManager', entrypoint: 'pipeline_main.py' },
 ] as const;
 
+// F11: each runtime reads its own memory id env var; opt-in recall flags (CEI_<AGENT>_LONG_TERM_ENABLED)
+// default off and are not set here, matching Research's existing off-by-default convention.
+const MEMORY_ID_ENV: Record<(typeof AGENT_RUNTIMES)[number]['id'], string> = {
+  Research: 'CEI_RESEARCH_MEMORY_ID',
+  Drafting: 'CEI_DRAFTING_MEMORY_ID',
+  Analysis: 'CEI_ANALYSIS_MEMORY_ID',
+  Pipeline: 'CEI_PIPELINE_MEMORY_ID',
+};
+
 // ADR: AgentCore Runtime is arm64 (Graviton) + PYTHON_3_12 (agentcore.json) | Rationale: CodeZip deps must be
 // manylinux aarch64 wheels for that interpreter, so they are resolved for the target, not the build host.
 // manylinux_2_28 (glibc 2.28): numpy 2.5 ships no manylinux2014 aarch64 wheels; the runtime image's glibc is newer
@@ -238,16 +247,22 @@ export class AgentRuntimes extends Construct {
         // Layer 2 needs the raw bearer token in-process (identity.py verifies it against the JWKS again)
         requestHeaderConfiguration: { allowlistedHeaders: ['Authorization'] },
         environmentVariables: def.id === 'Research'
-          ? { ...environmentVariables, CEI_RESEARCH_MEMORY_ID: researchMemory.attrMemoryId, CEI_REQUIRE_TOOL_GATEWAY: 'true' }
-          : environmentVariables,
+          ? {
+              ...environmentVariables,
+              [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId,
+              CEI_REQUIRE_TOOL_GATEWAY: 'true',
+            }
+          : { ...environmentVariables, [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId },
       });
-      if (def.id === 'Research') {
-        runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
-          actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent',
-            'bedrock-agentcore:RetrieveMemoryRecords'],
-          resources: [researchMemory.attrMemoryArn],
-        }));
-      }
+      // F11: all four runtimes can retrieve from the one shared Memory resource; only
+      // Research writes conversation events into it (B37 strategies, opt-in recall per agent).
+      runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: def.id === 'Research'
+          ? ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent',
+            'bedrock-agentcore:RetrieveMemoryRecords']
+          : ['bedrock-agentcore:RetrieveMemoryRecords'],
+        resources: [researchMemory.attrMemoryArn],
+      }));
       this.grantData(runtime, props);
       props.codeInterpreter.grantUse(runtime);
       runtime.role.addToPrincipalPolicy(
