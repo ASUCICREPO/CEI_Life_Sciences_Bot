@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: ACTIVE (F1, F2 and F3 done; wave 2 — S2 and F4 — in progress). Source of truth for every decision referenced below is `.agents/decision-log.md`. This file gives the map; each phase's detail lives in `.agents/phases/<ID>-*.md`.
+Status: ACTIVE (F1, F2 and F3 done; S1, S2, F4, F5 and F6 in progress; several later phases partly built, see the Status column). Source of truth for every decision referenced below is `.agents/decision-log.md`. This file gives the map; each phase's detail lives in `.agents/phases/<ID>-*.md`.
 
 This file is owned by the documentation agent. The phase files S1–S10 (spikes) and F01–F10 are also owned by the documentation agent. Phase files F11–F21 are written in parallel by another agent using the same template; they are listed here for completeness but this file does not certify their content.
 
@@ -17,22 +17,22 @@ This file is owned by the documentation agent. The phase files S1–S10 (spikes)
 | F2 | Hosting + auth | Serve the `founder-ai-dashboard` SPA from S3/CloudFront/WAF with Cognito self sign-up and login. | F1 | `architecture.md` §1 (S3/CloudFront/WAF/Cognito rows), `auth-and-tool-scope.md` §1–2, `security.md` (network/edge) | done |
 | F3 | API + session store | Stand up the one Regional REST API, the Cognito authorizer, throttling, and the Session Metadata + Chat History tables with list/history routes. | F2 | `api.md` (Sessions, Chat history), `data-model.md` §1–2, `auth-and-tool-scope.md` §9/§11 | done |
 | F4 | Data tools | Stand up the AgentCore Gateway, the 10 source Lambdas as targets, Cognito scopes, and Cedar Policy in `ENFORCE`. | F1, S2 | `tools.md` §1, `auth-and-tool-scope.md` (full) | in progress |
-| F5 | Research agent live | Deploy the Research runtime to AgentCore, wire the deterministic Session Router, and stream real answers over `/chat/stream`. | F3, F4, S1 | `agents.md` §1, `architecture.md` §2.1, `api.md` (`/chat/stream`), `streaming-protocol.md` (base) | in progress (unwired foundations; production route pending) |
-| F6 | Streaming UI | Ship CEI UI 1.2 progressive SSE end to end: renderer, thinking block/trace, grounding pending state, trace storage. | F5 | `streaming-protocol.md` (full), `data-model.md` §2 (trace), `tools.md` §6 | in progress (frontend and trace foundations; end-to-end pending) |
-| F7 | Drafting + export | Deploy the Drafting runtime and ship PDF/DOCX/MD/CSV/LaTeX/TXT export with the review-acknowledgment gate. | F6 | `agents.md` §2, `tools.md` §8, `api.md` (`/exports`), `data-model.md` §7 | not started |
+| F5 | Research agent live | Deploy the Research runtime to AgentCore, wire the deterministic Session Router, and stream real answers over `/chat/stream`. | F3, F4, S1 | `agents.md` §1, `architecture.md` §2.1, `api.md` (`/chat/stream`), `streaming-protocol.md` (base) | in progress (Router, Runner and `/chat/stream` built in CDK; `ENFORCE` and live validation pending) |
+| F6 | Streaming UI | Ship CEI UI 1.2 progressive SSE end to end: renderer, thinking block/trace, grounding pending state, trace storage. | F5 | `streaming-protocol.md` (full), `data-model.md` §2 (trace), `tools.md` §6 | in progress (Research 1.2 stream, Runner, thinking block, trace route built; other agents and deployed checks pending) |
+| F7 | Drafting + export | Deploy the Drafting runtime and ship PDF/DOCX/MD/CSV/LaTeX/TXT export with the review-acknowledgment gate. | F6 | `agents.md` §2, `tools.md` §8, `api.md` (`/exports`), `data-model.md` §7 | partial (Drafting runtime, export service, exports routes; outline approval and ad hoc export pending) |
 | F8 | Model + mode controls | Ship the model picker with blocklist, per-chat science/business mode, Guardrails, and prompt caching. | F6 | `agents.md` §6, `api.md` (`/models`, `/settings`), `security.md` (model calls) | not started |
 | F9 | Free-text router | Add the classifier-model path in the Session Router for free-text chat (task launcher routing is unchanged). | F5 | `agents.md` §5/§6, `api.md` | not started |
 | F10 | Attachments + RAG | Ship attachment upload, SQS processing, KB ingestion, and per-chat retrieval filtering. | F6, S5 | `data-model.md` §5/§7, `tools.md` §7, `api.md` (Attachments) | not started |
-| F11 | Long-term memory | AgentCore Memory long-term strategies (user preferences, semantic facts). | F5 | `data-model.md` §9, `agents.md` §6 | not started (owned by parallel agent) |
-| F12 | Web search + LS ops | Web Search connector, Life Sciences Operations Lambda. | F4 | `tools.md` §3–4, `auth-and-tool-scope.md` §3 | not started (owned by parallel agent) |
-| F13 | HITL | Real pause/resume in all agents, typed action endpoint in production. | F6, S4 | `agents.md` (HITL points), `api.md` (`/ui-actions`), `streaming-protocol.md` (`hitl_request`) | not started (owned by parallel agent) |
-| F14 | Analysis agent | Full Analysis agent implementation. | F6, F13 | `agents.md` §3 | MVP slice in progress (B94) |
-| F15 | Tool agents | 1 runtime + 11 YAML profiles, NCBI Gateway targets. | F4, F6 | `agents.md` §5, `tools.md` §2 | not started (owned by parallel agent) |
-| F16 | Background jobs | Job ID Store, Polling Lambda, watchdog, cancel. | F5, S3 | `data-model.md` §3, `api.md` (Jobs) | not started (owned by parallel agent) |
-| F17 | Pipeline Manager | Full Pipeline Manager implementation, plan approval, `/pipeline` job view. | F13, F16 | `agents.md` §4, `architecture.md` §2.4 | MVP slice in progress (B94) |
-| F18 | User API keys | Settings page, Secrets Manager, key use in Gateway Lambdas. | F4 | `data-model.md` §8, `api.md` (`/settings/api-keys`) | not started (owned by parallel agent) |
-| F19 | Data deletion | Delete chat, delete account cascades. | F10, F11 | `data-model.md` (Deletion cascade), `api.md` (Account) | not started (owned by parallel agent) |
-| F20 | Alarms | CloudWatch alarms, SNS email, dashboards. | F5 | `security.md` (Observability), decision log B75 | not started (owned by parallel agent) |
+| F11 | Long-term memory | AgentCore Memory long-term strategies (user preferences, semantic facts). | F5 | `data-model.md` §9, `agents.md` §6 | partial (Research memory with long-term strategies; other agents not wired) |
+| F12 | Web search + LS ops | Web Search connector, Life Sciences Operations Lambda. | F4 | `tools.md` §3–4, `auth-and-tool-scope.md` §3 | partial (LS Ops Lambda and Gateway target built; Web Search not wired) |
+| F13 | HITL | Real pause/resume in all agents, typed action endpoint in production. | F6, S4 | `agents.md` (HITL points), `api.md` (`/ui-actions`), `streaming-protocol.md` (`hitl_request`) | partial (`/ui-actions` built; Analysis and Pipeline pause; Research and Drafting pending) |
+| F14 | Analysis agent | Full Analysis agent implementation. | F6, F13 | `agents.md` §3 | partial (MVP slice, B94; runtime in CDK) |
+| F15 | Tool agents | 1 runtime + 11 YAML profiles, NCBI Gateway targets. | F4, F6 | `agents.md` §5, `tools.md` §2 | partial (graph, profiles, NCBI targets; no runtime or route) |
+| F16 | Background jobs | Job ID Store, Polling Lambda, watchdog, cancel. | F5, S3 | `data-model.md` §3, `api.md` (Jobs) | partial (Job ID Store, jobs routes, watchdog in CDK; async handoff and S3 proofs pending) |
+| F17 | Pipeline Manager | Full Pipeline Manager implementation, plan approval, `/pipeline` job view. | F13, F16 | `agents.md` §4, `architecture.md` §2.4 | partial (MVP slice, B94/B102; durable jobs, in-process dispatch) |
+| F18 | User API keys | Settings page, Secrets Manager, key use in Gateway Lambdas. | F4 | `data-model.md` §8, `api.md` (`/settings/api-keys`) | partial (key-lookup code only; no grant, routes or UI) |
+| F19 | Data deletion | Delete chat, delete account cascades. | F10, F11 | `data-model.md` (Deletion cascade), `api.md` (Account) | not started (deferred; delete-worker foundation only, unwired) |
+| F20 | Alarms | CloudWatch alarms, SNS email, dashboards. | F5 | `security.md` (Observability), decision log B75 | partial (alarms, SNS topic, dashboard in CDK; live delivery not proven) |
 | F21 | Hardening | Security review, load test, human docs complete. | all | `security.md` (full) | not started (owned by parallel agent) |
 | Later | Deferred | PTC, slides export, paid sources, memory UI. | — | — | deferred, no phase file |
 
