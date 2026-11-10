@@ -3,6 +3,7 @@ import json
 import sys
 import uuid
 from pathlib import Path
+from unittest.mock import Mock
 
 import boto3
 import pytest
@@ -19,6 +20,16 @@ import metadata_handler as handler  # noqa: E402
 ORIGIN = "https://site.example.net"
 GENERIC_500 = "It's not you, it's us. Something went wrong"
 LEGACY_SID = "6f1c2d3e-0000-4000-8000-0000000000aa"
+DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+
+def _bedrock_stub(foundation_ids):
+    client = Mock()
+    client.list_foundation_models.return_value = {
+        "modelSummaries": [{"modelId": mid, "modelName": mid} for mid in foundation_ids]
+    }
+    client.list_inference_profiles.return_value = {"inferenceProfileSummaries": []}
+    return client
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +37,9 @@ def tables(monkeypatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
     monkeypatch.setenv("ALLOWED_ORIGINS", ORIGIN)
+    from shared.runtime import model_discovery
+
+    model_discovery._cache.clear()
     with mock_aws():
         ddb = boto3.resource("dynamodb", region_name="us-east-1")
         ddb.create_table(
@@ -76,6 +90,7 @@ def tables(monkeypatch):
         )
         handler._repo = None
         handler._history = None
+        handler._bedrock_client = _bedrock_stub([DEFAULT_MODEL_ID])
         yield
 
 
@@ -384,6 +399,8 @@ def test_tampered_cursor_is_rejected():
         {"title": 5, "mode": "science"},
         {"title": "ok", "mode": "other"},
         {"title": "ok", "mode": "science", "model_id": "bad id!"},
+        {"title": "ok", "mode": "science", "model_id": "unknown.model-v1"},  # not server-discovered
+        {"title": "ok", "mode": "science", "model_id": "anthropic.claude-fable-5-v1"},  # D3 blocklist
     ],
 )
 def test_malformed_create_is_invalid_request(payload):

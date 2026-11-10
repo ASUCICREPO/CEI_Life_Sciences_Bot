@@ -22,6 +22,7 @@ from http_errors import (
     request_id,
     user_id_from_claims,
 )
+from shared.config import config
 from shared.persistence.chat_history import ChatHistoryRepository
 from shared.persistence.chat_metadata import (
     SEARCH_QUERY_MAX,
@@ -35,8 +36,21 @@ from shared.persistence.chat_metadata import (
     normalize_title,
 )
 from shared.persistence.ownership import OwnershipCheckError, is_session_uuid, verify_session_owner
+from shared.runtime import model_discovery
 
 logger = get_logger(__name__)
+
+_bedrock_client: Any | None = None
+
+
+def _bedrock() -> Any:
+    global _bedrock_client
+    if _bedrock_client is None:
+        import boto3
+
+        _bedrock_client = boto3.client("bedrock", region_name=config.aws_region)
+    return _bedrock_client
+
 
 TITLE_MAX = 200
 PAGE_SIZE = 25  # chat history page size (GET /sessions default)
@@ -86,6 +100,10 @@ def _validate_mode(value: Any) -> ChatMode:
 def _validate_model_id(value: Any) -> str:
     if not isinstance(value, str) or not MODEL_ID_PATTERN.match(value):
         raise invalid_request("The model_id field is not a valid model identifier.")
+    # B18/MODEL_POLICY.md step 2: fail closed on both the blocklist and server-side discovery; an
+    # explicitly rejected selection must not silently fall back to the default (shared/runtime/turn_config.py).
+    if not model_discovery.is_model_available(value, _bedrock(), config.model_blocklist):
+        raise invalid_request("The model_id field is not an available model.")
     return value
 
 
