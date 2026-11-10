@@ -53,12 +53,32 @@ def test_foreign_session_never_gets_token(deps):
     issue.assert_not_called()
 
 
-def test_unavailable_model_rejected_before_lease_or_token(deps):
+def test_blocklisted_model_rejected_before_lease_or_token(deps):
+    # B18: the global blocklist (D3 defaults + CEI_BLOCKED_MODELS), not "any model other than the default".
+    _, metadata, leases, issue = deps
+    metadata.get_item.return_value = {"Item": {"session_id": SESSION, "model_id": "anthropic.claude-fable-5-v1"}}
+    result = router.handler(event(), None)
+    assert result["status"] == 400 and result["code"] == "model_unavailable"
+    assert "anthropic.claude-fable-5-v1" not in str(result)
+    leases.acquire.assert_not_called()
+    issue.assert_not_called()
+
+
+def test_non_default_non_blocklisted_model_is_accepted(deps):
     _, metadata, leases, issue = deps
     metadata.get_item.return_value = {"Item": {"session_id": SESSION, "model_id": "other-private-model"}}
     result = router.handler(event(), None)
+    assert result["status"] == 200
+    leases.acquire.assert_called_once()
+    issue.assert_called_once()
+
+
+def test_env_blocklist_pattern_is_merged_with_d3(deps, monkeypatch):
+    _, metadata, leases, issue = deps
+    monkeypatch.setenv("CEI_BLOCKED_MODELS", "private.*")
+    metadata.get_item.return_value = {"Item": {"session_id": SESSION, "model_id": "private.custom-model"}}
+    result = router.handler(event(), None)
     assert result["status"] == 400 and result["code"] == "model_unavailable"
-    assert "other-private-model" not in str(result)
     leases.acquire.assert_not_called()
     issue.assert_not_called()
 

@@ -2,18 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import logging
 
 from shared.config import config
 from shared.persistence.conversation import GENERATED_TITLE_CHARS, TitleGenerator
+from shared.runtime.model_policy import is_blocked
 
 log = logging.getLogger(__name__)
-
-# D3: models that must never be invoked by the application. Matched against the id with any
-# cross-Region inference-profile prefix ("us.", "eu.", "apac.", "global.") removed.
-BLOCKED_MODEL_PATTERNS: tuple[str, ...] = ("anthropic.claude-fable-5*", "anthropic.claude-mythos-*")
-_PROFILE_PREFIXES = ("us.", "eu.", "apac.", "global.")
 
 _PROMPT = (
     "Write a short title (at most 6 words) for this conversation. Reply with the title only: no quotes, "
@@ -23,12 +18,9 @@ _EXCERPT_CHARS = 2000
 
 
 def is_blocked_model(model_id: str) -> bool:
-    base = model_id
-    for prefix in _PROFILE_PREFIXES:
-        if base.startswith(prefix):
-            base = base[len(prefix):]
-            break
-    return any(fnmatch.fnmatch(base, pattern) for pattern in BLOCKED_MODEL_PATTERNS)
+    # ADR: config.model_blocklist (D3 + CEI_BLOCKED_MODELS) | Rationale: B18 — one blocklist, one matching rule
+    # (shared/runtime/model_policy.is_blocked), shared with /models, session create, and the per-turn recheck.
+    return is_blocked(model_id, config.model_blocklist)
 
 
 def bedrock_title_generator(
@@ -36,7 +28,7 @@ def bedrock_title_generator(
 ) -> TitleGenerator:
     model = model_id or config.title_model_id
     if is_blocked_model(model):
-        raise ValueError(f"title model {model!r} is on the D3 blocklist")
+        raise ValueError(f"title model {model!r} is on the blocklist")
     timeout = timeout_seconds if timeout_seconds is not None else config.title_timeout_seconds
 
     async def generate(prompt: str, answer: str) -> str | None:

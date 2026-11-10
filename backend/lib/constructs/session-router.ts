@@ -10,6 +10,11 @@ import { suppressXrayWildcard } from './tracing';
 export interface SessionRouterProps {
   /** Validated deployment default; absent only during environment-agnostic synth. */
   defaultModelId?: string;
+  /** B18: deploy.sh/CDK-supplied extra blocklist patterns, merged with the fixed D3 defaults (shared/config.py). */
+  blockedModelIds?: string[];
+  /** F8/B51: passed through for parity with agent-runtimes.ts; the Router does not itself call a model. */
+  guardrailId?: string;
+  guardrailVersion?: string;
   role: iam.Role;
   pythonDepsLayer: lambda.ILayerVersion;
   metadataTable: dynamodb.ITable;
@@ -44,6 +49,9 @@ export class SessionRouter extends Construct {
       timeout: cdk.Duration.seconds(30),
       environment: {
         ...(props.defaultModelId ? { CEI_DEFAULT_MODEL_ID: props.defaultModelId } : {}),
+        CEI_BLOCKED_MODELS: (props.blockedModelIds ?? []).join(','),
+        ...(props.guardrailId ? { CEI_GUARDRAIL_ID: props.guardrailId } : {}),
+        ...(props.guardrailVersion ? { CEI_GUARDRAIL_VERSION: props.guardrailVersion } : {}),
         USER_POOL_ID: props.userPoolId,
         SPA_CLIENT_ID: props.spaClientId,
         METADATA_TABLE: props.metadataTable.tableName,

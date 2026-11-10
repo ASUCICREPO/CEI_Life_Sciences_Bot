@@ -66,7 +66,7 @@ describe('BackendStack REST API + session store', () => {
     const iamMethods = methods.filter((m) => m.AuthorizationType === 'AWS_IAM');
     expect(iamMethods.map((m) => m.HttpMethod)).toEqual(['POST']);
     const real = methods.filter((m) => m.HttpMethod !== 'OPTIONS' && m.AuthorizationType !== 'AWS_IAM');
-    expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST', 'POST', 'POST', 'POST']);
+    expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST', 'POST', 'POST', 'POST', 'PUT']);
     for (const method of real) {
       expect(method.AuthorizationType).toBe('COGNITO_USER_POOLS');
       expect(method.AuthorizerId).toBeDefined();
@@ -82,10 +82,10 @@ describe('BackendStack REST API + session store', () => {
   it('includes the streaming and trace routes without a DELETE route', () => {
     const methods = Object.values(template.findResources('AWS::ApiGateway::Method')).map((m: any) => m.Properties);
     expect(methods.map((method) => method.HttpMethod)).not.toContain('DELETE');
-    template.resourceCountIs('AWS::ApiGateway::Resource', 19);
+    template.resourceCountIs('AWS::ApiGateway::Resource', 21);
     const resources = template.findResources('AWS::ApiGateway::Resource');
     const paths = Object.values(resources).map((r: any) => r.Properties.PathPart);
-    expect(paths.sort()).toEqual(['cancel', 'chat', 'client-diagnostics', 'download', 'exports', 'exports', 'history', 'internal', 'jobs', 'sessions', 'stream', 'token-refresh', 'trace', 'turns', 'ui-actions', '{exportId}', '{jobId}', '{messageId}', '{sessionId}']);
+    expect(paths.sort()).toEqual(['cancel', 'chat', 'client-diagnostics', 'download', 'exports', 'exports', 'history', 'internal', 'jobs', 'models', 'sessions', 'settings', 'stream', 'token-refresh', 'trace', 'turns', 'ui-actions', '{exportId}', '{jobId}', '{messageId}', '{sessionId}']);
     const idFor = (part: string) => Object.entries(resources).find(([, resource]: [string, any]) => resource.Properties.PathPart === part)![0];
     const stream = resources[idFor('stream')] as any;
     const trace = resources[idFor('trace')] as any;
@@ -182,7 +182,7 @@ describe('BackendStack REST API + session store', () => {
 
   it('creates the session tables and active-run table with the specified keys', () => {
     const tables = template.findResources('AWS::DynamoDB::Table');
-    expect(Object.keys(tables)).toHaveLength(6);
+    expect(Object.keys(tables)).toHaveLength(7);
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       KeySchema: [
         { AttributeName: 'user_id', KeyType: 'HASH' },
@@ -268,6 +268,15 @@ describe('BackendStack REST API + session store', () => {
       const resource = JSON.stringify(statement.resource);
       if (statement.actions.some((action) => action.startsWith('xray:'))) {
         expect([...statement.actions].sort()).toEqual(['xray:PutTelemetryRecords', 'xray:PutTraceSegments']);
+        expect(statement.resource).toEqual('*');
+        continue;
+      }
+      // F8: Bedrock model discovery (ListFoundationModels/ListInferenceProfiles/GetInferenceProfile) has no
+      // resource-level ARN to scope to (same carve-out as model-settings.ts' construct-level test).
+      if (statement.actions.some((action) => action.startsWith('bedrock:'))) {
+        expect([...statement.actions].sort()).toEqual(
+          ['bedrock:GetInferenceProfile', 'bedrock:ListFoundationModels', 'bedrock:ListInferenceProfiles'],
+        );
         expect(statement.resource).toEqual('*');
         continue;
       }

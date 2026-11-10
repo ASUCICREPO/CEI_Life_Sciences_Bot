@@ -107,6 +107,12 @@ export const JOB_AGENT_TYPES = {
 export interface AgentRuntimesProps {
   /** Validated deployment default; absent only during environment-agnostic synth. */
   readonly defaultModelId?: string;
+  /** B18: deploy.sh/CDK-supplied extra blocklist patterns, merged with the fixed D3 defaults (shared/config.py). */
+  readonly blockedModelIds?: string[];
+  /** F8/B51: input-only PII Guardrail (model-guardrail.ts); undefined => get_model() attaches no Guardrail. */
+  readonly guardrailId?: string;
+  readonly guardrailVersion?: string;
+  readonly guardrailArn?: string;
   readonly userPool: cognito.IUserPool;
   readonly spaClient: cognito.IUserPoolClient;
   readonly chatMetadataTable: dynamodb.ITable;
@@ -186,6 +192,9 @@ export class AgentRuntimes extends Construct {
     const environmentVariables: Record<string, string> = {
       CEI_AWS_REGION: stack.region,
       ...(props.defaultModelId ? { CEI_DEFAULT_MODEL_ID: props.defaultModelId } : {}),
+      CEI_BLOCKED_MODELS: (props.blockedModelIds ?? []).join(','),
+      ...(props.guardrailId ? { CEI_GUARDRAIL_ID: props.guardrailId } : {}),
+      ...(props.guardrailVersion ? { CEI_GUARDRAIL_VERSION: props.guardrailVersion } : {}),
       CEI_COGNITO_USER_POOL_ID: props.userPool.userPoolId,
       CEI_COGNITO_REGION: stack.region,
       CEI_COGNITO_APP_CLIENT_IDS: appClientIds,
@@ -250,6 +259,13 @@ export class AgentRuntimes extends Construct {
           ],
         }),
       );
+      // F8/B51: the native guardrailConfig on every get_model() call (shared/utils.py) needs this on the
+      // model-invoking role; scoped to the one Guardrail ARN, not a wildcard.
+      if (props.guardrailArn) {
+        runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+          actions: ['bedrock:ApplyGuardrail'], resources: [props.guardrailArn],
+        }));
+      }
       NagSuppressions.addResourceSuppressions(
         runtime,
         [

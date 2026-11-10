@@ -11,6 +11,8 @@ const LAYER_DIR = path.join(BACKEND_DIR, 'lambdas', 'layers', 'python-deps');
 const PERSISTENCE_DIR = path.join(BACKEND_DIR, 'agents', 'shared', 'persistence');
 const CONFIG_FILE = path.join(BACKEND_DIR, 'agents', 'shared', 'config.py');
 const IDENTITY_FILE = path.join(BACKEND_DIR, 'agents', 'shared', 'runtime', 'identity.py');
+const MODEL_POLICY_FILE = path.join(BACKEND_DIR, 'agents', 'shared', 'runtime', 'model_policy.py');
+const MODEL_DISCOVERY_FILE = path.join(BACKEND_DIR, 'agents', 'shared', 'runtime', 'model_discovery.py');
 const HTTP_ERRORS_FILE = path.join(BACKEND_DIR, 'lambdas', 'shared', 'http_errors.py');
 
 const PIP_ARGS = [
@@ -38,6 +40,10 @@ function stageShared(pythonDir: string): void {
   fs.mkdirSync(path.join(sharedDir, 'runtime'), { recursive: true });
   fs.writeFileSync(path.join(sharedDir, 'runtime', '__init__.py'), '');
   fs.copyFileSync(IDENTITY_FILE, path.join(sharedDir, 'runtime', 'identity.py'));
+  // F8: model_policy (blocklist/select_model) and model_discovery (ListFoundationModels/ListInferenceProfiles
+  // caching) for models-settings-handler, session-metadata-handler, and session-router.
+  fs.copyFileSync(MODEL_POLICY_FILE, path.join(sharedDir, 'runtime', 'model_policy.py'));
+  fs.copyFileSync(MODEL_DISCOVERY_FILE, path.join(sharedDir, 'runtime', 'model_discovery.py'));
   copyPythonTree(PERSISTENCE_DIR, path.join(sharedDir, 'persistence'));
   fs.copyFileSync(HTTP_ERRORS_FILE, path.join(pythonDir, 'http_errors.py'));
 }
@@ -63,7 +69,8 @@ class LocalPythonBundling implements cdk.ILocalBundling {
 
 function sourceHash(): string {
   const hash = crypto.createHash('sha256');
-  const files = [path.join(LAYER_DIR, 'requirements.txt'), CONFIG_FILE, IDENTITY_FILE, HTTP_ERRORS_FILE];
+  const files = [path.join(LAYER_DIR, 'requirements.txt'), CONFIG_FILE, IDENTITY_FILE, MODEL_POLICY_FILE,
+    MODEL_DISCOVERY_FILE, HTTP_ERRORS_FILE];
   const walk = (dir: string): void => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const full = path.join(dir, entry.name);
@@ -115,6 +122,8 @@ export class PythonDepsLayer extends Construct {
                 'mkdir -p /asset-output/python/shared && : > /asset-output/python/shared/__init__.py',
                 'cp /src/agents-shared/config.py /asset-output/python/shared/config.py',
                 'mkdir -p /asset-output/python/shared/runtime && : > /asset-output/python/shared/runtime/__init__.py && cp /src/agents-shared/runtime/identity.py /asset-output/python/shared/runtime/identity.py',
+                'cp /src/agents-shared/runtime/model_policy.py /asset-output/python/shared/runtime/model_policy.py',
+                'cp /src/agents-shared/runtime/model_discovery.py /asset-output/python/shared/runtime/model_discovery.py',
                 'cp -r /src/agents-shared/persistence /asset-output/python/shared/persistence',
                 'cp /src/lambdas-shared/http_errors.py /asset-output/python/http_errors.py',
                 'find /asset-output/python -name __pycache__ -prune -exec rm -rf {} +',
