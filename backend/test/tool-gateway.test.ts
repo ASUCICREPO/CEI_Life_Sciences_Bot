@@ -184,6 +184,59 @@ describe('ToolGateway (F4)', () => {
     });
   });
 
+  describe('Web Search connector (B44/B45/B86)', () => {
+    it('is absent when webSearchEnabled is false (the default)', () => {
+      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').filter((t) => t.Name === 'web-search');
+      expect(targets).toHaveLength(0);
+      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').filter((p) => p.Name === 'permit_web_search');
+      expect(policies).toHaveLength(0);
+      const gatewayRole = resourcesOf(template, 'AWS::BedrockAgentCore::Gateway')[0].RoleArn['Fn::GetAtt'][0];
+      const statements = resourcesOf(template, 'AWS::IAM::Policy')
+        .filter((p) => p.Roles.some((r: any) => r.Ref === gatewayRole))
+        .flatMap((p) => p.PolicyDocument.Statement);
+      const actions = statements.flatMap((s: any) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+      expect(actions).not.toContain('bedrock-agentcore:InvokeWebSearch');
+    });
+
+    it('adds an unpinned ConnectorSource target, common-scope permit, and InvokeWebSearch grant when enabled', () => {
+      const { template: enabledTemplate } = build(testConfig({ webSearchEnabled: true }));
+
+      const [target] = resourcesOf(enabledTemplate, 'AWS::BedrockAgentCore::GatewayTarget').filter((t) => t.Name === 'web-search');
+      expect(target).toBeDefined();
+      expect(target.TargetConfiguration.Mcp.Connector.Source).toEqual({ ConnectorId: 'web-search' });
+      expect(target.CredentialProviderConfigurations).toEqual([{ CredentialProviderType: 'GATEWAY_IAM_ROLE' }]);
+
+      const [policy] = resourcesOf(enabledTemplate, 'AWS::BedrockAgentCore::Policy').filter((p) => p.Name === 'permit_web_search');
+      expect(policy).toBeDefined();
+      const statement = JSON.stringify(policy.Definition.Cedar.Statement);
+      expect(statement).toContain('action in AgentCore::Action::\\"web-search\\"');
+      expect(statement).toContain('cei-tools/common');
+
+      const gatewayRole = resourcesOf(enabledTemplate, 'AWS::BedrockAgentCore::Gateway')[0].RoleArn['Fn::GetAtt'][0];
+      const statements = resourcesOf(enabledTemplate, 'AWS::IAM::Policy')
+        .filter((p) => p.Roles.some((r: any) => r.Ref === gatewayRole))
+        .flatMap((p) => p.PolicyDocument.Statement);
+      const actions = statements.flatMap((s: any) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+      expect(actions).toContain('bedrock-agentcore:InvokeWebSearch');
+    });
+
+    it('sets CEI_WEB_SEARCH_ENABLED on the agent runtimes to match the config value', () => {
+      const disabled = resourcesOf(template, 'AWS::BedrockAgentCore::Runtime');
+      for (const runtime of disabled) expect(runtime.EnvironmentVariables.CEI_WEB_SEARCH_ENABLED).toBe('false');
+
+      const { template: enabledTemplate } = build(testConfig({ webSearchEnabled: true }));
+      const enabled = resourcesOf(enabledTemplate, 'AWS::BedrockAgentCore::Runtime');
+      expect(enabled.length).toBeGreaterThan(0);
+      for (const runtime of enabled) expect(runtime.EnvironmentVariables.CEI_WEB_SEARCH_ENABLED).toBe('true');
+    });
+
+    it('passes cdk-nag with Web Search enabled', () => {
+      const { stack } = build(testConfig({ webSearchEnabled: true, toolPolicyMode: 'ENFORCE' }));
+      const errors = Annotations.fromStack(stack).findError('*', Match.stringLikeRegexp('AwsSolutions-.*'));
+      expect(errors).toHaveLength(0);
+    });
+  });
+
   describe('source Lambdas', () => {
     const sources = resourcesOf(template, 'AWS::Lambda::Function').filter((f) => f.Environment?.Variables?.CEI_API_KEY_SECRET_PREFIX);
 

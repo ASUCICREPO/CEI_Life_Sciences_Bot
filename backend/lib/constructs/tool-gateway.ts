@@ -68,6 +68,12 @@ export interface ToolGatewayProps {
   /** F16 Job ID Store: a background job refresh is authorized by its active job record. */
   jobTable?: dynamodb.ITable;
   spaClientId?: string;
+  /**
+   * B44/B45: true only when both the deploy config asked for Web Search and the Region gate
+   * (region-capabilities.ts) allowed it — `scripts/preflight.ts --write` bakes both checks into
+   * this one value, so this construct does not re-check the Region.
+   */
+  webSearchEnabled?: boolean;
 }
 
 /**
@@ -86,6 +92,8 @@ export class ToolGateway extends Construct {
   public readonly ncbiFunction: lambda.Function;
   public readonly ncbiRateTable: dynamodb.Table;
   public readonly scopeNames: string[];
+  /** B44/B86: present only when webSearchEnabled is true (region gate + config both allowed it). */
+  public readonly webSearchTarget?: agentcore.CfnGatewayTarget;
 
   constructor(scope: Construct, id: string, props: ToolGatewayProps) {
     super(scope, id);
@@ -233,7 +241,12 @@ export class ToolGateway extends Construct {
     // ADR: gateway/* in the gateway role | Rationale: S2 — the role is a required Gateway property, so the Gateway ARN cannot be referenced without a cycle | Alternative: a fixed name in the ARN rejected — the service appends a random suffix
     gatewayRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ['bedrock-agentcore:AuthorizeAction', 'bedrock-agentcore:PartiallyAuthorizeActions'],
+        actions: [
+          'bedrock-agentcore:AuthorizeAction',
+          'bedrock-agentcore:PartiallyAuthorizeActions',
+          // B44: required for the Gateway role to invoke the Web Search built-in connector target
+          ...(props.webSearchEnabled ? ['bedrock-agentcore:InvokeWebSearch'] : []),
+        ],
         resources: [policyEngine.attrPolicyEngineArn, stack.formatArn({ service: 'bedrock-agentcore', resource: 'gateway', resourceName: '*' })],
       }),
     );
@@ -320,7 +333,36 @@ export class ToolGateway extends Construct {
       // CreatePolicy validates the action against the target's tool schema
       policy.node.addDependency(target);
     }
-    // Web Search is integrated separately. Attachment retrieval is deferred for this iteration.
+    // ---------------------------------------------------------------
+    // B44/B86/B45: Web Search built-in connector target, created only when the Region gate and the
+    // deploy config both allow it (props.webSearchEnabled already encodes both -- see the prop doc).
+    // Decision (replaces the earlier "do not deploy an unpinned default" blocker, see
+    // .agents/decision-log.md): a plain, unpinned CfnGatewayTarget with a ConnectorSource, because
+    // CloudFormation's AWS::BedrockAgentCore::GatewayTarget ConnectorSource schema has no version
+    // field at all -- there is no CFN-expressible way to pin v1.2.0 (B44) short of a lifecycle-managed
+    // custom resource, which is not built here. The AWS-default connector version is accepted.
+    // ---------------------------------------------------------------
+    if (props.webSearchEnabled) {
+      this.webSearchTarget = new agentcore.CfnGatewayTarget(this, 'WebSearchTarget', {
+        name: 'web-search',
+        description: 'AgentCore Web Search built-in connector (B44) -- url/title/snippet only, no bulk storage',
+        gatewayIdentifier: this.gateway.attrGatewayIdentifier,
+        credentialProviderConfigurations: [{ credentialProviderType: 'GATEWAY_IAM_ROLE' }],
+        targetConfiguration: { mcp: { connector: { source: { connectorId: 'web-search' } } } },
+      });
+      this.webSearchTarget.node.addDependency(gatewayRole);
+
+      const webSearchPolicy = new agentcore.CfnPolicy(this, 'PermitWebSearch', {
+        name: 'permit_web_search',
+        policyEngineId: policyEngine.attrPolicyEngineId,
+        description: 'Permit the Web Search connector when the token carries cei-tools/common (B44/B70/B86)',
+        definition: { cedar: { statement: cedarPermit('web-search', this.gateway.attrGatewayArn, fullScope(COMMON_SCOPE_NAME)) } },
+        // ADR: IGNORE_ALL_FINDINGS | Rationale: same S2-proven setting used for every other cei-tools/common permit (lsops) | Alternative: FAIL_ON_ANY_FINDINGS rejected — untested on this permit
+        validationMode: 'IGNORE_ALL_FINDINGS',
+      });
+      webSearchPolicy.node.addDependency(this.webSearchTarget);
+    }
+    // Attachment retrieval is deferred for this iteration.
 
     // Policy decisions (LOG_ONLY "would deny") are only visible in the Gateway's vended APPLICATION_LOGS
     const gatewayLogGroup = new logs.LogGroup(this, 'GatewayLogs', {

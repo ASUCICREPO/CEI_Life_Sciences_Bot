@@ -120,6 +120,8 @@ export interface AgentRuntimesProps {
    * container as CEI_ALLOWED_ORIGINS, where shared/runtime/app_factory.py answers the CORS preflight.
    */
   readonly allowedOrigins: string[];
+  /** B44/B45: mirrors ToolGateway's prop of the same name -- true only when the Region gate and the deploy config both allow Web Search (reaches the container as CEI_WEB_SEARCH_ENABLED). */
+  readonly webSearchEnabled?: boolean;
 }
 
 /**
@@ -205,6 +207,8 @@ export class AgentRuntimes extends Construct {
       // ADR: comma-joined string | Rationale: parsed by config.allowed_origins_list; same origin set as the
       // sessions API (API Gateway preflight + Lambda ALLOWED_ORIGINS) so all CORS layers agree
       CEI_ALLOWED_ORIGINS: cdk.Fn.join(',', props.allowedOrigins),
+      // B44/B86: shared/tools/data_sources.all_langchain_tools() only adds the web search tool when this is "true"
+      CEI_WEB_SEARCH_ENABLED: props.webSearchEnabled ? 'true' : 'false',
     };
 
     const runtimes = {} as Record<(typeof AGENT_RUNTIMES)[number]['id'], agentcore.Runtime>;

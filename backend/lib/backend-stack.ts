@@ -558,6 +558,8 @@ export class BackendStack extends cdk.Stack {
       // Same origin set as the sessions API CORS; the containers answer CORS only if a browser ever reaches them
       // directly (the SPA goes through the agent proxy below)
       allowedOrigins,
+      // B44/B45: same value ToolGateway uses to decide whether to build the Web Search target (below)
+      webSearchEnabled: this.config?.webSearchEnabled,
     });
 
     // ---------------------------------------------------------------
@@ -757,6 +759,8 @@ export class BackendStack extends cdk.Stack {
       jobTable: backgroundJobs.table,
       spaClientId: spaClient.userPoolClientId,
       refreshCallerRoleArns: [agentRuntimes.runtimes.Research.role.roleArn],
+      // B44/B45: preflight.ts already folds the Region gate into this value (see config.webSearchEnabled doc)
+      webSearchEnabled: this.config?.webSearchEnabled,
     });
     agentRuntimes.configureResearchGateway(gateway.routerClient.userPoolClientId, gateway.gateway.attrGatewayUrl);
     // B67: only the Research runtime may invoke the internal IAM-authenticated
