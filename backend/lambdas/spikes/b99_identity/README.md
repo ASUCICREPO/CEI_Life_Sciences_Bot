@@ -1,9 +1,10 @@
 # B99: Gateway identity transport spike
 
 Status: **local prototype only; the deployed proof has not run**. These files are not
-connected to the application or an existing Gateway. The account available during
-development contains shared projects; no explicitly isolated CEI development
-configuration was identified. Do not deploy the test target to a shared Gateway.
+connected to the application or an existing Gateway. The user identified the
+`cei-project` profile in `us-east-1` as the development environment and requested
+that deployment not be performed from the CLI. Do not deploy the test target to a
+shared Gateway.
 
 ## What this tests
 
