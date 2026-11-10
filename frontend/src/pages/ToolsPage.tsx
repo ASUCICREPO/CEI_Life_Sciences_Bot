@@ -25,9 +25,7 @@ import {
 } from '../mocks/tools';
 import type { ToolSource, ToolSourceId } from '../mocks/tools';
 import { Dna, GitBranch, ListTree } from 'lucide-react';
-import { startNewSessionId } from '../lib/agentClient';
 import { StreamingSurface } from '../components/streaming/StreamingSurface';
-import { useAuth } from '../lib/auth/AuthProvider';
 import { useSessionsClient } from '../lib/useSessions';
 
 type RunState = 'idle' | 'running' | 'success' | 'error';
