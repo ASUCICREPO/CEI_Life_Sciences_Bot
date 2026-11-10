@@ -255,6 +255,18 @@ describe('BackendStack REST API + session store', () => {
     }
   });
 
+  // F08: POST /sessions reads default_model_id/default_mode from UserMetadataTable when none is supplied
+  it('gives the session-metadata handler the UserMetadataTable name and a read-only grant on it', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Handler: 'metadata_handler.handler',
+      Environment: { Variables: Match.objectLike({ CEI_USER_METADATA_TABLE: Match.anyValue() }) },
+    });
+    const statements = policyActionsFor(template, 'SessionMetadataHandlerRole');
+    const onUserMetadata = statements.filter((s) => JSON.stringify(s.resource).includes('UserMetadataTable'));
+    expect(onUserMetadata).toHaveLength(1);
+    expect(onUserMetadata[0].actions).toEqual(['dynamodb:GetItem']);
+  });
+
   it('grants each handler only the table actions it needs', () => {
     const metadataStatements = policyActionsFor(template, 'SessionMetadataHandlerRole');
     const metadataActions = metadataStatements.flatMap((s) => s.actions).filter((a) => a.startsWith('dynamodb:'));

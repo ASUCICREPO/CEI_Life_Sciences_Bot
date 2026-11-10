@@ -779,6 +779,9 @@ export class BackendStack extends cdk.Stack {
       allowedOrigins,
       blockedModelIds: this.config?.blockedModelIds ?? [],
     });
+    // F08: POST /sessions reads the caller's saved default_model_id when none is given (read-only, no PutItem)
+    sessionMetadata.fn.addEnvironment('CEI_USER_METADATA_TABLE', modelSettings.table.tableName);
+    modelSettings.table.grant(sessionMetadata.role, 'dynamodb:GetItem');
     const gateway = new ToolGateway(this, 'ToolGateway', {
       userPool,
       cognitoDomainUrl,
