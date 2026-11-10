@@ -21,7 +21,8 @@ class GatewayDeniedError(GatewayCallError):
     """The scoped principal cannot invoke this source."""
 
 
-def call_gateway_tool(url: str, token: str, source_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def call_gateway_tool(url: str, token: str, source_id: str, arguments: dict[str, Any], *,
+                      tool_name: str = "search") -> dict[str, Any]:
     try:
         endpoint = urlsplit(url)
         host = endpoint.hostname or ""
@@ -33,7 +34,9 @@ def call_gateway_tool(url: str, token: str, source_id: str, arguments: dict[str,
         valid = False
     if not valid:
         raise GatewayCallError("The data source gateway configuration is invalid.")
-    if not token or not re.fullmatch(r"[a-z0-9]+", source_id):
+    if (not token or not isinstance(source_id, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", source_id)
+            or not isinstance(tool_name, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", tool_name)
+            or not isinstance(arguments, dict)):
         raise GatewayCallError("The data source gateway request is invalid.")
     try:
         response = requests.post(
@@ -41,7 +44,7 @@ def call_gateway_tool(url: str, token: str, source_id: str, arguments: dict[str,
             headers={"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream",
                      "MCP-Protocol-Version": "2025-03-26"},
             json={"jsonrpc": "2.0", "id": "call", "method": "tools/call",
-                  "params": {"name": f"{source_id}___search", "arguments": arguments}},
+                  "params": {"name": f"{source_id}___{tool_name}", "arguments": arguments}},
             # The slowest Gateway target has a 150-second Lambda timeout.
             timeout=160,
             allow_redirects=False,
@@ -70,6 +73,8 @@ def call_gateway_tool(url: str, token: str, source_id: str, arguments: dict[str,
         payload = json.loads(text) if isinstance(text, str) else result.get("structuredContent")
         if not isinstance(payload, dict):
             raise GatewayCallError("The data source gateway returned an invalid response.")
+        if payload.get("error"):
+            raise GatewayCallError("The data source could not complete the request.")
         metadata = payload.get("query_metadata")
         if isinstance(metadata, dict) and (metadata.get("error") or (metadata.get("errors") and not payload.get("results"))):
             raise GatewayCallError("The data source could not complete the request.")
