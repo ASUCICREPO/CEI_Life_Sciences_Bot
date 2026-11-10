@@ -39,3 +39,15 @@ def test_eutils_is_globally_limited_and_fails_closed(limiter):
         rate.acquire("eutils", "RID123")
     with pytest.raises(ValueError):
         rate.acquire("blast", "bad!")
+
+
+def test_new_blast_request_cannot_be_polled_for_one_minute(limiter):
+    rate, clock = limiter
+    rate.acquire("blast")
+    rate.register_blast("RID123")
+    clock[0] += 10
+    with pytest.raises(RateLimited):
+        rate.acquire("blast", "RID123")
+    rate.register_blast("RID123")  # Retry cannot shorten or consume the slot.
+    clock[0] += 50
+    rate.acquire("blast", "RID123")

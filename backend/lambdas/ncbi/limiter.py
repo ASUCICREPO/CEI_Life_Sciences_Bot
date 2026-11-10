@@ -27,6 +27,24 @@ class NCBIRateLimiter:
         self._table = table_name
         self._clock = clock
 
+    def register_blast(self, rid: str) -> None:
+        """Reserve the first poll until one minute after a successful submit.
+
+        Call this before returning the RID to a caller. Duplicate registration is
+        idempotent and must not shorten an existing poll deadline.
+        """
+        if not isinstance(rid, str) or not _RID.fullmatch(rid):
+            raise ValueError("invalid BLAST request identifier")
+        now = int(self._clock() * 1000)
+        try:
+            self._client.put_item(TableName=self._table,
+                Item={"pk": {"S": f"blast-rid#{rid}"}, "next_allowed": {"N": str(now + 60_000)},
+                      "expires_at": {"N": str(now // 1000 + 86400)}},
+                ConditionExpression="attribute_not_exists(pk)")
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
+
     def acquire(self, service: str, rid: str | None = None) -> None:
         if service == "eutils" and rid is None:
             slots = [("eutils", 350)]  # <= 3 requests/second across the deployment
