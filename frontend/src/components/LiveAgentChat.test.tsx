@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
   invokeAgent: vi.fn(),
   streamProps: vi.fn<(props: unknown) => void>(),
+  streamViewProps: vi.fn<(props: unknown) => void>(),
 }));
 
 vi.mock('../lib/auth/AuthProvider', () => ({ useAuth: () => ({ config: { researchStreamingEnabled: mocks.streaming } }) }));
@@ -15,12 +16,25 @@ vi.mock('../lib/useSessions', () => ({ useSessionsClient: () => ({ createSession
 vi.mock('../lib/agentClient', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/agentClient')>()), invokeAgent: mocks.invokeAgent,
 }));
+// Renders every row (no real windowing) so tests can find message content by text.
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: () => ({ getTotalSize: () => 0, getVirtualItems: () => [], measureElement: () => {}, scrollToIndex: () => {} }),
+  useVirtualizer: (options: { count: number }) => ({
+    getTotalSize: () => options.count * 10,
+    getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ key: index, index, start: index * 10 })),
+    measureElement: () => {},
+    scrollToIndex: () => {},
+  }),
 }));
+// StreamView's mock renders a button so tests can drive a hitl interaction's onInteractionAction
+// without the real reducer/CEIUISurface stack (covered separately in StreamingSurface.test.tsx).
 vi.mock('./streaming/StreamingSurface', () => ({
   StreamingSurface: (props: unknown) => { mocks.streamProps(props); return <div>Streaming</div>; },
-  StreamView: () => null,
+  StreamView: (props: { onInteractionAction?: (seq: number, envelope: unknown) => void }) => {
+    mocks.streamViewProps(props);
+    return props.onInteractionAction
+      ? <button type="button" onClick={() => props.onInteractionAction!(1, { text: 'Resumed', status: 'completed' })}>Answer</button>
+      : null;
+  },
 }));
 
 beforeEach(() => {
@@ -29,6 +43,7 @@ beforeEach(() => {
   mocks.createSession.mockReset();
   mocks.invokeAgent.mockReset();
   mocks.streamProps.mockReset();
+  mocks.streamViewProps.mockReset();
 });
 afterEach(cleanup);
 
@@ -58,5 +73,29 @@ describe('Research chat transport', () => {
     await waitFor(() => expect(mocks.invokeAgent).toHaveBeenCalledTimes(1));
     expect(mocks.createSession).not.toHaveBeenCalled();
     expect(mocks.streamProps).not.toHaveBeenCalled();
+  });
+});
+
+describe('stream hitl answer', () => {
+  it('answers a terminal stream hitl card and appends the resumed turn', async () => {
+    mocks.createSession.mockResolvedValue({ session_id: 'server-session' });
+    render(<MemoryRouter><LiveAgentChat agent="research" mode="science" threadKey="live-research"
+      title="Research" description="Research" examples={[]} placeholder="Ask" /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Ask'), { target: { value: 'question' } });
+    fireEvent.submit(screen.getByLabelText('Ask').closest('form')!);
+    await waitFor(() => expect(mocks.streamProps).toHaveBeenCalled());
+
+    // Simulate the stream reaching a terminal hitl_request: StreamingSurface hands the state to onFinished.
+    const { onFinished } = mocks.streamProps.mock.calls.at(-1)![0] as {
+      onFinished: (state: unknown, connectionError: string | null) => void;
+    };
+    onFinished({ status: 'awaiting_input', interactions: [{ kind: 'hitl', seq: 1, surface: {} }] }, null);
+
+    const answer = await screen.findByText('Answer');
+    fireEvent.click(answer);
+    expect(await screen.findByText('Resumed')).toBeTruthy();
+    await waitFor(() => expect(mocks.streamViewProps.mock.calls.at(-1)![0]).toMatchObject({
+      answeredInteractions: new Set([1]),
+    }));
   });
 });
