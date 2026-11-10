@@ -47,7 +47,7 @@ def test_memory_retrieval_is_disabled_by_default(monkeypatch):
 
 
 class _Context:
-    def __init__(self, session_id: str = "0b0c4f7e-5555-4a55-8a55-000000000001") -> None:
+    def __init__(self, session_id: str = "0b0c4f7e-8888-4a88-8a88-000000000001") -> None:
         self.session_id = session_id
         self.request_headers = {"Authorization": "Bearer test-token:test-user"}
 
@@ -83,7 +83,7 @@ def test_drafting_resume_does_not_recall(monkeypatch) -> None:
 
     # A cold resume (no pending surface, no checkpoint) always answers "expired";
     # it must do so without ever touching long-term memory recall.
-    session_id = "0b0c4f7e-5555-4a55-8a55-000000000002"
+    session_id = "0b0c4f7e-8888-4a88-8a88-000000000002"
     payload = {
         "op": "resume",
         "action": {
