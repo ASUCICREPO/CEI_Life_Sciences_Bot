@@ -59,6 +59,13 @@ Make the four inline HITL tools (`ask_user_question`, `present_alternatives`, `r
 - AgentCore Memory short-term event expiry maximum is set by B82 to the maximum available value (expected 365 days) — verify the real number during implementation. If the real value is shorter than expected, the "expired, start again" UI (B82) is the accepted fallback, not a sign that B56/B57's design needs to change.
 - Denied-call behavior inside LangGraph when a Gateway call is Cedar-denied mid-run is a separate open item (`auth-and-tool-scope.md` §8) — not this phase's problem, but a paused-then-resumed run could hit it on resume; note for F4/S2 follow-up.
 
-## Handoff notes
+## Implementation status (2026-11-10)
+Built on `complete-cei-workflows` (statically reviewed; Node tests pass locally, Python/Jest tests and deployment pending in CodeBuild):
+- `POST /ui-actions` (`lambdas/ui-actions/index.js`, Node, STREAM mode, 14 min): exact `ActionRequest` field check, session ownership and the owning agent from `ChatMetadataStore.agent_type` (never from the request), then `op: "resume"` to that runtime with the caller's own bearer token (B102). Only Analysis and Pipeline pause today, so other chats get `invalid_request`. STREAM mode because a resumed analysis runs longer than a buffered integration's 29 s.
+- Deployed SPA builds send actions there (`agentClient.sendAction` when `apiBaseUrl` is set); the local demo keeps the proxy `op: "resume"` path.
+- B82 expiry: a cold resume with no checkpoint answers `status: "rejected"`, `code: "expired"`, "This request has expired. Start again." (`ops.expired_envelope`); a duplicate against an existing checkpoint stays `stale`.
+Still open: tasks 1–4 (inline tools calling `interrupt()`, Research `clarify`, Drafting `approve_outline`/revise), `AgentCoreMemorySaver` for Analysis/Pipeline/Drafting (S4 unproven), and the two-process durability integration test.
+
+
 - F14 (Analysis) and F17 (Pipeline Manager) must reuse this phase's `interrupt`-based pattern and the same `POST /ui-actions` endpoint — no new action endpoint should be built for them.
 - F16 (background jobs) needs this phase's checkpoint-based pause primitive as the foundation for its "checkpoint, stop the session, resume in a new session" async HITL behavior (B25).
