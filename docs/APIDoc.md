@@ -32,7 +32,9 @@ https://[api-id].execute-api.[region].amazonaws.com/[stage]/
 
 A run whose plan step estimates more than 10 minutes does not stream to completion; it emits `job_handoff` and the client switches to the Jobs routes below. This decision is made once, before any part of the answer streams — there is no mid-run handoff from a streaming run to a background job.
 
-**Planned (F9), not built.** The Session Router can also return a `ChoicePicker` surface asking the user to pick one of the 4 agents, when a free-text request's classifier confidence is low. The user's pick then starts the run.
+**Request body.** `task_type` is optional. The value `live-research` routes the turn to Research with no classifier call (F5). When `task_type` is absent, the turn is free text, and the Session Router classifies it (F9). Any other `task_type` value gets `400 invalid_request`. `message` (max 16,000 characters) and `mode` (`science` or `business`) are required.
+
+**Built (F9 backend; the free-text input in the UI is in progress).** The Session Router sends a free-text message to a fixed classifier model (`CEI_ROUTER_MODEL_ID`, Converse with the Guardrail). The classifier picks Research, Drafting, Analysis, or Pipeline Manager. When the confidence is 0.7 or more, the Router starts that agent. Drafting, Analysis, and Pipeline Manager return one buffered envelope; the Session Runner changes it into the same SSE events. When the confidence is less than 0.7, the stream ends with `surface_begin` and one terminal `hitl_request` that holds a `ChoicePicker` (4 options). The Router keeps the original message as a pending choice for 600 seconds. The user's pick goes to `POST /ui-actions` (see below). If the Guardrail blocks the message, the route returns `400 invalid_request`. Any other classifier failure returns `503 service_unavailable` and starts no agent.
 
 ---
 
@@ -90,24 +92,24 @@ Every public route requires the Cognito authorizer. The Status column shows what
 |---|---|---|---|---|
 | POST | `/chat/stream` | STREAM | Send a chat message; streams the answer as CEI UI 1.2 SSE | Built (SessionRunner) |
 | POST | `/tools/{source}/chat/stream` | STREAM | Chat with exactly one data source (a "tool agent"); same event catalog as `/chat/stream` | Planned |
-| POST | `/sessions` | BUFFERED | Create a chat session | Built |
+| POST | `/sessions` | BUFFERED | Create a chat session (an optional `model_id` must be a discovered, not-blocked model) | Built |
 | GET | `/sessions` | BUFFERED | List the caller's sessions (paginated) | Built |
 | GET | `/sessions/{sessionId}` | BUFFERED | Get one session's metadata | Built |
-| PATCH | `/sessions/{sessionId}` | BUFFERED | Update session title and/or mode | Built |
+| PATCH | `/sessions/{sessionId}` | BUFFERED | Update session title and/or mode (no `model_id`; the model is locked at create) | Built |
 | DELETE | `/sessions/{sessionId}` | BUFFERED | Delete a session (starts the delete cascade, `202 Accepted`) | Planned (F19, deferred) |
 | GET | `/sessions/{sessionId}/history` | BUFFERED | Cursor-paginated turn history (no trace) | Built |
 | GET | `/sessions/{sessionId}/turns/{messageId}/trace` | BUFFERED | Load one turn's trace log (lazy-loaded on thinking-block expand) | Built |
 | GET | `/sessions/{sessionId}/exports` | BUFFERED | List the exports of one session | Built |
-| POST | `/ui-actions` | STREAM | Submit a typed CEI UI action (including HITL answers); streams the resumed run | Built (UiActions; only Analysis and Pipeline pause today) |
+| POST | `/ui-actions` | STREAM | Submit a typed CEI UI action (a HITL answer or a router choice); returns ONE JSON envelope, not SSE | Built (UiActions; Research, Drafting, Analysis, and Pipeline resume; plus the `route-choice` action) |
 | POST | `/sessions/{sessionId}/attachments/presign` | BUFFERED | Get a pre-signed S3 POST for a file upload (max 55 MB) | Planned |
 | GET | `/sessions/{sessionId}/attachments/{fileId}` | BUFFERED | Get attachment processing status | Planned |
 | DELETE | `/sessions/{sessionId}/attachments/{fileId}` | BUFFERED | Delete an attachment and its Knowledge Base chunks | Planned |
 | GET | `/jobs` | BUFFERED | List the caller's background jobs | Built |
 | GET | `/jobs/{jobId}` | BUFFERED | Get one background job's status | Built |
 | POST | `/jobs/{jobId}/cancel` | BUFFERED | Cancel a running background job (`202 Accepted`) | Built |
-| GET | `/settings` | BUFFERED | Get user settings (default model, default mode, configured sources) | Planned |
-| PUT | `/settings` | BUFFERED | Update user settings | Planned |
-| GET | `/models` | BUFFERED | List selectable Bedrock models (blocklist already applied) | Planned |
+| GET | `/settings` | BUFFERED | Get user settings (default model, default mode, configured sources) | Built (ModelSettings) |
+| PUT | `/settings` | BUFFERED | Update user settings (`default_model_id`, `default_mode`) | Built (ModelSettings) |
+| GET | `/models` | BUFFERED | List selectable Bedrock models (blocklist already applied) | Built (ModelSettings) |
 | PUT | `/settings/api-keys/{sourceId}` | BUFFERED | Store a user-owned API key for one data source | Planned |
 | DELETE | `/settings/api-keys/{sourceId}` | BUFFERED | Remove a stored API key | Planned |
 | GET | `/exports/{exportId}/download` | BUFFERED | Get a pre-signed download URL for a completed export | Built |
@@ -119,6 +121,25 @@ The internal route `POST /internal/token-refresh` (`backend/lib/constructs/tool-
 There is no `POST /jobs` route — background jobs are always started internally by the Session Router or the Pipeline Manager, never created directly by a client.
 
 Full request/response bodies for every route, the exact HITL action shape, and export format list (PDF, DOCX, Markdown, CSV, LaTeX, TXT): `.agents/specs/api.md`.
+
+## Route details for F8, F9, and F13
+
+### `GET /models`, `GET /settings`, `PUT /settings` (F8)
+
+One Lambda (`backend/lambdas/models-settings-handler/handler.py`) serves these 3 routes.
+
+- `GET /models` returns `{"models": [{"model_id", "label"}]}`. The list comes from Bedrock discovery (`ListFoundationModels`, `ListInferenceProfiles`, `GetInferenceProfile`). The blocklist is already applied: the built-in D3 patterns plus `CEI_BLOCKED_MODELS`.
+- `GET /settings` returns `default_model_id`, `default_mode`, and `configured_sources`. A user with no record gets `null` values. `configured_sources` is always `[]` until F18.
+- `PUT /settings` accepts only `default_model_id` and `default_mode`. Any other field gets `400`. A `default_model_id` must be in the `GET /models` list, or the route returns `400`. There is no silent fallback.
+
+The settings are stored in the UserMetadataTable (`user_id` + `record`). `POST /sessions` does the same model check on its optional `model_id`. Inference permission stays Anthropic-only, so a listed non-Anthropic model can fail at run time.
+
+### `POST /ui-actions` (F13, F9)
+
+The body is one typed CEI UI action (`request_id`, `session_id`, `surface_id`, `revision`, `interaction_id`, `component_id`, `action_id`, and an optional `value`). The route returns ONE JSON envelope (`status`, `text`, optional `ui`, `action_response`). It does not return SSE. `status` is one of `completed`, `awaiting_input`, `running`, `rejected`, `stale`, or `error`.
+
+- **HITL resume.** UiActions reads the session's `agent_type` and sends the action to that runtime. Research (clarifying question), Drafting (outline approval), Analysis, and Pipeline Manager can resume. A session of another agent type gets `400 invalid_request`.
+- **Router choice.** An action with `interaction_id` and `component_id` `router-choice` and `action_id` `route-choice` is the user's pick from the router `ChoicePicker`. `value` must be `research`, `drafting`, `analysis`, or `pipeline_manager`. UiActions reads the pending choice (`route_choice#<session_id>` in the ActiveRunsStore) and starts the chosen agent with the original message. It does not classify the message again. An expired choice (more than 600 seconds) returns `status: rejected`. A wrong surface, revision, or value returns `status: stale`.
 
 ---
 
