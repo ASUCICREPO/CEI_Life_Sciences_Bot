@@ -29,16 +29,14 @@ class ReviewedExportRequest:
 
 def prepare_reviewed_export(
     *, user_id: str, session_id: str, turn_id: str, body: dict[str, Any], history: ChatHistoryRepository,
-    turn_status: str | None = None,
 ) -> ReviewedExportRequest:
     """Require an explicit acknowledgment and load only the caller's completed AI text.
 
     `user_id` must come from Cognito claims; the caller must separately verify both
     session ownership and metadata existence before calling. Text is loaded from
     persisted history, never from the request body, model, or tool arguments.
-    `turn_status` must come from a durable server-side completion record. Current
-    history records do not have such a field, so callers must fail closed until
-    that record is available.
+    The completed marker must be on the persisted turn. Legacy turns lacking a
+    marker fail closed; a caller-supplied status is never accepted.
     """
     if not user_id or not is_session_uuid(session_id) or not isinstance(turn_id, str) or not _TURN_ID.fullmatch(turn_id):
         raise invalid_request("The export request is not valid.")
@@ -47,16 +45,14 @@ def prepare_reviewed_export(
     format = body.get("format")
     if not isinstance(format, str) or format not in _FORMATS:
         raise invalid_request("The export format is not supported.")
-    if turn_status != "completed":
-        raise not_found("The completed turn was not found.")
-
     cursor = None
     while True:
         page = history.load_page(user_id, session_id, limit=100, start_key=cursor)
         for turn in page.items:
             if turn.message_id != turn_id:
                 continue
-            if turn.role != MessageRole.AI or turn.user_id not in (None, user_id):
+            if (turn.role != MessageRole.AI or turn.user_id != user_id
+                    or turn.completion_status != "completed"):
                 raise not_found("The completed turn was not found.")
             text = "\n\n".join(block.body for block in turn.content_blocks
                                if block.block_type == "text" and isinstance(block.body, str)).strip()

@@ -22,13 +22,13 @@ SESSION = "6f1c2d3e-0000-4000-8000-000000000001"
 
 
 def request(history, **changes):
-    args = {"user_id": "alice", "session_id": SESSION, "turn_id": "t1", "turn_status": "completed",
+    args = {"user_id": "alice", "session_id": SESSION, "turn_id": "t1",
             "body": {"format": "md", "reviewed": True}, "history": history}
     return prepare_reviewed_export(**(args | changes))
 
 
-def turn(role=MessageRole.AI, user="alice", text="Persisted answer"):
-    return SimpleNamespace(message_id="t1", role=role, user_id=user,
+def turn(role=MessageRole.AI, user="alice", text="Persisted answer", status="completed"):
+    return SimpleNamespace(message_id="t1", role=role, user_id=user, completion_status=status,
                            content_blocks=[SimpleNamespace(block_type="text", body=text)])
 
 
@@ -65,7 +65,7 @@ def test_rejects_human_foreign_and_empty_turns(saved_turn):
 
 def test_requires_durable_completed_status():
     history = Mock()
+    history.load_page.return_value = Page(items=[turn(status=None)], next_key=None)
     with pytest.raises(ApiError) as exc:
-        request(history, turn_status=None)
+        request(history)
     assert exc.value.status == 404
-    history.load_page.assert_not_called()

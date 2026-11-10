@@ -59,6 +59,20 @@ def _recorder(sess) -> ConversationRecorder:
     return ConversationRecorder(ChatMetadataRepository(sess), ChatHistoryRepository(sess))
 
 
+def test_completed_marker_is_persisted_only_when_explicit(session):  # noqa: F811
+    rec = _recorder(session)
+
+    async def scenario():
+        await begin_turn(user_id="u1", session_id="s1", prompt="q", agent_type="drafting", mode="science",
+                         warm=False, recorder=rec)
+        await history_hooks.end_turn(user_id="u1", session_id="s1", envelope={"text": "Ready", "status": "completed"}, recorder=rec)
+        await history_hooks.end_turn(user_id="u1", session_id="s1", envelope={"text": "Unknown"}, recorder=rec)
+
+    asyncio.run(scenario())
+    turns = ChatHistoryRepository(session).load_page("u1", "s1").items
+    assert [turn.completion_status for turn in turns] == [None, "completed", None]
+
+
 def test_begin_turn_rehydrates_cold_thread_without_the_new_prompt(session):  # noqa: F811
     rec = _recorder(session)
 

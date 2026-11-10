@@ -177,6 +177,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     response = {
         "result": full_output,
         "text": text,
+        "status": "completed",
         "ui": build_drafting_surface(
             text,
             surface_id="drafting-final",

@@ -131,6 +131,7 @@ class ConversationRecorder:
         thinking: str | None = None,
         first_prompt: str | None = None,
         message_id: str | None = None,
+        completion_status: str | None = None,
     ) -> int | None:
         """Record the agent's answer; returns its sequence (None on failure). Never raises: the user still gets
         the answer if persistence fails."""
@@ -143,6 +144,7 @@ class ConversationRecorder:
                 self._ai_blocks(text, ui_surface, thinking),
                 citations or [],
                 message_id,
+                completion_status,
             )
         except Exception as exc:  # noqa: BLE001 — logged, never surfaced to the user
             log.error("chat history: failed to record AI turn session=%s error_type=%s", session_id, type(exc).__name__)
@@ -244,6 +246,7 @@ class ConversationRecorder:
         blocks: list[ContentBlock],
         citations: list[dict[str, Any]],
         message_id: str | None = None,
+        completion_status: str | None = None,
     ) -> int:
         """Allocate the next sequence number from the metadata counter and write one message item."""
         for _ in range(_SEQUENCE_RETRIES):
@@ -259,6 +262,7 @@ class ConversationRecorder:
                 citations=citations,
                 timestamp=datetime.now(UTC),
                 sequence_number=sequence,
+                completion_status=completion_status,
             )
             try:
                 self._history.append(record)

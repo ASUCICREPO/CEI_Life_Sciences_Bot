@@ -59,6 +59,9 @@ class ChatHistoryRecord(BaseModel):
     citations: list[dict[str, Any]] = Field(default_factory=list)
     timestamp: datetime
     sequence_number: int
+    # Only explicitly completed agent answers may be exported. Legacy records
+    # without this marker remain readable but are not implicitly exportable.
+    completion_status: Literal["completed", "awaiting_input", "error"] | None = None
     truncated: bool = False  # set when the size guard trimmed this item
 
 
