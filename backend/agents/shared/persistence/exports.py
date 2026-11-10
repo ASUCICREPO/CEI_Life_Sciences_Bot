@@ -1,0 +1,97 @@
+"""Owner-partitioned export metadata and private object storage.
+
+Export IDs begin with the session UUID. This permits a strongly consistent,
+paginated query for one chat and a point lookup by export ID without S3 scans
+or eventually consistent secondary indexes.
+"""
+from __future__ import annotations
+
+import re
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+import boto3
+from boto3.dynamodb.conditions import Key
+
+from shared.persistence.ownership import is_session_uuid
+from shared.persistence.page import Page, from_dynamo
+
+_EXPORT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[0-9a-f]{32}$")
+_FORMATS = {"pdf", "docx", "md", "csv", "latex", "txt"}
+
+
+def valid_export_id(value: Any) -> bool:
+    return isinstance(value, str) and _EXPORT_ID.fullmatch(value) is not None
+
+
+class ExportRepository:
+    def __init__(self, table_name: str, bucket: str, *, dynamodb: Any = None, s3: Any = None) -> None:
+        if not table_name or not bucket:
+            raise ValueError("export storage must be configured")
+        self._table = (dynamodb or boto3.resource("dynamodb")).Table(table_name)
+        self._s3 = s3 or boto3.client("s3")
+        self._bucket = bucket
+
+    def save(self, *, user_id: str, session_id: str, turn_id: str, filename: str,
+             format: str, data: bytes, reviewed: bool) -> dict[str, Any]:
+        """Persist a reviewed export; never publish metadata before the object exists."""
+        if reviewed is not True:
+            raise ValueError("review acknowledgment is required")
+        if not user_id or not is_session_uuid(session_id) or not turn_id:
+            raise ValueError("owner, session and turn are required")
+        if format not in _FORMATS or not isinstance(data, bytes) or not filename or "/" in filename or "\\" in filename:
+            raise ValueError("invalid export")
+        export_id = f"{session_id.lower()}_{uuid4().hex}"
+        # Neither the client-provided filename nor the user ID is needed in the object key.
+        object_key = f"exports/{uuid4().hex}/{uuid4().hex}"
+        now = datetime.now(UTC).isoformat()
+        item = {"user_id": user_id, "export_id": export_id, "session_id": session_id.lower(),
+                "turn_id": turn_id, "s3_key": object_key, "filename": filename, "format": format,
+                "size": len(data), "created_at": now, "status": "ready", "reviewed_at": now}
+        self._s3.put_object(Bucket=self._bucket, Key=object_key, Body=data, StorageClass="INTELLIGENT_TIERING")
+        try:
+            self._table.put_item(Item=item, ConditionExpression="attribute_not_exists(user_id)")
+        except Exception:
+            # A timeout can happen after DynamoDB committed the write. Check before deleting
+            # the object; if DynamoDB is unavailable too, preserve it for reconciliation.
+            try:
+                existing = self.get(user_id, export_id)
+            except Exception:
+                raise
+            if existing and existing.get("s3_key") == object_key:
+                return existing
+            self._s3.delete_object(Bucket=self._bucket, Key=object_key)
+            raise
+        return item
+
+    def get(self, user_id: str, export_id: str) -> dict[str, Any] | None:
+        if not user_id or not valid_export_id(export_id):
+            return None
+        item = self._table.get_item(Key={"user_id": user_id, "export_id": export_id}, ConsistentRead=True).get("Item")
+        return from_dynamo(item) if item else None
+
+    def list_for_session(self, user_id: str, session_id: str, *, limit: int = 20,
+                         start_key: dict[str, Any] | None = None) -> Page[dict[str, Any]]:
+        if not user_id or not is_session_uuid(session_id):
+            raise ValueError("invalid owner or session")
+        args: dict[str, Any] = {"KeyConditionExpression": Key("user_id").eq(user_id) &
+                               Key("export_id").begins_with(session_id.lower() + "_"),
+                               "ConsistentRead": True, "Limit": limit}
+        if start_key:
+            args["ExclusiveStartKey"] = start_key
+        result = self._table.query(**args)
+        return Page(items=[from_dynamo(item) for item in result.get("Items", [])],
+                    next_key=result.get("LastEvaluatedKey"))
+
+    def download_url(self, item: dict[str, Any]) -> str:
+        return self._s3.generate_presigned_url("get_object", Params={"Bucket": self._bucket, "Key": item["s3_key"]},
+                                               ExpiresIn=900)
+
+    def delete(self, user_id: str, export_id: str) -> None:
+        item = self.get(user_id, export_id)
+        if item is None:
+            return
+        # Delete the object first so a retry can still locate it if S3 is unavailable.
+        self._s3.delete_object(Bucket=self._bucket, Key=item["s3_key"])
+        self._table.delete_item(Key={"user_id": user_id, "export_id": export_id})

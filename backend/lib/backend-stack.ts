@@ -173,6 +173,16 @@ export class BackendStack extends cdk.Stack {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
+    // Export objects are written directly with the Intelligent-Tiering storage class.
+    const exportsBucket = new s3.Bucket(this, 'ExportsBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      serverAccessLogsBucket: logsBucket,
+      serverAccessLogsPrefix: 'exports-access-logs/',
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
     // ---------------------------------------------------------------
     // REST API (B2): one Regional REST API; routes, authorizer and Lambdas are added further down.
     // Created before the CSP because connect-src needs its origin (RestApi id only, no cycle with the site).
@@ -434,6 +444,15 @@ export class BackendStack extends cdk.Stack {
 
     const pythonDeps = new PythonDepsLayer(this, 'PythonDepsLayer');
 
+    const exportsTable = new dynamodb.Table(this, 'ExportMetadataStore', {
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'export_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
     const sessionLambdaEnv = {
       CEI_AWS_REGION: this.region,
       CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName,
@@ -478,6 +497,23 @@ export class BackendStack extends cdk.Stack {
       'session-history-handler',
       'history_handler.handler',
     );
+    const exportsHandler = createSessionFunction('ExportsHandler', 'exports-handler', 'handler.handler', {
+      ...sessionLambdaEnv,
+      CEI_EXPORT_METADATA_TABLE: exportsTable.tableName,
+      CEI_EXPORT_BUCKET: exportsBucket.bucketName,
+    });
+    exportsTable.grant(exportsHandler.role, 'dynamodb:GetItem', 'dynamodb:Query');
+    exportsHandler.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObject'], resources: [exportsBucket.arnForObjects('exports/*')],
+    }));
+    NagSuppressions.addResourceSuppressions(exportsHandler.role, [{
+      id: 'AwsSolutions-IAM5',
+      reason: 'ADR: Export object read scope | Rationale: report object keys are generated at runtime under one bucket prefix | Alternative: fixed object ARNs rejected because exports do not exist at deployment',
+    }], true);
+    exportsHandler.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn],
+    }));
+    chatHistoryTable.grant(exportsHandler.role, 'dynamodb:Query');
     const clientDiagnostics = createSessionFunction('ClientDiagnostics', 'client-diagnostics', 'handler.handler',
       { ALLOWED_ORIGINS: allowedOrigins.join(',') }, []);
 
@@ -616,6 +652,12 @@ export class BackendStack extends cdk.Stack {
     sessionResource.addMethod('PATCH', metadataIntegration, methodOptions);
     const historyResource = sessionResource.addResource('history', { defaultCorsPreflightOptions: corsOptions });
     historyResource.addMethod('GET', historyIntegration, methodOptions);
+    const sessionExports = sessionResource.addResource('exports', { defaultCorsPreflightOptions: corsOptions });
+    sessionExports.addMethod('GET', new apigw.LambdaIntegration(exportsHandler.fn), methodOptions);
+    const exportsResource = api.root.addResource('exports', { defaultCorsPreflightOptions: corsOptions });
+    const exportResource = exportsResource.addResource('{exportId}', { defaultCorsPreflightOptions: corsOptions });
+    exportResource.addResource('download', { defaultCorsPreflightOptions: corsOptions })
+      .addMethod('GET', new apigw.LambdaIntegration(exportsHandler.fn), methodOptions);
     // F6 B59: lazy per-turn trace, fetched only when the user opens the thinking block
     const turnsResource = sessionResource.addResource('turns', { defaultCorsPreflightOptions: corsOptions });
     const turnResource = turnsResource.addResource('{messageId}', { defaultCorsPreflightOptions: corsOptions });
