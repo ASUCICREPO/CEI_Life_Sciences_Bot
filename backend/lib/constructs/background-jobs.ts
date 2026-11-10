@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
@@ -64,7 +64,8 @@ export class BackgroundJobs extends Construct {
     const jobs = this.pythonFunction('JobsHandler', 'jobs-handler', props.pythonDepsLayer, Duration.seconds(15), {
       ...env,
       ALLOWED_ORIGINS: props.allowedOrigins.join(','),
-      CEI_RUNTIME_STOP_URLS: JSON.stringify(props.runtimeStopUrls),
+      // ADR: Stack.toJsonString | Rationale: the URLs hold deploy-time tokens; same as AGENT_URLS on the agent proxy
+      CEI_RUNTIME_STOP_URLS: Stack.of(this).toJsonString(props.runtimeStopUrls),
     });
     jobs.role.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:UpdateItem'], resources: [this.table.tableArn],
