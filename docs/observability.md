@@ -13,7 +13,7 @@ Initial thresholds are deliberately sensitive and should be tuned against observ
 - API Gateway 5xx rate: 5% over five minutes.
 - Application Lambda errors and throttles: one in five minutes per function and metric.
 - DynamoDB throttles: one in five minutes, aggregated by operation per table. Partial batch throttles also appear in read/write throttle event metrics and should be reviewed separately.
-- Handled failures: one in five minutes for the Runner, Router, session APIs, Agent Proxy, token refresh, and each data-source function. These include partial openFDA failures, failed CMS detail fetches, Runner stream transport failures, and replay timeouts.
+- Handled failures: one in five minutes for the Runner, Router, session APIs, Exports, UI actions (`resume_failed`), Jobs (including `runtime_stop_failed`), Agent Proxy, NCBI read-only, token refresh, and each data-source function. These include partial openFDA failures, failed CMS detail fetches, Runner stream transport failures, and replay timeouts.
 - Browser failures: five authenticated diagnostic reports in five minutes.
 - Sign-up attempts: 20 in five minutes; Gateway policy denials: 5 in five minutes.
 - CloudFront WAF: 25% blocked out of at least 100 allowed or blocked requests in five minutes. Its alarm runs in `us-east-1` and targets the shared topic in the application Region.

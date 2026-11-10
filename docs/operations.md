@@ -35,8 +35,11 @@ real development traffic before any production rollout.
 
 The dashboard includes browser failure counts and agent application errors;
 neither has a separate alarm. B75 excludes stale-job and agent-health alarms:
-the planned watchdog and live job view must handle those conditions. The
-watchdog and full background job workflow are not yet proven.
+the watchdog and live job view must handle those conditions. CDK defines the
+watchdog (`JobWatchdog`, run every 5 minutes by an EventBridge rule in
+`backend/lib/constructs/background-jobs.ts`). Its checkpoint resume is off
+(`CEI_WATCHDOG_RESUME_ENABLED=false`). The watchdog and the full background
+job workflow are not yet proven on a live deployment.
 
 ## Verification in an isolated development environment
 
