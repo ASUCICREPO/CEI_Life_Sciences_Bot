@@ -198,6 +198,41 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
         item = response.get("Item")
         return ChatMetadataRecord(**from_dynamo(item)) if item else None
 
+    def initialize_turn_settings(self, user_id: str, session_id: str, *,
+                                 mode: str | None, model_id: str | None) -> ChatMetadataRecord:
+        """Fill missing legacy settings without overwriting concurrent user changes.
+
+        A conditional failure returns the latest consistent record so the caller
+        can revalidate the winner. A deleted row is never recreated.
+        """
+        if mode is None and model_id is None:
+            raise ValueError("no settings to initialize")
+        names = {"#uid": "user_id"}
+        values: dict[str, Any] = {":null": None}
+        sets, checks = [], ["attribute_exists(#uid)"]
+        for field, value in (("mode", mode), ("model_id", model_id)):
+            if value is not None:
+                names[f"#{field}"] = field
+                values[f":{field}"] = value
+                sets.append(f"#{field} = :{field}")
+                checks.append(f"(attribute_not_exists(#{field}) OR #{field} = :null)")
+        try:
+            result = self._table.update_item(
+                Key={"user_id": user_id, "session_id": session_id},
+                UpdateExpression="SET " + ", ".join(sets),
+                ConditionExpression=" AND ".join(checks),
+                ExpressionAttributeNames=names, ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+            return ChatMetadataRecord(**from_dynamo(result["Attributes"]))
+        except ClientError as exc:
+            if not _is_conditional_failure(exc):
+                raise
+            current = self.get(user_id, session_id)
+            if current is None:
+                raise SessionNotFoundError(session_id) from None
+            return current
+
     def list_by_user(
         self,
         user_id: str,

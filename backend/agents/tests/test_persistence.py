@@ -111,6 +111,18 @@ def test_get_returns_record_scoped_to_user(session):
     assert repo.get("u1", "missing") is None
 
 
+def test_initializes_legacy_settings_without_overwriting_concurrent_mode(session):
+    repo = ChatMetadataRepository(session)
+    repo.create(_meta(mode=None, model_id=None))
+    repo.update("u1", "s1", mode=ChatMode.SCIENCE)
+    winner = repo.initialize_turn_settings("u1", "s1", mode="business", model_id="model-a")
+    assert winner.mode == ChatMode.SCIENCE and winner.model_id is None
+    updated = repo.initialize_turn_settings("u1", "s1", mode=None, model_id="model-a")
+    assert updated.mode == ChatMode.SCIENCE and updated.model_id == "model-a"
+    with pytest.raises(SessionNotFoundError):
+        repo.initialize_turn_settings("other", "s1", mode="business", model_id="model-a")
+
+
 def test_new_record_round_trips_document_and_analysis_type(session):
     repo = ChatMetadataRepository(session)
     repo.create(_meta(agent_type="drafting", document_type="protocol", analysis_type="competitor"))

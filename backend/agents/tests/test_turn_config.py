@@ -11,7 +11,7 @@ from shared.runtime.turn_config import resolve_turn_config
 
 
 def test_existing_session_settings_override_payload():
-    recorder = SimpleNamespace(session_metadata=AsyncMock(return_value=SimpleNamespace(mode="business", model_id=None)))
+    recorder = SimpleNamespace(session_metadata=AsyncMock(return_value=SimpleNamespace(mode="business", model_id=config.default_model_id)))
     result = asyncio.run(resolve_turn_config(recorder, user_id="owner", session_id="session", initial_mode="science"))
     assert result.mode == "business" and result.model_id == config.default_model_id
     recorder.session_metadata.assert_awaited_once_with(user_id="owner", session_id="session")
@@ -21,6 +21,18 @@ def test_unverified_saved_model_is_rejected():
     recorder = SimpleNamespace(session_metadata=AsyncMock(return_value=SimpleNamespace(mode="science", model_id="other-model")))
     with pytest.raises(ModelPolicyError):
         asyncio.run(resolve_turn_config(recorder, user_id="owner", session_id="session", initial_mode="science"))
+
+
+def test_legacy_settings_are_initialized_and_race_winner_is_rechecked():
+    initial = SimpleNamespace(mode=None, model_id=None)
+    concurrent = SimpleNamespace(mode="science", model_id=None)
+    final = SimpleNamespace(mode="science", model_id=config.default_model_id)
+    recorder = SimpleNamespace(session_metadata=AsyncMock(return_value=initial),
+                               initialize_turn_settings=AsyncMock(side_effect=[concurrent, final]))
+    result = asyncio.run(resolve_turn_config(recorder, user_id="owner", session_id="session", initial_mode="business"))
+    assert result.mode == "science" and result.model_id == config.default_model_id
+    assert recorder.initialize_turn_settings.await_args_list[0].kwargs["mode"] == "business"
+    assert recorder.initialize_turn_settings.await_args_list[1].kwargs["mode"] is None
 
 
 def test_missing_and_invalid_initial_mode():
@@ -79,6 +91,25 @@ def test_research_rejects_unverified_model_before_history_write(monkeypatch):
     assert response.status_code == 400
     assert b"unverified-model" not in response.body
     start_turn.assert_not_awaited()
+
+
+def test_stream_reports_racing_model_change_without_leaking_id(monkeypatch):
+    import main
+    from shared.runtime import history
+
+    recorder = history.get_recorder()
+    monkeypatch.setattr(recorder, "session_metadata", AsyncMock(return_value=SimpleNamespace(
+        mode="science", model_id="private-model")))
+    monkeypatch.setattr(history, "get_recorder", lambda: recorder)
+    context = SimpleNamespace(session_id="0b0c4f7e-3333-4a33-8a33-000000000001",
+                              request_headers={"Authorization": "Bearer test-token:test-user"})
+
+    async def invoke_and_read():
+        response = await main.invoke({"prompt": "question", "stream": True}, context)
+        return b"".join([chunk async for chunk in response.body_iterator])
+
+    output = asyncio.run(invoke_and_read())
+    assert b"model_unavailable" in output and b"private-model" not in output
 
 
 def test_streaming_research_uses_saved_settings(monkeypatch):

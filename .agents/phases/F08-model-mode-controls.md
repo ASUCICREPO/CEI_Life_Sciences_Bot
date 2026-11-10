@@ -5,9 +5,10 @@ Status: not started | Depends on: F6 | Decisions: B18, B51, B51a, B55, B76, D16 
 Implementation note: Research reads the saved chat mode and forwards its resolved
 model through its graph. Until account model discovery and the global blocklist are
 wired, Research accepts only its configured runtime default and rejects a different
-saved selection instead of silently ignoring it. The runtime currently uses the
-default in `AgentConfig`: the deployment configuration is not yet passed as
-`CEI_DEFAULT_MODEL_ID`. This temporary restriction is not the approved final model
+saved selection instead of silently ignoring it. The deployment configuration
+passes `CEI_DEFAULT_MODEL_ID` to the Router and Research runtime. Legacy null mode
+and model fields are filled conditionally so a concurrent settings update wins.
+This temporary restriction is not the approved final model
 selection behavior. Drafting, title-model policy, Guardrails, discovery, settings,
 and prompt caching remain incomplete; no deployed behavior has been verified.
 

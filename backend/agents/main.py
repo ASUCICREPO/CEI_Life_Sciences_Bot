@@ -122,6 +122,9 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         turn = await resolve_turn_config(runtime_history.get_recorder(), user_id=user_id, session_id=session_id,
                                          initial_mode=payload.get("mode"))
     except ModelPolicyError:
+        if payload.get("stream") is True:
+            return StreamingResponse(_settings_error_stream(), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
         return error_response(400, "This chat's settings are unavailable.")
     mode, model_id = turn.mode, turn.model_id
 
@@ -213,6 +216,13 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         trace=result.get("trace"),
     )
     return response
+
+
+async def _settings_error_stream():
+    """Report settings races as a bounded SSE error without exposing model IDs."""
+    events = ResearchEventStream()
+    yield events.begin("research-final")
+    yield events.emit("error", code="model_unavailable", message="This chat's settings are unavailable.")
 
 
 async def _begin_stream_research(context, session, prompt, mode, model_id):

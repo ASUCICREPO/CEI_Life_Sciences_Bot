@@ -187,6 +187,16 @@ class ConversationRecorder:
         except Exception as exc:
             raise OwnershipCheckError("Could not read session settings") from exc
 
+    async def initialize_turn_settings(self, *, user_id: str, session_id: str,
+                                       mode: str | None, model_id: str | None) -> ChatMetadataRecord:
+        try:
+            return await asyncio.to_thread(self._metadata.initialize_turn_settings, user_id, session_id,
+                                           mode=mode, model_id=model_id)
+        except SessionNotFoundError:
+            raise
+        except Exception as exc:
+            raise OwnershipCheckError("Could not initialize session settings") from exc
+
     async def rehydrate(self, *, user_id: str, session_id: str, n_turns: int = 20) -> list[BaseMessage]:
         """The last `n_turns` stored messages as LangChain messages (oldest first). Empty on any failure."""
         try:
