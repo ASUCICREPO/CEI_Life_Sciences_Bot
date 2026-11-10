@@ -44,6 +44,8 @@ class StepStatus(BaseModel):
 
 
 class PipelineState(BaseAgentState):
+    # Loaded once per run using the authenticated actor; a resume reuses the checkpointed value.
+    long_term_context: list[str]
     plan: PipelinePlan | None
     plan_approved: bool
     steps: list[StepStatus]

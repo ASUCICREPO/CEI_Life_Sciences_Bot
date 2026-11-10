@@ -104,6 +104,19 @@ def _compile_graph():
     return compile_graph(checkpointer=_checkpointer)
 
 
+async def _pipeline_long_term_context(user_id: str, prompt: str) -> list[str]:
+    """Load only this actor's memory when the opt-in read path is enabled (F11).
+
+    Called once, on a new run only; a resumed background job reuses the value
+    already captured in the checkpointed graph state.
+    """
+    from shared.memory.turns import load_long_term_context
+
+    return await load_long_term_context(
+        user_id, prompt, enabled_env="CEI_PIPELINE_LONG_TERM_ENABLED", memory_id_env="CEI_PIPELINE_MEMORY_ID",
+    )
+
+
 def _plan_steps_for_registry(plan_obj: Any) -> list[tuple[str, str, str]]:
     return [(step.step_id, step.agent, step.description) for step in plan_obj.steps]
 
@@ -286,6 +299,9 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
             return replayed
 
     graph = _compile_graph()
+    # New run only: a resume (handled above) reuses the checkpointed state instead of re-recalling.
+    memories = await _pipeline_long_term_context(user_id, prompt)
+
     # Cold thread (runtime restart / LRU eviction): rebuild short-term memory from ChatHistoryStore
     history = await begin_turn(
         user_id=user_id,
@@ -301,6 +317,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         # D16: history is dynamic content — it rides in messages, after the cached system prompt/tools
         "messages": [*history, HumanMessage(content=prompt)],
         "mode": mode,
+        "long_term_context": memories,
         "user_id": user_id,
         "session_id": session_id,
         "plan": None,

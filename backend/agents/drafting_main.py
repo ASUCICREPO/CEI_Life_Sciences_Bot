@@ -41,6 +41,15 @@ _thread_ids: OrderedDict[str, bool] = OrderedDict()
 _pending = PendingInterrupts()
 
 
+async def _drafting_long_term_context(user_id: str, prompt: str) -> list[str]:
+    """Load only this actor's memory when the opt-in read path is enabled (F11)."""
+    from shared.memory.turns import load_long_term_context
+
+    return await load_long_term_context(
+        user_id, prompt, enabled_env="CEI_DRAFTING_LONG_TERM_ENABLED", memory_id_env="CEI_DRAFTING_MEMORY_ID",
+    )
+
+
 def _runtime_port() -> int:
     raw_port = os.environ.get("CEI_RUNTIME_PORT", "8080")
     try:
@@ -188,6 +197,9 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
 
     from drafting.graph import compile_graph
 
+    # New run only: a resume (`_resume` above) must not re-recall long-term memory.
+    memories = await _drafting_long_term_context(user_id, prompt)
+
     # Cold thread (runtime restart / LRU eviction): rebuild short-term memory from ChatHistoryStore
     history = await begin_turn(
         user_id=user_id,
@@ -206,6 +218,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         # D16: history is dynamic content — it rides in messages, after the cached system prompt/tools
         "messages": [*history, HumanMessage(content=prompt)],
         "mode": mode,
+        "long_term_context": memories,
         "user_id": user_id,
         "session_id": session_id,
         "document_type": doc_type,

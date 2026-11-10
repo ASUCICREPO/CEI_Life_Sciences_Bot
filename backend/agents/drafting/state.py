@@ -25,6 +25,8 @@ class Guideline(BaseModel):
 
 
 class DraftingState(BaseAgentState):
+    # Loaded using the authenticated actor; never supplied by the model.
+    long_term_context: list[str]
     document_type: DocumentType
     guidelines: list[Guideline]
     research_questions: list[str]

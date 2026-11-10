@@ -111,11 +111,24 @@ def _parse_analysis_type(raw: Any) -> AnalysisType | None:
         return None
 
 
-def _initial_state(prompt: str, mode: str, user_id: str, session_id: str, analysis_type: str | None) -> Dict[str, Any]:
+async def _analysis_long_term_context(user_id: str, prompt: str) -> list[str]:
+    """Load only this actor's memory when the opt-in read path is enabled (F11)."""
+    from shared.memory.turns import load_long_term_context
+
+    return await load_long_term_context(
+        user_id, prompt, enabled_env="CEI_ANALYSIS_LONG_TERM_ENABLED", memory_id_env="CEI_ANALYSIS_MEMORY_ID",
+    )
+
+
+def _initial_state(
+    prompt: str, mode: str, user_id: str, session_id: str, analysis_type: str | None,
+    long_term_context: list[str] = (),
+) -> Dict[str, Any]:
     parsed_type = _parse_analysis_type(analysis_type)
     return {
         "messages": [HumanMessage(content=prompt)],
         "mode": mode,
+        "long_term_context": list(long_term_context),
         "user_id": user_id,
         "session_id": session_id,
         "query": prompt,
@@ -226,6 +239,9 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         if replayed is not None:
             return replayed
 
+    # New run only: a resume (handled above) must not re-recall long-term memory.
+    memories = await _analysis_long_term_context(user_id, prompt)
+
     # Cold thread (runtime restart / LRU eviction): rebuild short-term memory from ChatHistoryStore
     history = await begin_turn(
         user_id=user_id,
@@ -240,7 +256,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     _touch_thread(session_id)
     log.info(f"Analysis agent invoked: session={session_id}, mode={mode}, analysis_type={analysis_type}")
 
-    state = _initial_state(prompt, mode, user_id, session_id, analysis_type)
+    state = _initial_state(prompt, mode, user_id, session_id, analysis_type, memories)
     # D16: history is dynamic content — it rides in messages, after the cached system prompt/tools
     state["messages"] = [*history, *state["messages"]]
     result = await graph.ainvoke(state, config=config)
