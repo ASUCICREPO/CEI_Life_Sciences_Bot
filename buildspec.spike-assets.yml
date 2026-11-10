@@ -15,6 +15,14 @@ phases:
     commands:
       - cd "$CODEBUILD_SRC_DIR/frontend" && npm run build
       - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
-      - cd "$CODEBUILD_SRC_DIR/backend" && npx cdk synth DurableSpikeStack --quiet --json -c ceiConfigFile=cei.deploy.json -c ceiSpikes=durable
-      - cd "$CODEBUILD_SRC_DIR/backend" && npx cdk publish-assets DurableSpikeStack --app cdk.out --unstable=publish-assets
+      - |
+        set -e
+        cd "$CODEBUILD_SRC_DIR/backend"
+        case "${CEI_SPIKE_TYPE:-durable}" in
+          durable) SPIKE_STACK=DurableSpikeStack ;;
+          identity) SPIKE_STACK=IdentitySpikeStack ;;
+          *) echo "Unknown spike type"; exit 1 ;;
+        esac
+        npx cdk synth "$SPIKE_STACK" --quiet --json -c ceiConfigFile=cei.deploy.json -c "ceiSpikes=${CEI_SPIKE_TYPE:-durable}"
+        npx cdk publish-assets "$SPIKE_STACK" --app cdk.out --unstable=publish-assets
       - cd "$CODEBUILD_SRC_DIR/backend" && python3 scripts/publish_spike_template.py
