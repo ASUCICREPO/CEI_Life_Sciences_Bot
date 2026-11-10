@@ -35,6 +35,8 @@ interface LiveMessage {
   isError?: boolean;
   historyMessageId?: string;
   stream?: { state: StreamState; connectionError: string | null };
+  /** Seq numbers of this stream's hitl_request interactions already answered via /ui-actions. */
+  answeredInteractions?: ReadonlySet<number>;
 }
 
 interface LiveAgentChatProps {
@@ -273,6 +275,15 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
     appendFromEnvelope(envelope);
   }
 
+  // Mirrors handleAction for a stream's hitl_request card: mark that one interaction answered
+  // (a stream can carry several), then append the resumed surface as a new assistant turn.
+  function handleStreamInteractionAction(messageId: string, seq: number, envelope: AgentEnvelope) {
+    setMessages((prev) => prev.map((message) => (message.id === messageId
+      ? { ...message, answeredInteractions: new Set([...(message.answeredInteractions ?? []), seq]) }
+      : message)));
+    appendFromEnvelope(envelope);
+  }
+
   const handleSend = (event: React.FormEvent) => {
     event.preventDefault();
     void askQuestion(inputValue);
@@ -301,7 +312,14 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
               <ThinkingBlock traceEvents={[]} status="ended" sessionId={sessionId} messageId={message.historyMessageId} />
             )}
             {message.stream ? (
-              <StreamView state={message.stream.state} connectionError={message.stream.connectionError} sessionId={sessionId} agent={agent} />
+              <StreamView
+                state={message.stream.state}
+                connectionError={message.stream.connectionError}
+                sessionId={sessionId}
+                agent={agent}
+                answeredInteractions={message.answeredInteractions}
+                onInteractionAction={(seq, envelope) => handleStreamInteractionAction(message.id, seq, envelope)}
+              />
             ) : message.surface ? (
               <CEIUISurface
                 surface={message.surface}
