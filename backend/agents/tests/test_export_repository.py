@@ -68,3 +68,19 @@ def test_metadata_failure_removes_uploaded_object(repository, monkeypatch):
     with pytest.raises(RuntimeError):
         save(repo)
     assert s3.list_objects_v2(Bucket="cei-export-test").get("KeyCount") == 0
+
+
+def test_delete_session_paginates_without_s3_listing(repository, monkeypatch):
+    repo, s3 = repository
+    for _ in range(102):
+        save(repo)
+    other_chat = save(repo, session=S2)
+    other_user = save(repo, owner="bob")
+    def fail_listing(**kwargs):
+        raise AssertionError("deletion must not list S3")
+    monkeypatch.setattr(s3, "list_objects_v2", fail_listing)
+    repo.delete_session("alice", S1)
+    assert repo.list_for_session("alice", S1).items == []
+    assert repo.get("alice", other_chat["export_id"])
+    assert repo.get("bob", other_user["export_id"])
+    repo.delete_session("alice", S1)  # Retry after completion is safe.

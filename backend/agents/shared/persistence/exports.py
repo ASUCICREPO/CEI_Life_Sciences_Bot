@@ -95,3 +95,18 @@ class ExportRepository:
         # Delete the object first so a retry can still locate it if S3 is unavailable.
         self._s3.delete_object(Bucket=self._bucket, Key=item["s3_key"])
         self._table.delete_item(Key={"user_id": user_id, "export_id": export_id})
+
+    def delete_session(self, user_id: str, session_id: str) -> None:
+        """Delete indexed reports after the caller fences and quiesces the session.
+
+        Metadata remains until its object is deleted, allowing safe retries. This
+        queries only the owner's chat prefix and never lists the S3 bucket.
+        """
+        cursor = None
+        while True:
+            page = self.list_for_session(user_id, session_id, limit=100, start_key=cursor)
+            for item in page.items:
+                self.delete(user_id, item["export_id"])
+            cursor = page.next_key
+            if not cursor:
+                return
