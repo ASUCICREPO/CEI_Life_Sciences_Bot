@@ -789,11 +789,11 @@ export class BackendStack extends cdk.Stack {
       functions: {
         PreSignUp: preSignUpFn, SessionMetadata: sessionMetadata.fn, SessionHistory: sessionHistory.fn,
         AgentProxy: agentProxyFn, SessionRouter: router.function, SessionRunner: runner,
-        ClientDiagnostics: clientDiagnostics.fn,
+        ClientDiagnostics: clientDiagnostics.fn, Exports: exportsHandler.fn, LifeSciencesOperations: gateway.operationsFunction,
         PreToken: gateway.preTokenFunction, TokenRefresh: gateway.tokenRefreshFunction,
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) => [`Source${name}`, fn])),
       },
-      tables: { ChatMetadata: chatMetadataTable, ChatHistory: chatHistoryTable, ActiveRuns: activeRunsTable },
+      tables: { ChatMetadata: chatMetadataTable, ChatHistory: chatHistoryTable, ActiveRuns: activeRunsTable, Exports: exportsTable },
       signupLogs: preSignUpLogGroup,
       gatewayLogs: gateway.gatewayLogGroup,
       clientLogs: clientDiagnostics.fn.logGroup,

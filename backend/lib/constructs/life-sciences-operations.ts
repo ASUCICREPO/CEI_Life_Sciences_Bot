@@ -4,6 +4,7 @@ import * as cdk from 'aws-cdk-lib';
 import { aws_bedrockagentcore as agentcore, aws_iam as iam, aws_lambda as lambda, aws_logs as logs } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { cedarPermit } from './cedar-policy';
+import { suppressXrayWildcard } from './tracing';
 
 const DIRECTORY = path.join(__dirname, '..', '..', 'lambdas', 'lsops');
 
@@ -39,7 +40,9 @@ export class LifeSciencesOperations extends Construct {
       logGroup,
       timeout: cdk.Duration.seconds(30),
       memorySize: 1024,
+      tracing: lambda.Tracing.ACTIVE,
     });
+    suppressXrayWildcard(role);
     const invokeGrant = iam.Grant.addToPrincipal({
       grantee: props.gatewayRole, actions: ['lambda:InvokeFunction'], resourceArns: [this.function.functionArn],
     });

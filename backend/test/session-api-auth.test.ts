@@ -69,7 +69,7 @@ describe.each([
       return `${props.HttpMethod} ${route(props.ResourceId.Ref)}`;
     }).sort();
     expect(routes).toEqual([
-      'GET /sessions', 'GET /sessions/{sessionId}', 'GET /sessions/{sessionId}/history',
+      'GET /exports/{exportId}/download', 'GET /sessions', 'GET /sessions/{sessionId}', 'GET /sessions/{sessionId}/exports', 'GET /sessions/{sessionId}/history',
       'GET /sessions/{sessionId}/turns/{messageId}/trace', 'PATCH /sessions/{sessionId}',
       'POST /chat/stream', 'POST /client-diagnostics', 'POST /sessions',
     ].sort());

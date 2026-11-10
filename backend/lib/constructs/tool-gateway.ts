@@ -80,6 +80,7 @@ export class ToolGateway extends Construct {
   public readonly preTokenFunction: lambda.Function;
   public readonly gatewayLogGroup: logs.ILogGroup;
   public readonly sourceFunctions: Record<string, lambda.Function> = {};
+  public readonly operationsFunction: lambda.DockerImageFunction;
   public readonly scopeNames: string[];
 
   constructor(scope: Construct, id: string, props: ToolGatewayProps) {
@@ -230,7 +231,9 @@ export class ToolGateway extends Construct {
     this.gateway.node.addDependency(gatewayRole);
 
     // B42/B70: one deterministic target, gated by the shared common scope.
-    new LifeSciencesOperations(this, 'LifeSciencesOperations', { gateway: this.gateway, gatewayRole, policyEngine });
+    this.operationsFunction = new LifeSciencesOperations(this, 'LifeSciencesOperations', {
+      gateway: this.gateway, gatewayRole, policyEngine,
+    }).function;
 
     for (const entry of schemas) {
       const fn = this.sourceFunctions[entry.sourceId];
