@@ -22,18 +22,15 @@ from shared.runtime import (
     RuntimeOp,
     action_response,
     awaiting_envelope,
-    check_resume,
     completed_envelope,
-    expired_envelope,
     extract_interrupt_surface,
-    parse_action,
     parse_mode,
     parse_op,
     parse_prompt,
     resume_value,
 )
 from shared.runtime.history import begin_turn, end_turn, record_resume
-from shared.runtime.checkpointing import restore_for_resume
+from shared.runtime.hitl_turn import resolve_resume_action
 from shared.runtime.app_factory import create_app
 from shared.streaming.trace_redaction import redacts_trace_input
 from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
@@ -183,22 +180,13 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     config = {"configurable": {"thread_id": session_id}}
 
     if op is RuntimeOp.RESUME:
-        action = parse_action(payload)
         scenario = _thread_scenarios.get(session_id, "")
-        if _replay.enabled:
-            replayed = _replay.on_resume(scenario, session_id=session_id, action=action, job_id=None)
-            if replayed is not None:
-                return replayed
-
-        if session_id not in _thread_ids and _pending.get(session_id) is None and action.session_id == session_id:
-            # cold resume (runtime restart / eviction): bring back the interrupted graph + its pending surface
-            if not await restore_for_resume(
-                user_id=user_id, session_id=session_id, saver=_checkpointer, graph=graph, pending=_pending
-            ):
-                return expired_envelope(action)  # B82: no checkpoint left to resume
-        stale = check_resume(_pending, session_id, action)
-        if stale is not None:
-            return stale
+        action, terminal = await resolve_resume_action(
+            payload, session_id=session_id, user_id=user_id, checkpointer=_checkpointer, graph=graph,
+            pending=_pending, is_cold=session_id not in _thread_ids, replay=_replay, replay_key=scenario,
+        )
+        if terminal is not None:
+            return terminal
 
         await record_resume(user_id=user_id, session_id=session_id, action=action)
         _touch_thread(session_id)
