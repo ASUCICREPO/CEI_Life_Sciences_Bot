@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -76,8 +77,10 @@ class WriterFence:
         reasons = exc.response.get("CancellationReasons") or []
         return any(reason.get("Code") == "ConditionalCheckFailed" for reason in reasons)
 
-    def acquire(self, user_id: str, session_id: str) -> WriterToken:
+    def acquire(self, user_id: str, session_id: str, *, writer_ref: str) -> WriterToken:
         self._validate(user_id, session_id)
+        if not isinstance(writer_ref, str) or not 1 <= len(writer_ref) <= 256 or any(ord(c) < 32 for c in writer_ref):
+            raise ValueError("invalid writer reference")
         token = WriterToken(user_id, session_id, uuid4().hex)
         items = [self._active_gate(user_id, "account"), self._active_gate(user_id, f"chat#{session_id}"),
                  {"ConditionCheck": {
@@ -86,7 +89,8 @@ class WriterFence:
                      "ConditionExpression": "attribute_exists(session_id)",
                  }},
                  {"Put": {"TableName": self._table,
-                          "Item": {**self._key(user_id, token.scope), "token": {"S": token.token}},
+                          "Item": {**self._key(user_id, token.scope), "token": {"S": token.token},
+                                   "writer_ref": {"S": writer_ref}, "created_at": {"S": datetime.now(UTC).isoformat()}},
                           "ConditionExpression": "attribute_not_exists(#scope)",
                           "ExpressionAttributeNames": {"#scope": "scope"}}}]
         try:
@@ -109,8 +113,8 @@ class WriterFence:
         )
 
     @contextmanager
-    def writing(self, user_id: str, session_id: str) -> Iterator[WriterToken]:
-        token = self.acquire(user_id, session_id)
+    def writing(self, user_id: str, session_id: str, *, writer_ref: str) -> Iterator[WriterToken]:
+        token = self.acquire(user_id, session_id, writer_ref=writer_ref)
         try:
             yield token
         except BaseException:
@@ -120,22 +124,87 @@ class WriterFence:
         else:
             self.release(token)
 
+    def _gate_is(self, user_id: str, scope: str, job_id: str, states: tuple[str, ...]) -> bool:
+        gate = self._client.get_item(TableName=self._table, Key=self._key(user_id, scope), ConsistentRead=True).get("Item")
+        return bool(gate and gate.get("job_id", {}).get("S") == job_id and gate.get("state", {}).get("S") in states)
+
     def begin_deletion(self, user_id: str, job_id: str, session_id: str | None = None) -> None:
         self._validate(user_id, session_id, job_id)
         scope = f"chat#{session_id}" if session_id is not None else "account"
-        update = {"Update": {
-            "TableName": self._table, "Key": self._key(user_id, scope),
-            "UpdateExpression": "SET #state = :deleting, job_id = :job",
-            "ConditionExpression": "attribute_not_exists(#state) OR (#state = :deleting AND job_id = :job)",
-            "ExpressionAttributeNames": {"#state": "state"},
-            "ExpressionAttributeValues": {":deleting": {"S": "deleting"}, ":job": {"S": job_id}},
-        }}
-        items = [self._active_gate(user_id, "account"), update] if session_id is not None else [update]
+        if session_id is None:
+            # Account deletion must wait for chat deletion jobs to finish their
+            # cascades, not merely for their report writers to stop.
+            items = [{"Update": {
+                "TableName": self._table, "Key": self._key(user_id, "account"),
+                "UpdateExpression": "SET #state = :deleting, job_id = :job",
+                "ConditionExpression": "(attribute_not_exists(#state) AND (attribute_not_exists(#active) OR #active = :zero)) OR (#state = :deleting AND job_id = :job)",
+                "ExpressionAttributeNames": {"#state": "state", "#active": "active_chat_deletions"},
+                "ExpressionAttributeValues": {":deleting": {"S": "deleting"}, ":job": {"S": job_id}, ":zero": {"N": "0"}},
+            }}]
+        else:
+            # The account counter and new chat fence are one transaction. This
+            # serializes account deletion with starting/completing chat jobs.
+            items = [{"Update": {
+                "TableName": self._table, "Key": self._key(user_id, "account"),
+                "UpdateExpression": "ADD #active :one",
+                "ConditionExpression": "attribute_not_exists(#state)",
+                "ExpressionAttributeNames": {"#state": "state", "#active": "active_chat_deletions"},
+                "ExpressionAttributeValues": {":one": {"N": "1"}},
+            }}, {"Put": {
+                "TableName": self._table,
+                "Item": {**self._key(user_id, scope), "state": {"S": "deleting"}, "job_id": {"S": job_id}},
+                "ConditionExpression": "attribute_not_exists(#scope)",
+                "ExpressionAttributeNames": {"#scope": "scope"},
+            }}]
         try:
             self._client.transact_write_items(TransactItems=items)
         except ClientError as exc:
             if self._transaction_rejected(exc):
+                # A retry must not increment the counter a second time. A
+                # completed gate is a tombstone, not permission to restart
+                # a cascade after an account deletion has begun.
+                if session_id is not None and self._gate_is(user_id, scope, job_id, ("deleting",)):
+                    return
                 raise WriteFenced("A different deletion is already in progress.") from None
+            raise
+
+    def finish_chat_deletion(self, user_id: str, session_id: str, job_id: str) -> None:
+        """Release the account deletion barrier only after the entire chat cascade.
+
+        Production integration must commit this transition with durable job
+        completion, or use an outbox/recovery protocol which cannot lose either.
+        It must never call this merely because writers became quiescent.
+        """
+        self._validate(user_id, session_id, job_id)
+        scope = f"chat#{session_id}"
+        try:
+            quiet = self.quiescent(user_id, job_id, session_id)
+        except WriteFenced:
+            if self._gate_is(user_id, scope, job_id, ("deleted",)):
+                return
+            raise
+        if not quiet:
+            raise WriteFenced("The chat still has active writers.")
+        items = [{"Update": {
+            "TableName": self._table, "Key": self._key(user_id, scope),
+            "UpdateExpression": "SET #state = :deleted",
+            "ConditionExpression": "#state = :deleting AND job_id = :job",
+            "ExpressionAttributeNames": {"#state": "state"},
+            "ExpressionAttributeValues": {":deleting": {"S": "deleting"}, ":deleted": {"S": "deleted"}, ":job": {"S": job_id}},
+        }}, {"Update": {
+            "TableName": self._table, "Key": self._key(user_id, "account"),
+            "UpdateExpression": "ADD #active :minus_one",
+            "ConditionExpression": "attribute_not_exists(#state) AND #active >= :one",
+            "ExpressionAttributeNames": {"#state": "state", "#active": "active_chat_deletions"},
+            "ExpressionAttributeValues": {":minus_one": {"N": "-1"}, ":one": {"N": "1"}},
+        }}]
+        try:
+            self._client.transact_write_items(TransactItems=items)
+        except ClientError as exc:
+            if self._transaction_rejected(exc):
+                if self._gate_is(user_id, scope, job_id, ("deleted",)):
+                    return
+                raise WriteFenced("The chat deletion cannot be completed.") from None
             raise
 
     def quiescent(self, user_id: str, job_id: str, session_id: str | None = None) -> bool:

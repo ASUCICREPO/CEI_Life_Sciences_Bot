@@ -13,8 +13,8 @@ SESSION = "6f1c2d3e-0000-4000-8000-000000000001"
 
 
 def invoke(repository, **overrides):
-    fence = SimpleNamespace(writing=lambda *_: nullcontext())
-    args = {"repository": repository, "writer_fence": fence, "user_id": "alice", "session_id": SESSION, "turn_id": "turn-1",
+    fence = SimpleNamespace(writing=lambda *_, **__: nullcontext())
+    args = {"repository": repository, "writer_fence": fence, "writer_ref": "run-1", "user_id": "alice", "session_id": SESSION, "turn_id": "turn-1",
             "reviewed": True, "format": "md", "title": "Report", "sections": [{"heading": "Results", "content": "Text"}]}
     return generate_reviewed_export(**(args | overrides))
 

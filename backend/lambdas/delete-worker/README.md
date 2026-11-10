@@ -15,6 +15,17 @@ remote writes have stopped before releasing it. This foundation has no deployed
 table, job/outbox transaction, worker recovery adapter, or universal writer
 integration yet; it cannot by itself authorize either deletion route.
 
+Account deletion also waits for all chat deletion cascades: starting a chat
+deletion increments an account counter in the same transaction as its chat gate,
+and completing that cascade decrements it while preserving the chat tombstone.
+The production adapter must durably couple that final transition with job
+completion. Token registration can itself time out after committing; recovery
+must identify and prove the state of the originating run even when the caller
+never received its token. Writer rows include a caller-supplied run reference,
+but the deployed job/runtime binding and verified recovery adapter are not yet
+implemented. Tests exercise ordered interleavings with Moto; they do not prove
+real DynamoDB concurrency or remote-write termination.
+
 Before activating either deletion route:
 
 1. Authenticate with the Cognito authorizer and derive the user solely from its

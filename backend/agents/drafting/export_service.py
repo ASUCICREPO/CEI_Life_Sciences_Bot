@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def generate_reviewed_export(
-    *, repository: ExportRepository, writer_fence: WriterFence, user_id: str, session_id: str, turn_id: str,
+    *, repository: ExportRepository, writer_fence: WriterFence, writer_ref: str, user_id: str, session_id: str, turn_id: str,
     reviewed: bool, format: str, title: str, sections: list[dict[str, Any]],
     charts: dict[str, bytes] | None = None, chart_sections: dict[str, str] | None = None,
     doc_type: str = "latex", code_interpreter: CodeInterpreterTool | None = None,
@@ -47,7 +47,7 @@ def generate_reviewed_export(
         raise ValueError("writer fence is required")
     # Hold the durable writer token until the object and indexed metadata are
     # committed. An uncertain failure retains the token for verified recovery.
-    with writer_fence.writing(user_id, session_id), TemporaryDirectory(prefix="cei-export-") as directory:
+    with writer_fence.writing(user_id, session_id, writer_ref=writer_ref), TemporaryDirectory(prefix="cei-export-") as directory:
         output_dir = Path(directory)
         tool = export_tool_factory(code_interpreter=code_interpreter, doc_type=doc_type)
         artifacts = tool.generate(title=title, sections=sections, charts=charts or {}, formats=[format],
