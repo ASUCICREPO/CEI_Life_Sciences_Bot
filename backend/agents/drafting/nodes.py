@@ -113,16 +113,16 @@ def research_guidelines(state: DraftingState) -> dict[str, Any]:
     # LLM call 1: generate optimized search queries per source
     source_list = ", ".join(s.value for s in sources)
     user_prompt = (
-        f"Document type: {doc_type.value}\n"
-        f"User request: {query}\n"
-        f"Available sources: {source_list}"
+        f"Document type: {doc_type.value}\nUser request: {query}\nAvailable sources: {source_list}"
     )
 
     model = get_model().with_structured_output(GuidelinePlan, include_raw=True)
-    raw_result = model.invoke([
-        {"role": "system", "content": _GUIDELINES_TRIAGE_SYSTEM},
-        {"role": "user", "content": user_prompt},
-    ])
+    raw_result = model.invoke(
+        [
+            {"role": "system", "content": _GUIDELINES_TRIAGE_SYSTEM},
+            {"role": "user", "content": user_prompt},
+        ]
+    )
     plan: GuidelinePlan = raw_result["parsed"]
     in_tok, out_tok = extract_tokens(raw_result["raw"])
 
@@ -150,39 +150,69 @@ def research_guidelines(state: DraftingState) -> dict[str, Any]:
                 context_parts.append(str(item))
             for cit in result.citations:
                 context_parts.append(f"[{cit.source_id}] {cit.title} ({cit.year}) — {cit.url}")
-            trace_entries.append(TraceEntry(
-                stage="TOOL_CALL",
-                detail=f"{source.value} | query={search_query!r} | results={len(result.results)}",
-            ))
-            logger.info({"event": "guideline_retrieve_success", "source": source.value, "count": len(result.results)})
+            trace_entries.append(
+                TraceEntry(
+                    stage="TOOL_CALL",
+                    detail=f"{source.value} | query={search_query!r} | results={len(result.results)}",
+                )
+            )
+            logger.info(
+                {
+                    "event": "guideline_retrieve_success",
+                    "source": source.value,
+                    "count": len(result.results),
+                }
+            )
         except Exception as exc:
-            logger.error({"event": "guideline_retrieve_error", "source": source.value, "error_type": type(exc).__name__})
-            trace_entries.append(TraceEntry(
-                stage="TOOL_CALL",
-                detail=f"{source.value} | query={search_query!r} | ERROR",
-            ))
+            logger.error(
+                {
+                    "event": "guideline_retrieve_error",
+                    "source": source.value,
+                    "error_type": type(exc).__name__,
+                }
+            )
+            trace_entries.append(
+                TraceEntry(
+                    stage="TOOL_CALL",
+                    detail=f"{source.value} | query={search_query!r} | ERROR",
+                )
+            )
 
     # LLM call 2: extract structured guidelines from raw results
     context = "\n".join(context_parts)
     extraction_system = _GUIDELINES_EXTRACTION_SYSTEM.format(doc_type=doc_type.value)
-    extraction_input = context if context else "No evidence retrieved. Use your knowledge of standard guidelines for this document type."
+    extraction_input = (
+        context
+        if context
+        else "No evidence retrieved. Use your knowledge of standard guidelines for this document type."
+    )
 
     extraction_model = get_model().with_structured_output(GuidelinesExtraction, include_raw=True)
-    extraction_result = extraction_model.invoke([
-        {"role": "system", "content": extraction_system},
-        {"role": "user", "content": extraction_input},
-    ])
+    extraction_result = extraction_model.invoke(
+        [
+            {"role": "system", "content": extraction_system},
+            {"role": "user", "content": extraction_input},
+        ]
+    )
     guidelines = extraction_result["parsed"].guidelines
     ext_in, ext_out = extract_tokens(extraction_result["raw"])
 
-    trace_entries.append(TraceEntry(
-        stage="GUIDELINE_EXTRACTION",
-        detail=f"extracted={len(guidelines)} guidelines",
-        input_tokens=ext_in,
-        output_tokens=ext_out,
-    ))
+    trace_entries.append(
+        TraceEntry(
+            stage="GUIDELINE_EXTRACTION",
+            detail=f"extracted={len(guidelines)} guidelines",
+            input_tokens=ext_in,
+            output_tokens=ext_out,
+        )
+    )
 
-    logger.info({"event": "research_guidelines_complete", "doc_type": doc_type.value, "guidelines": len(guidelines)})
+    logger.info(
+        {
+            "event": "research_guidelines_complete",
+            "doc_type": doc_type.value,
+            "guidelines": len(guidelines),
+        }
+    )
     return {"guidelines": guidelines, "trace": trace_entries}
 
 
@@ -212,14 +242,25 @@ def plan_research(state: DraftingState) -> dict[str, Any]:
     sources = "\n".join(f"- {v}" for v in _SOURCE_DESCRIPTIONS.values())
 
     model = get_model().with_structured_output(_ResearchPlan, include_raw=True)
-    raw = model.invoke([
-        {"role": "system", "content": _RESEARCH_PLAN_SYSTEM.format(sources=sources, max_q=_MAX_RESEARCH_QUESTIONS)},
-        {"role": "user", "content": f"Document type: {doc_type.value}\nUser request: {query}"},
-    ])
+    raw = model.invoke(
+        [
+            {
+                "role": "system",
+                "content": _RESEARCH_PLAN_SYSTEM.format(
+                    sources=sources, max_q=_MAX_RESEARCH_QUESTIONS
+                ),
+            },
+            {"role": "user", "content": f"Document type: {doc_type.value}\nUser request: {query}"},
+        ]
+    )
     plan: _ResearchPlan = raw["parsed"]
     in_tok, out_tok = extract_tokens(raw["raw"])
 
-    questions = [q.strip() for q in plan.questions if q.strip()][:_MAX_RESEARCH_QUESTIONS] if plan.needs_research else []
+    questions = (
+        [q.strip() for q in plan.questions if q.strip()][:_MAX_RESEARCH_QUESTIONS]
+        if plan.needs_research
+        else []
+    )
     trace = TraceEntry(
         stage="PLAN_RESEARCH",
         detail=f"needs_research={bool(questions)} | questions={len(questions)} | reasoning={plan.reasoning}",
@@ -243,7 +284,9 @@ def research_subagent(state: DraftingState) -> dict[str, Any]:
 
     questions = state.get("research_questions", [])
     session_id = state.get("session_id")
-    if not session_id:  # no default session id: sub-research threads derive from the run's own session UUID
+    if (
+        not session_id
+    ):  # no default session id: sub-research threads derive from the run's own session UUID
         raise ValueError("drafting state has no session_id")
     inputs = [
         {
@@ -262,32 +305,48 @@ def research_subagent(state: DraftingState) -> dict[str, Any]:
 
     # No checkpointer: each subagent run is stateless and scoped to this drafting run
     graph = compile_research_graph()
-    results = graph.batch(inputs, config={"max_concurrency": _MAX_RESEARCH_QUESTIONS}, return_exceptions=True)
+    results = graph.batch(
+        inputs, config={"max_concurrency": _MAX_RESEARCH_QUESTIONS}, return_exceptions=True
+    )
 
     findings: list[dict] = []
     trace_entries: list[TraceEntry] = []
     for i, (question, result) in enumerate(zip(questions, results), start=1):
         if isinstance(result, Exception):
             logger.error({"event": "research_subagent_error", "error_type": type(result).__name__})
-            trace_entries.append(TraceEntry(stage="RESEARCH_SUBAGENT", detail=f"#{i} {question!r} — ERROR: {result!r}"))
+            trace_entries.append(
+                TraceEntry(
+                    stage="RESEARCH_SUBAGENT", detail=f"#{i} {question!r} — ERROR: {result!r}"
+                )
+            )
             continue
         messages = result.get("messages", [])
         answer = str(messages[-1].content) if messages else ""
         findings.append({"question": question, "answer": answer})
         # Keep the subagent's own steps and token usage visible in the drafting trace
         for sub in result.get("trace", []):
-            trace_entries.append(TraceEntry(
-                stage=f"RESEARCH#{i}>{sub.stage}",
-                detail=sub.detail,
-                input_tokens=sub.input_tokens,
-                output_tokens=sub.output_tokens,
-            ))
-        trace_entries.append(TraceEntry(
-            stage="RESEARCH_SUBAGENT",
-            detail=f"#{i} {question!r} — answer_length={len(answer)}",
-        ))
+            trace_entries.append(
+                TraceEntry(
+                    stage=f"RESEARCH#{i}>{sub.stage}",
+                    detail=sub.detail,
+                    input_tokens=sub.input_tokens,
+                    output_tokens=sub.output_tokens,
+                )
+            )
+        trace_entries.append(
+            TraceEntry(
+                stage="RESEARCH_SUBAGENT",
+                detail=f"#{i} {question!r} — answer_length={len(answer)}",
+            )
+        )
 
-    logger.info({"event": "research_subagent_complete", "questions": len(questions), "findings": len(findings)})
+    logger.info(
+        {
+            "event": "research_subagent_complete",
+            "questions": len(questions),
+            "findings": len(findings),
+        }
+    )
     return {"research_findings": findings, "trace": trace_entries}
 
 
@@ -337,14 +396,16 @@ def _chart_specs_from_document(document: ResponseDocument) -> list[dict[str, Any
             data: dict[str, Any] = {"x": list(block.categories)}
             for series in block.series:
                 data[series.name] = list(series.values)
-            specs.append({
-                "title": block.title,
-                "chart_type": _EXPORT_CHART_TYPE_MAP.get(block.chart_type, block.chart_type),
-                "x_label": block.x_label or "",
-                "y_label": block.y_label or "",
-                "section": section.heading,
-                "data": data,
-            })
+            specs.append(
+                {
+                    "title": block.title,
+                    "chart_type": _EXPORT_CHART_TYPE_MAP.get(block.chart_type, block.chart_type),
+                    "x_label": block.x_label or "",
+                    "y_label": block.y_label or "",
+                    "section": section.heading,
+                    "data": data,
+                }
+            )
     return specs
 
 
@@ -420,52 +481,73 @@ def draft(state: DraftingState) -> dict[str, Any]:
     trace_entries: list[TraceEntry] = []
     if parsed is not None:
         try:
-            corpus = _drafting_corpus(query, guidelines, findings, state.get("chart_data", {}) or {})
+            corpus = _drafting_corpus(
+                query, guidelines, findings, state.get("chart_data", {}) or {}
+            )
             doc, notes = ground_document(parsed, corpus)
             draft_text = render_document_markdown(doc)
             in_tok, out_tok = extract_tokens(raw) if raw is not None else (0, 0)
-            trace_entries.append(TraceEntry(
-                stage="DRAFT",
-                detail=(
-                    f"doc_type={doc_type.value} | mode={mode} | structured=true | length={len(draft_text)} "
-                    f"| guidelines={len(guidelines)} | research_findings={len(findings)}"
-                ),
-                input_tokens=in_tok,
-                output_tokens=out_tok,
-            ))
+            trace_entries.append(
+                TraceEntry(
+                    stage="DRAFT",
+                    detail=(
+                        f"doc_type={doc_type.value} | mode={mode} | structured=true | length={len(draft_text)} "
+                        f"| guidelines={len(guidelines)} | research_findings={len(findings)}"
+                    ),
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                )
+            )
             trace_entries.extend(TraceEntry(stage="GROUNDING", detail=note) for note in notes)
-            logger.info({"event": "draft_complete", "doc_type": doc_type.value, "length": len(draft_text), "structured": True})
+            logger.info(
+                {
+                    "event": "draft_complete",
+                    "doc_type": doc_type.value,
+                    "length": len(draft_text),
+                    "structured": True,
+                }
+            )
             return {
                 "draft": draft_text,
                 "draft_document": doc,
                 "messages": [AIMessage(content=draft_text)],
                 "trace": trace_entries,
             }
-        except Exception as exc:  # ADR: any render/grounding failure falls back to prose | never lose the draft
-            logger.error({"event": "draft_structured_render_error", "error_type": type(exc).__name__})
+        except (
+            Exception
+        ) as exc:  # ADR: any render/grounding failure falls back to prose | never lose the draft
+            logger.error(
+                {"event": "draft_structured_render_error", "error_type": type(exc).__name__}
+            )
             error = type(exc).__name__
 
-    trace_entries.append(TraceEntry(
-        stage="DRAFT_FALLBACK",
-        detail=f"doc_type={doc_type.value} | mode={mode} | error={error}",
-    ))
+    trace_entries.append(
+        TraceEntry(
+            stage="DRAFT_FALLBACK",
+            detail=f"doc_type={doc_type.value} | mode={mode} | error={error}",
+        )
+    )
 
     # Existing prose path, unchanged.
     system_prompt = loader.system_prompt(mode, document_type=doc_type.value, guidelines=guidelines)
     model = get_model()
-    response = model.invoke([
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ])
+    response = model.invoke(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    )
     draft_text = _strip_plot_code(str(response.content))
     in_tok, out_tok = extract_tokens(response)
 
-    trace_entries.append(TraceEntry(
-        stage="DRAFT",
-        detail=f"doc_type={doc_type.value} | mode={mode} | length={len(draft_text)} | guidelines={len(guidelines)} | research_findings={len(findings)}",
-        input_tokens=in_tok,
-        output_tokens=out_tok,
-    ))
+    trace_entries.append(
+        TraceEntry(
+            stage="DRAFT",
+            detail=f"doc_type={doc_type.value} | mode={mode} | length={len(draft_text)} | guidelines={len(guidelines)} | research_findings={len(findings)}",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+        )
+    )
 
     logger.info({"event": "draft_complete", "doc_type": doc_type.value, "length": len(draft_text)})
     return {
@@ -518,19 +600,26 @@ def revise(state: DraftingState) -> dict[str, Any]:
     if parsed is not None:
         try:
             corpus = _drafting_corpus(
-                f"{current_draft}\n{feedback}", guidelines, findings, state.get("chart_data", {}) or {}
+                f"{current_draft}\n{feedback}",
+                guidelines,
+                findings,
+                state.get("chart_data", {}) or {},
             )
             doc, notes = ground_document(parsed, corpus)
             revised_text = render_document_markdown(doc)
             in_tok, out_tok = extract_tokens(raw) if raw is not None else (0, 0)
-            trace_entries.append(TraceEntry(
-                stage="REVISE",
-                detail=f"feedback_length={len(feedback)} | structured=true | revised_length={len(revised_text)}",
-                input_tokens=in_tok,
-                output_tokens=out_tok,
-            ))
+            trace_entries.append(
+                TraceEntry(
+                    stage="REVISE",
+                    detail=f"feedback_length={len(feedback)} | structured=true | revised_length={len(revised_text)}",
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                )
+            )
             trace_entries.extend(TraceEntry(stage="GROUNDING", detail=note) for note in notes)
-            logger.info({"event": "revise_complete", "length": len(revised_text), "structured": True})
+            logger.info(
+                {"event": "revise_complete", "length": len(revised_text), "structured": True}
+            )
             return {
                 "draft": revised_text,
                 "draft_document": doc,
@@ -538,28 +627,40 @@ def revise(state: DraftingState) -> dict[str, Any]:
                 "messages": [AIMessage(content=revised_text)],
                 "trace": trace_entries,
             }
-        except Exception as exc:  # ADR: any render/grounding failure falls back to prose | never lose the revision
-            logger.error({"event": "revise_structured_render_error", "error_type": type(exc).__name__})
+        except (
+            Exception
+        ) as exc:  # ADR: any render/grounding failure falls back to prose | never lose the revision
+            logger.error(
+                {"event": "revise_structured_render_error", "error_type": type(exc).__name__}
+            )
             error = type(exc).__name__
 
-    trace_entries.append(TraceEntry(stage="REVISE_FALLBACK", detail=f"feedback_length={len(feedback)} | error={error}"))
+    trace_entries.append(
+        TraceEntry(
+            stage="REVISE_FALLBACK", detail=f"feedback_length={len(feedback)} | error={error}"
+        )
+    )
 
     # Existing prose path, unchanged.
     system_prompt = loader.system_prompt(mode, document_type=doc_type.value, guidelines=guidelines)
     model = get_model()
-    response = model.invoke([
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ])
+    response = model.invoke(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    )
     revised_text = _strip_plot_code(str(response.content))
     in_tok, out_tok = extract_tokens(response)
 
-    trace_entries.append(TraceEntry(
-        stage="REVISE",
-        detail=f"feedback_length={len(feedback)} | revised_length={len(revised_text)}",
-        input_tokens=in_tok,
-        output_tokens=out_tok,
-    ))
+    trace_entries.append(
+        TraceEntry(
+            stage="REVISE",
+            detail=f"feedback_length={len(feedback)} | revised_length={len(revised_text)}",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+        )
+    )
 
     logger.info({"event": "revise_complete", "length": len(revised_text)})
     return {
@@ -590,7 +691,9 @@ def plan_visuals(state: DraftingState) -> dict[str, Any]:
             stage="PLAN_VISUALS",
             detail=f"structured=true | charts_from_document={len(chart_specs)}",
         )
-        logger.info({"event": "plan_visuals_complete", "charts_ready": len(chart_specs), "structured": True})
+        logger.info(
+            {"event": "plan_visuals_complete", "charts_ready": len(chart_specs), "structured": True}
+        )
         return {"chart_specs": chart_specs, "trace": [trace]}
 
     draft_text = state.get("draft", "")
@@ -631,10 +734,12 @@ Fill x and series ONLY with numbers that are written in the draft. Never invent,
 Only identify genuinely valuable charts — not decorative ones. Return an empty list if no charts would meaningfully improve the document."""
 
     model = get_model().with_structured_output(_ChartOpportunities, include_raw=True)
-    raw = model.invoke([
-        {"role": "system", "content": _CHART_DETECTION_SYSTEM},
-        {"role": "user", "content": f"Document draft:\n\n{draft_text}"},
-    ])
+    raw = model.invoke(
+        [
+            {"role": "system", "content": _CHART_DETECTION_SYSTEM},
+            {"role": "user", "content": f"Document draft:\n\n{draft_text}"},
+        ]
+    )
     opportunities: list[_ChartOpportunity] = raw["parsed"].charts
     in_tok, out_tok = extract_tokens(raw["raw"])
 
@@ -660,29 +765,35 @@ Only identify genuinely valuable charts — not decorative ones. Return an empty
     for opp in opportunities:
         if opp.title in updated_chart_data:
             # User already provided data
-            chart_specs.append({
-                "title": opp.title,
-                "chart_type": opp.chart_type,
-                "x_label": opp.x_label,
-                "y_label": opp.y_label,
-                "section": opp.section_heading,
-                "data": updated_chart_data[opp.title],
-            })
+            chart_specs.append(
+                {
+                    "title": opp.title,
+                    "chart_type": opp.chart_type,
+                    "x_label": opp.x_label,
+                    "y_label": opp.y_label,
+                    "section": opp.section_heading,
+                    "data": updated_chart_data[opp.title],
+                }
+            )
             continue
 
         # Use the data the LLM read from the draft, if every number is grounded in the corpus
         grounded = _grounded_chart_data(opp.x, opp.series, corpus)
         if grounded:
             updated_chart_data[opp.title] = grounded
-            chart_specs.append({
-                "title": opp.title,
-                "chart_type": opp.chart_type,
-                "x_label": opp.x_label,
-                "y_label": opp.y_label,
-                "section": opp.section_heading,
-                "data": grounded,
-            })
-            trace_entries.append(TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — read from draft"))
+            chart_specs.append(
+                {
+                    "title": opp.title,
+                    "chart_type": opp.chart_type,
+                    "x_label": opp.x_label,
+                    "y_label": opp.y_label,
+                    "section": opp.section_heading,
+                    "data": grounded,
+                }
+            )
+            trace_entries.append(
+                TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — read from draft")
+            )
             continue
 
         # Try to extract numeric data from a markdown table in the draft
@@ -691,33 +802,43 @@ Only identify genuinely valuable charts — not decorative ones. Return an empty
             extracted = _extract_numeric_data_from_draft(draft_text, opp.section_heading)
         if extracted:
             updated_chart_data[opp.title] = extracted
-            chart_specs.append({
-                "title": opp.title,
-                "chart_type": opp.chart_type,
-                "x_label": opp.x_label,
-                "y_label": opp.y_label,
-                "section": opp.section_heading,
-                "data": extracted,
-            })
-            trace_entries.append(TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — extracted from draft"))
+            chart_specs.append(
+                {
+                    "title": opp.title,
+                    "chart_type": opp.chart_type,
+                    "x_label": opp.x_label,
+                    "y_label": opp.y_label,
+                    "section": opp.section_heading,
+                    "data": extracted,
+                }
+            )
+            trace_entries.append(
+                TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — extracted from draft")
+            )
             continue
 
         # Try data source tools
         fetched = _fetch_chart_data_from_tools(opp.data_needed, tool_map)
         if fetched:
             updated_chart_data[opp.title] = fetched
-            chart_specs.append({
-                "title": opp.title,
-                "chart_type": opp.chart_type,
-                "x_label": opp.x_label,
-                "y_label": opp.y_label,
-                "section": opp.section_heading,
-                "data": fetched,
-            })
-            trace_entries.append(TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — fetched from data sources"))
+            chart_specs.append(
+                {
+                    "title": opp.title,
+                    "chart_type": opp.chart_type,
+                    "x_label": opp.x_label,
+                    "y_label": opp.y_label,
+                    "section": opp.section_heading,
+                    "data": fetched,
+                }
+            )
+            trace_entries.append(
+                TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — fetched from data sources")
+            )
         else:
             missing_data_descriptions.append(f"'{opp.title}': {opp.data_needed}")
-            trace_entries.append(TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — data not found"))
+            trace_entries.append(
+                TraceEntry(stage="CHART_DATA", detail=f"'{opp.title}' — data not found")
+            )
 
     chart_instructions = None
     if missing_data_descriptions:
@@ -728,7 +849,13 @@ Only identify genuinely valuable charts — not decorative ones. Return an empty
         )
         logger.info({"event": "chart_data_missing", "count": len(missing_data_descriptions)})
 
-    logger.info({"event": "plan_visuals_complete", "charts_ready": len(chart_specs), "missing": len(missing_data_descriptions)})
+    logger.info(
+        {
+            "event": "plan_visuals_complete",
+            "charts_ready": len(chart_specs),
+            "missing": len(missing_data_descriptions),
+        }
+    )
     return {
         "chart_specs": chart_specs,
         "chart_data": updated_chart_data,
@@ -758,13 +885,16 @@ def _grounded_chart_data(
 def _extract_numeric_data_from_draft(draft: str, chart_title: str) -> dict[str, Any] | None:
     """Try to find a markdown table in the draft that matches the chart title."""
     import re
+
     # Look for a table near the chart title mention
     title_pattern = re.compile(re.escape(chart_title), re.IGNORECASE)
     lines = draft.splitlines()
     for i, line in enumerate(lines):
         if title_pattern.search(line):
             # Look for a markdown table in the next 20 lines
-            table_lines = [l for l in lines[i:i+20] if "|" in l and not l.strip().startswith("|---")]
+            table_lines = [
+                l for l in lines[i : i + 20] if "|" in l and not l.strip().startswith("|---")
+            ]
             if len(table_lines) >= 2:
                 headers = [h.strip() for h in table_lines[0].strip("|").split("|")]
                 data: dict[str, list] = {h: [] for h in headers}
@@ -784,6 +914,7 @@ def _extract_numeric_data_from_draft(draft: str, chart_title: str) -> dict[str, 
 def _fetch_chart_data_from_tools(data_needed: str, tool_map: dict) -> dict[str, Any] | None:
     """Try to fetch chart-relevant data from life sciences data source tools."""
     from shared.schemas.citation import SourceType
+
     # Use PubMed for general data queries
     pubmed_tool = tool_map.get(SourceType.PUBMED)
     if pubmed_tool is None:
@@ -820,6 +951,7 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
     else:
         # Derive title from first heading in draft or fallback
         import re
+
         title_match = re.search(r"^#\s+(.+)$", draft_text, re.MULTILINE)
         title = title_match.group(1).strip() if title_match else f"{doc_type_str}_document"
 
@@ -831,7 +963,13 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
         for line in draft_text.splitlines():
             if line.startswith("## "):
                 if current_content_lines:
-                    sections.append({"heading": current_heading, "content": "\n".join(current_content_lines).strip(), "order": order})
+                    sections.append(
+                        {
+                            "heading": current_heading,
+                            "content": "\n".join(current_content_lines).strip(),
+                            "order": order,
+                        }
+                    )
                     order += 1
                     current_content_lines = []
                 current_heading = line[3:].strip()
@@ -840,19 +978,29 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
             else:
                 current_content_lines.append(line)
         if current_content_lines:
-            sections.append({"heading": current_heading, "content": "\n".join(current_content_lines).strip(), "order": order})
+            sections.append(
+                {
+                    "heading": current_heading,
+                    "content": "\n".join(current_content_lines).strip(),
+                    "order": order,
+                }
+            )
 
     trace_entries: list[TraceEntry] = []
 
     # One sandbox session serves chart rendering and PDF/DOCX generation
     wants_charts = bool(chart_specs_raw) and bool(CHART_FORMATS.intersection(export_formats))
     needs_ci = wants_charts or any(f in {"pdf", "docx"} for f in export_formats)
-    ci_tool = CodeInterpreterTool(
-        region=config.aws_region,
-        code_interpreter_id=config.code_interpreter_id,
-        packages_s3_bucket=config.packages_s3_bucket,
-        packages_s3_key=config.packages_s3_key,
-    ) if needs_ci else None
+    ci_tool = (
+        CodeInterpreterTool(
+            region=config.aws_region,
+            code_interpreter_id=config.code_interpreter_id,
+            packages_s3_bucket=config.packages_s3_bucket,
+            packages_s3_key=config.packages_s3_key,
+        )
+        if needs_ci
+        else None
+    )
 
     rendered_charts: dict[str, bytes] = {}
     if wants_charts:
@@ -863,14 +1011,20 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
                 png_bytes = chart_tool.render(spec)
                 if png_bytes:
                     rendered_charts[spec.title] = png_bytes
-                    trace_entries.append(TraceEntry(stage="CHART_RENDER", detail=f"'{spec.title}' — {len(png_bytes)} bytes"))
+                    trace_entries.append(
+                        TraceEntry(
+                            stage="CHART_RENDER", detail=f"'{spec.title}' — {len(png_bytes)} bytes"
+                        )
+                    )
                 else:
-                    trace_entries.append(TraceEntry(stage="CHART_RENDER", detail=f"'{spec.title}' — failed"))
+                    trace_entries.append(
+                        TraceEntry(stage="CHART_RENDER", detail=f"'{spec.title}' — failed")
+                    )
             except Exception as exc:
                 logger.error({"event": "chart_render_error", "error_type": type(exc).__name__})
 
-    # Determine output directory
-    results_dir = Path(__file__).parents[2] / "results"
+    # Determine output directory — use /tmp on AgentCore runtimes (/var is read-only)
+    results_dir = Path("/tmp/drafting_results")
     results_dir.mkdir(parents=True, exist_ok=True)
 
     doc_type_str = doc_type.value if hasattr(doc_type, "value") else str(doc_type)
@@ -886,10 +1040,12 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
     )
 
     for art in artifacts:
-        trace_entries.append(TraceEntry(
-            stage="EXPORT",
-            detail=f"{art.format.upper()} → {art.filename} ({art.byte_size} bytes)",
-        ))
+        trace_entries.append(
+            TraceEntry(
+                stage="EXPORT",
+                detail=f"{art.format.upper()} → {art.filename} ({art.byte_size} bytes)",
+            )
+        )
 
     export_summary = ", ".join(f"{a.format}:{a.filename}" for a in artifacts)
     logger.info({"event": "export_documents_complete", "exports": export_summary})
