@@ -22,6 +22,7 @@ import { useSessionsClient } from '../lib/useSessions';
 import { useAuth } from '../lib/auth/AuthProvider';
 import { StreamingSurface, StreamView } from './streaming/StreamingSurface';
 import { ThinkingBlock } from './streaming/ThinkingBlock';
+import { ReportExports } from './ReportExports';
 import type { StreamState } from '../lib/stream/reducer';
 
 interface LiveMessage {
@@ -89,6 +90,7 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [olderCursor, setOlderCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [showReports, setShowReports] = useState(false);
   const formId = useId();
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -298,9 +300,19 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
   return (
     <div className="h-full flex flex-col">
       <div className="border-b border-border-subtle px-6 py-3 bg-surface-elevated flex-shrink-0">
-        <p className="text-sm font-semibold text-text-primary">{title}</p>
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-sm font-semibold text-text-primary">{title}</p>
+          {agent === 'drafting' && (resumeSessionId || messages.length > 0) && (
+            <button type="button" aria-expanded={showReports} onClick={() => setShowReports((open) => !open)}
+              className="text-xs font-medium text-cei-blue hover:underline">
+              {showReports ? 'Hide reports' : 'Reports'}
+            </button>
+          )}
+        </div>
         <p className="text-xs text-text-secondary mt-0.5">{description}</p>
       </div>
+
+      {showReports && <ReportExports key={sessionId} sessionId={sessionId} />}
 
       <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-6 py-6">
         {historyLoading && (
