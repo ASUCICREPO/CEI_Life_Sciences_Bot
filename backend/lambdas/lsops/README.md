@@ -43,9 +43,9 @@ without its optional reference-data dependencies, then run
 `PYTHONPATH`. Container build, cold start, dependency behavior, and Gateway
 integration require validation in the CodeBuild/development environment.
 
-The target construct builds `Dockerfile` as a CDK image asset. The current
-`cei-life-sciences-deploy` CodeBuild project uses a non-VPC standard image with
-privileged mode disabled; Docker support depends on its environment and must be
-verified during the CodeBuild image-asset build. Verify ECR asset permissions
-and the deployed image before relying on the target. The runtime and cold-start
-timing have not been validated by the unit tests.
+The target construct builds `Dockerfile` as a CDK image asset. The build-only
+CodeBuild run `cei-life-sciences-deploy:1ad27f5e-d3b9-4fb9-a810-2a9b0888df27`
+at commit `4b98ea4` built the image and passed import and dilution smoke checks
+using the non-VPC standard image with privileged mode disabled. ECR asset
+publishing, the deployed Gateway, runtime behavior, and cold-start timing have
+not been verified.
