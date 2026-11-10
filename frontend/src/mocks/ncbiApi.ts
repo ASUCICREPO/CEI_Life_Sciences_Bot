@@ -21,7 +21,7 @@ import { runNcbiTool, sanitizeNucleotides } from './ncbiTools';
 // public BLAST endpoint sends no CORS headers, so a direct browser call is
 // blocked and the app would otherwise fall back to illustrative data.
 // Outside the browser (or if the proxy is absent) we use the public URLs.
-const USE_PROXY = typeof window !== 'undefined';
+const USE_PROXY = typeof window !== 'undefined' && import.meta.env.DEV;
 const EUTILS = USE_PROXY ? '/ncbi-eutils' : 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils';
 const BLAST = USE_PROXY ? '/ncbi-blast' : 'https://blast.ncbi.nlm.nih.gov/Blast.cgi';
 // Identify the client to NCBI per their usage guidelines.
