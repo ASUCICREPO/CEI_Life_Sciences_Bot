@@ -27,6 +27,18 @@ def get_model(model_id: str | None = None, max_tokens: int | None = None) -> Cha
         kwargs["credentials_profile_name"] = config.aws_profile
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
+    # ADR: native Converse guardrailConfig, not a separate ApplyGuardrail call | Rationale: B51 requires every
+    # agent model call to pass through the Guardrail; wiring it here covers every existing get_model() call site
+    # with no change to agent nodes.py/*_main.py. B7: trace stays "disabled" so the Guardrail's own assessment
+    # never reaches the agent trace. B51a: output stays unfiltered because every entity in ModelGuardrail
+    # (backend/lib/constructs/model-guardrail.ts) is configured outputEnabled=false; only input is assessed.
+    # Empty id/version (local dev, no deploy config yet) leaves get_model() unchanged from before this phase.
+    if config.guardrail_id and config.guardrail_version:
+        kwargs["guardrails"] = {
+            "guardrail_identifier": config.guardrail_id,
+            "guardrail_version": config.guardrail_version,
+            "trace": "disabled",
+        }
     return ChatBedrockConverse(**kwargs)
 
 
