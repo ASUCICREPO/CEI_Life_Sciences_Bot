@@ -39,7 +39,15 @@ CEI Life Sciences Bot will be an AI-powered assistant for life sciences research
 A user can start a chat in two ways:
 
 - **Pick a task** from a task launcher (a specific research, drafting, or analysis task). This routes deterministically to the matching specialist agent — no model call decides the routing.
-- **Type free text** (**Planned — not built**, F9). A small, fast classifier model picks the best-fit specialist agent (Research, Drafting, Analysis, or Pipeline Manager) automatically. If the system is not sure which agent fits, it asks the user to pick one from a short list of the four agents instead of guessing.
+- **Type free text** (F9: the backend is built; the free-text input in the chat screen is in progress). A small, fast classifier model picks the best-fit specialist agent (Research, Drafting, Analysis, or Pipeline Manager) automatically. If the system is not sure which agent fits, it asks the user to pick one from a short list of the four agents instead of guessing.
+
+When the list of four agents shows:
+
+1. Select the agent that fits your request.
+2. Select **Choose**.
+3. The chosen agent starts with your original message. You do not type it again.
+
+The list stays valid for 10 minutes. After that, the chat shows "This request has expired. Start again." Send your message again.
 
 ![Start a chat](./media/step-2-start-chat.png)
 
@@ -49,7 +57,16 @@ A user can start a chat in two ways:
 
 ## Journey: Per-chat mode and model (Partly built)
 
-Each chat has a **mode** (science or business) chosen when the chat starts, changeable at any point in that chat. The mode control exists in the chat view. **Planned — not built:** each chat also has a **model picker** — the user selects any available Bedrock model, from a list that already excludes models the deployment has blocked.
+Each chat has a **mode** (science or business) chosen when the chat starts, changeable at any point in that chat. The mode control exists in the chat view. Each chat also has a **model picker** (F8, built). The list shows the available Bedrock models. Models that the deployment blocks are not in the list.
+
+To select a model for a chat:
+
+1. Start a new chat.
+2. Before you send the first message, open the **Model** list.
+3. Select a model. Or keep **Default** to use the deployment default model.
+4. Send your first message.
+
+After the chat starts, the model is locked. The control shows "The model is fixed when the chat starts." To use a different model, start a new chat. Some models in the list can fail at run time, because the deployment can run Anthropic models only.
 
 ![Mode and model picker](./media/step-3-mode-model.png)
 
@@ -59,7 +76,7 @@ Each chat has a **mode** (science or business) chosen when the chat starts, chan
 
 ## Journey: Watching an answer build (thinking block) (Partly built)
 
-The thinking block and the streaming surface exist in the frontend (`frontend/src/components/streaming/`). Today only Research streams its answer (CEI UI 1.2), and only when the deployment has `researchStreamingEnabled`. The other agents show the completed answer at the end.
+The thinking block and the streaming surface exist in the frontend (`frontend/src/components/streaming/`). Today only Research streams its answer (CEI UI 1.2), and only when the deployment has `researchStreamingEnabled`. The other agents show the completed answer at the end. When the deployment turns on web search (F12, off by default), Research can also search the web and cite web pages.
 
 While the agent works, the user sees:
 - A live step status (for example "Searching PubMed").
@@ -87,7 +104,20 @@ While the agent works, the user sees:
 
 ## Journey: Answering agent questions (HITL) (Partly built)
 
-Today only Analysis (scope confirmation) and Pipeline Manager (plan approval) pause for an answer. The Research and Drafting questions below are planned.
+Four agents pause for an answer (F13, built; not yet verified on AWS):
+
+- **Research** asks one clarifying question when no data source fits, or when the request can mean more than one thing.
+- **Drafting** asks you to approve the outline before it writes the full draft. Drafting does not pause again after the draft. To change the draft, send a new message in the same chat.
+- **Analysis** asks you to confirm the scope.
+- **Pipeline Manager** asks you to approve the plan. The steps inside a pipeline do not ask the Research or Drafting questions.
+
+To answer a question:
+
+1. Read the question card in the chat.
+2. Select an option, or type your answer.
+3. Submit the answer. The agent continues from the point where it stopped.
+
+The question card also shows on a streamed Research answer.
 
 Some agents pause mid-task to ask the user a question — for example, Research asking for clarification when no data source clearly fits, or Drafting asking for outline approval before writing a full draft. The chat shows "waiting for you" with no fixed time limit — the user can take as long as they need. If a paused question is left unanswered for a very long time (on the order of a year), it eventually expires; the chat then shows "expired, start again" and the user restarts that task. In normal use, the user answers with a multiple-choice pick or free text well before that, and the agent resumes exactly where it paused.
 
@@ -124,9 +154,18 @@ The chat shows a list of the session's reports with download links (`GET /sessio
 
 ---
 
-## Planned journey: Settings and API keys (not built)
+## Journey: Settings and API keys (Partly built)
 
-The Settings page exists, but per-user API keys show "coming in a future update".
+The Settings page has a **Model and mode defaults** section (F8, built). Per-user API keys still show "coming in a future update".
+
+To set your defaults:
+
+1. Open **Settings**.
+2. In **Default model**, select a model, or keep **Use the system default**.
+3. In **Default chat mode**, select **Science** or **Business**, or keep **No default**.
+4. Select **Save**. The page shows "Saved."
+
+Note: the app stores these defaults, but a new chat does not use them yet. A new chat uses the deployment default model unless you select a model in the chat.
 
 Users can set their default model and mode, and can optionally add their own API key for a data source (for example NCBI) to get a higher rate limit, or configure additional paid sources. API keys are never shown back to the user once saved.
 
