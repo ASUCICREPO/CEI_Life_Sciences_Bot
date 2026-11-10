@@ -208,6 +208,13 @@ describe('ToolGateway (F4)', () => {
   });
 
   describe('token refresh (B67)', () => {
+    it('includes NCBI in the specialist Router grant', () => {
+      const routers = resourcesOf(template, 'AWS::Lambda::Function').filter((f) => f.Environment?.Variables?.TOOL_SCOPES);
+      expect(routers).toHaveLength(1);
+      expect(routers[0].Environment.Variables.TOOL_SCOPES.split(',').sort())
+        .toEqual(EXPECTED_SCOPES.map((scope) => `cei-tools/${scope}`).sort());
+    });
+
     it('is POST /internal/token-refresh with AWS_IAM auth', () => {
       const iam = resourcesOf(template, 'AWS::ApiGateway::Method').filter((m) => m.AuthorizationType === 'AWS_IAM');
       expect(iam).toHaveLength(1);

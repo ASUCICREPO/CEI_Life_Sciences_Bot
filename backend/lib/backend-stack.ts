@@ -761,7 +761,7 @@ export class BackendStack extends cdk.Stack {
       tokenEndpoint: `${cognitoDomainUrl}/oauth2/token`,
       clientId: gateway.routerClient.userPoolClientId,
       secretArn: gateway.routerSecret.secretArn,
-      scopes: gateway.scopeNames.filter((name) => name !== 'src.ncbi').map(fullScope),
+      scopes: gateway.scopeNames.map(fullScope),
       runtimeUrl: agentRuntimes.invocationUrls.research,
     });
     const runnerLogs = new logs.LogGroup(this, 'SessionRunnerLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY });
