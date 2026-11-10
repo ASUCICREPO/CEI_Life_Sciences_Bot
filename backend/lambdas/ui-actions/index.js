@@ -18,7 +18,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ACTION_FIELDS = ['request_id', 'session_id', 'surface_id', 'revision', 'interaction_id', 'component_id', 'action_id', 'value'];
 const BOUNDED_STRINGS = { request_id: 128, surface_id: 128, interaction_id: 128, component_id: 128, action_id: 128 };
 // agent_type stored by begin_turn -> AGENT_URLS key. Only agents whose graphs pause with interrupt() resume.
-const RESUMABLE = { analysis: 'analysis', pipeline_manager: 'pipeline' };
+// F13: Research (clarify) and Drafting (outline approval) now pause too; resumes are still a single
+// buffered JSON envelope (no SSE), delivered over this route's existing STREAM-mode Lambda response.
+const RESUMABLE = { analysis: 'analysis', pipeline_manager: 'pipeline', research: 'research', drafting: 'drafting' };
 const ENVELOPE_STATUSES = new Set(['completed', 'awaiting_input', 'running', 'rejected', 'stale', 'error']);
 const RUNTIME_TIMEOUT_MS = 13.5 * 60 * 1000;
 
