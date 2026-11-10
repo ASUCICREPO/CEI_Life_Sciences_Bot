@@ -1,6 +1,6 @@
 # User Guide
 
-Status: **Planned — not built.** This page outlines the planned user journeys for the CEI Life Sciences Bot. It is not a walkthrough of a deployed application, because there is no deployed frontend, authentication, or API yet (see [Provisioned Resources](./provisioned-resources.md)). This guide will fill in with real screenshots and step-by-step instructions once each journey exists. Full detail: `.agents/specs/architecture.md`, `.agents/specs/api.md`, `.agents/decision-log.md`.
+Status: **Partly built.** The frontend, Cognito sign-in, and the REST API exist in CDK (see [Provisioned Resources](./provisioned-resources.md)). Each journey below has its own status: **Built**, **Partly built**, or **Planned**. This guide will get real screenshots and step-by-step instructions when each journey is verified on a deployment. Full detail: `.agents/specs/architecture.md`, `.agents/specs/api.md`, `.agents/decision-log.md`.
 
 ---
 
@@ -21,35 +21,35 @@ CEI Life Sciences Bot will be an AI-powered assistant for life sciences research
 
 ---
 
-## Planned journey: Sign up
+## Journey: Sign up (Built)
 
 1. User opens the application URL and selects "Sign up."
 2. User enters an email address and password. Cognito enforces an email-domain allowlist set by the deployment; sign-up from a disallowed domain is rejected before verification.
 3. User verifies their email address.
-4. No MFA step exists in the planned design.
+4. There is no MFA step (B14).
 
 ![Sign up](./media/step-1-signup.png)
 
-> **[PLACEHOLDER]** Screenshot of the sign-up screen, once built.
+> **[PLACEHOLDER]** Screenshot of the sign-up screen.
 
 ---
 
-## Planned journey: Start a chat
+## Journey: Start a chat (Partly built)
 
 A user can start a chat in two ways:
 
 - **Pick a task** from a task launcher (a specific research, drafting, or analysis task). This routes deterministically to the matching specialist agent — no model call decides the routing.
-- **Type free text.** A small, fast classifier model picks the best-fit specialist agent (Research, Drafting, Analysis, or Pipeline Manager) automatically. If the system is not sure which agent fits, it asks the user to pick one from a short list of the four agents instead of guessing.
+- **Type free text** (**Planned — not built**, F9). A small, fast classifier model picks the best-fit specialist agent (Research, Drafting, Analysis, or Pipeline Manager) automatically. If the system is not sure which agent fits, it asks the user to pick one from a short list of the four agents instead of guessing.
 
 ![Start a chat](./media/step-2-start-chat.png)
 
-> **[PLACEHOLDER]** Screenshot of the chat start screen, once built.
+> **[PLACEHOLDER]** Screenshot of the chat start screen.
 
 ---
 
-## Planned journey: Per-chat mode and model
+## Journey: Per-chat mode and model (Partly built)
 
-Each chat has a **mode** (science or business) chosen when the chat starts, changeable at any point in that chat. Each chat also has a **model picker** — the user selects any available Bedrock model, from a list that already excludes models the deployment has blocked.
+Each chat has a **mode** (science or business) chosen when the chat starts, changeable at any point in that chat. The mode control exists in the chat view. **Planned — not built:** each chat also has a **model picker** — the user selects any available Bedrock model, from a list that already excludes models the deployment has blocked.
 
 ![Mode and model picker](./media/step-3-mode-model.png)
 
@@ -57,7 +57,9 @@ Each chat has a **mode** (science or business) chosen when the chat starts, chan
 
 ---
 
-## Planned journey: Watching an answer build (thinking block)
+## Journey: Watching an answer build (thinking block) (Partly built)
+
+The thinking block and the streaming surface exist in the frontend (`frontend/src/components/streaming/`). Today only Research streams its answer (CEI UI 1.2), and only when the deployment has `researchStreamingEnabled`. The other agents show the completed answer at the end.
 
 While the agent works, the user sees:
 - A live step status (for example "Searching PubMed").
@@ -67,11 +69,11 @@ While the agent works, the user sees:
 
 ![Thinking block](./media/step-4-thinking-block.png)
 
-> **[PLACEHOLDER]** Screenshot of an in-progress answer with the thinking block expanded, once built.
+> **[PLACEHOLDER]** Screenshot of an in-progress answer with the thinking block expanded.
 
 ---
 
-## Planned journey: Attachments
+## Planned journey: Attachments (not built)
 
 1. User uploads a file (PDF, DOCX, TXT, MD, CSV, PNG, or JPG; up to 55 MB) into a specific chat.
 2. The file becomes available only within that chat.
@@ -83,27 +85,33 @@ While the agent works, the user sees:
 
 ---
 
-## Planned journey: Answering agent questions (HITL)
+## Journey: Answering agent questions (HITL) (Partly built)
+
+Today only Analysis (scope confirmation) and Pipeline Manager (plan approval) pause for an answer. The Research and Drafting questions below are planned.
 
 Some agents pause mid-task to ask the user a question — for example, Research asking for clarification when no data source clearly fits, or Drafting asking for outline approval before writing a full draft. The chat shows "waiting for you" with no fixed time limit — the user can take as long as they need. If a paused question is left unanswered for a very long time (on the order of a year), it eventually expires; the chat then shows "expired, start again" and the user restarts that task. In normal use, the user answers with a multiple-choice pick or free text well before that, and the agent resumes exactly where it paused.
 
 ![HITL question](./media/step-6-hitl.png)
 
-> **[PLACEHOLDER]** Screenshot of a HITL question surface, once built.
+> **[PLACEHOLDER]** Screenshot of a HITL question surface.
 
 ---
 
-## Planned journey: Background jobs and the pipeline view
+## Journey: Background jobs and the pipeline view (Partly built)
+
+Today only Pipeline Manager runs are background jobs. The jobs routes exist, and `/pipeline?job=<id>` shows live step status. Without `?job=`, `/pipeline` still shows sample data. The 10-minute handoff for the other agents is planned.
 
 For a request predicted to take longer than 10 minutes (or any multi-agent pipeline), the agent hands the work off to a background job. This choice is made once, before the agent starts answering — a request already streaming an answer never switches to a background job partway through. The user sees the job in a jobs list, and a dedicated `/pipeline` view for pipeline jobs shows live step status as the job progresses. The user is notified only inside the dashboard — there is no email notification.
 
 ![Jobs list](./media/step-7-jobs.png)
 
-> **[PLACEHOLDER]** Screenshot of the jobs list / pipeline view, once built.
+> **[PLACEHOLDER]** Screenshot of the jobs list / pipeline view.
 
 ---
 
-## Planned journey: Export with review acknowledgment
+## Journey: Export with review acknowledgment (Partly built)
+
+The chat shows a list of the session's reports with download links (`GET /sessions/{sessionId}/exports`, `GET /exports/{exportId}/download`). The steps below are the target flow.
 
 1. User selects "Export" on a completed answer.
 2. User picks a format: PDF, DOCX, Markdown, CSV, or LaTeX.
@@ -116,7 +124,9 @@ For a request predicted to take longer than 10 minutes (or any multi-agent pipel
 
 ---
 
-## Planned journey: Settings and API keys
+## Planned journey: Settings and API keys (not built)
+
+The Settings page exists, but per-user API keys show "coming in a future update".
 
 Users can set their default model and mode, and can optionally add their own API key for a data source (for example NCBI) to get a higher rate limit, or configure additional paid sources. API keys are never shown back to the user once saved.
 
@@ -126,7 +136,7 @@ Users can set their default model and mode, and can optionally add their own API
 
 ---
 
-## Planned journey: Delete a chat or the account
+## Planned journey: Delete a chat or the account (not built, deferred)
 
 A user can delete a single chat (its history, trace, attachments, Knowledge Base chunks, and checkpoints) or delete their entire account (everything, including long-term memories and stored API keys). Deleting hides the item immediately in the dashboard; the underlying data is removed shortly after.
 
@@ -157,6 +167,6 @@ This section will list real support channels once the application is deployed.
 
 ## Next Steps
 
-- See the [Deployment Guide](./deploymentGuide.md) for the planned deployment flow.
-- See the [API Documentation](./APIDoc.md) for the planned route list.
+- See the [Deployment Guide](./deploymentGuide.md) for the deployment flow.
+- See the [API Documentation](./APIDoc.md) for the route list and the status of each route.
 - See the [Architecture Deep Dive](./architectureDeepDive.md) to understand how the system will work.
