@@ -132,14 +132,14 @@ class WriterFence:
         self._validate(user_id, session_id, job_id)
         scope = f"chat#{session_id}" if session_id is not None else "account"
         if session_id is None:
-            # Account deletion must wait for chat deletion jobs to finish their
-            # cascades, not merely for their report writers to stop.
+            # Fence the account immediately, even when an earlier chat
+            # deletion is still running. Quiescence waits for those cascades.
             items = [{"Update": {
                 "TableName": self._table, "Key": self._key(user_id, "account"),
                 "UpdateExpression": "SET #state = :deleting, job_id = :job",
-                "ConditionExpression": "(attribute_not_exists(#state) AND (attribute_not_exists(#active) OR #active = :zero)) OR (#state = :deleting AND job_id = :job)",
-                "ExpressionAttributeNames": {"#state": "state", "#active": "active_chat_deletions"},
-                "ExpressionAttributeValues": {":deleting": {"S": "deleting"}, ":job": {"S": job_id}, ":zero": {"N": "0"}},
+                "ConditionExpression": "attribute_not_exists(#state) OR (#state = :deleting AND job_id = :job)",
+                "ExpressionAttributeNames": {"#state": "state"},
+                "ExpressionAttributeValues": {":deleting": {"S": "deleting"}, ":job": {"S": job_id}},
             }}]
         else:
             # The account counter and new chat fence are one transaction. This
@@ -194,9 +194,9 @@ class WriterFence:
         }}, {"Update": {
             "TableName": self._table, "Key": self._key(user_id, "account"),
             "UpdateExpression": "ADD #active :minus_one",
-            "ConditionExpression": "attribute_not_exists(#state) AND #active >= :one",
+            "ConditionExpression": "(attribute_not_exists(#state) OR #state = :deleting) AND #active >= :one",
             "ExpressionAttributeNames": {"#state": "state", "#active": "active_chat_deletions"},
-            "ExpressionAttributeValues": {":minus_one": {"N": "-1"}, ":one": {"N": "1"}},
+            "ExpressionAttributeValues": {":minus_one": {"N": "-1"}, ":one": {"N": "1"}, ":deleting": {"S": "deleting"}},
         }}]
         try:
             self._client.transact_write_items(TransactItems=items)
@@ -213,6 +213,15 @@ class WriterFence:
         gate = self._client.get_item(TableName=self._table, Key=self._key(user_id, scope), ConsistentRead=True).get("Item")
         if not gate or gate.get("state", {}).get("S") != "deleting" or gate.get("job_id", {}).get("S") != job_id:
             raise WriteFenced("The deletion fence is missing or does not match this job.")
+        if session_id is None:
+            try:
+                active_chat_deletions = int(gate.get("active_chat_deletions", {"N": "0"})["N"])
+            except (KeyError, TypeError, ValueError):
+                raise WriteFenced("The account deletion state is invalid.") from None
+            if active_chat_deletions < 0:
+                raise WriteFenced("The account deletion state is invalid.")
+            if active_chat_deletions:
+                return False
         prefix = f"writer#{session_id}#" if session_id is not None else "writer#"
         response = self._client.query(
             TableName=self._table, ConsistentRead=True, Limit=1,

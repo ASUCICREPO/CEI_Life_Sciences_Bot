@@ -72,16 +72,16 @@ def test_account_deletion_waits_for_chat_deletion_cascades(fence):
     fence.begin_deletion("alice", JOB, CHAT)
     fence.begin_deletion("alice", JOB, CHAT)  # Must not increment the counter again.
     fence.begin_deletion("alice", "b" * 32, OTHER)
+    fence.begin_deletion("alice", "c" * 32)
+    assert not fence.quiescent("alice", "c" * 32)
     with pytest.raises(WriteFenced):
-        fence.begin_deletion("alice", "c" * 32)
+        fence.acquire("alice", CHAT, writer_ref="run-1")
     fence.finish_chat_deletion("alice", CHAT, JOB)
     fence.finish_chat_deletion("alice", CHAT, JOB)  # Must not decrement twice.
-    with pytest.raises(WriteFenced):
-        fence.begin_deletion("alice", "c" * 32)
+    assert not fence.quiescent("alice", "c" * 32)
     with pytest.raises(WriteFenced):
         fence.finish_chat_deletion("alice", OTHER, JOB)
     fence.finish_chat_deletion("alice", OTHER, "b" * 32)
-    fence.begin_deletion("alice", "c" * 32)
     assert fence.quiescent("alice", "c" * 32)
     with pytest.raises(WriteFenced):
         fence.begin_deletion("alice", JOB, CHAT)

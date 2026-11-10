@@ -15,9 +15,10 @@ remote writes have stopped before releasing it. This foundation has no deployed
 table, job/outbox transaction, worker recovery adapter, or universal writer
 integration yet; it cannot by itself authorize either deletion route.
 
-Account deletion also waits for all chat deletion cascades: starting a chat
-deletion increments an account counter in the same transaction as its chat gate,
-and completing that cascade decrements it while preserving the chat tombstone.
+Account deletion fences immediately and waits for all chat deletion cascades:
+starting a chat deletion increments an account counter in the same transaction
+as its chat gate, and completing that cascade decrements it while preserving the
+chat tombstone. The account is not quiescent while that counter is nonzero.
 The production adapter must durably couple that final transition with job
 completion. Token registration can itself time out after committing; recovery
 must identify and prove the state of the originating run even when the caller
