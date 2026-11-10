@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { StreamingSurface } from './StreamingSurface';
 import { parseStreamEvent, type StreamEvent } from '../../lib/stream/events';
-import type { OpenStreamOptions } from '../../lib/stream/openStream';
+import { StreamError, type OpenStreamOptions } from '../../lib/stream/openStream';
 import { FULL_RUN } from '../../lib/stream/__fixtures__/events';
 
 vi.mock('../../lib/auth/AuthProvider', () => ({
@@ -60,6 +60,23 @@ describe('StreamingSurface', () => {
     ]);
     render(<StreamingSurface sessionId="s-1" agent="research" body={{}} openStreamImpl={impl} />);
     expect((await screen.findByRole('alert')).textContent).toBe('The request could not be completed.');
+  });
+
+  it('shows the unavailable-model preflight error', async () => {
+    const impl = async function* (): AsyncGenerator<StreamEvent> {
+      throw new StreamError("This chat's model is unavailable.", { status: 400 });
+    };
+    render(<StreamingSurface sessionId="s-1" agent="research" body={{}} openStreamImpl={impl} />);
+    expect((await screen.findByRole('alert')).textContent).toBe("This chat's model is unavailable.");
+  });
+
+  it('shows the unavailable-model error from an active stream', async () => {
+    const { impl } = scripted([
+      { seq: 0, type: 'surface_begin', surface_id: 's', root_id: 'root' },
+      { seq: 1, type: 'error', code: 'model_unavailable', message: "This chat's settings are unavailable." },
+    ]);
+    render(<StreamingSurface sessionId="s-1" agent="research" body={{}} openStreamImpl={impl} />);
+    expect((await screen.findByRole('alert')).textContent).toBe("This chat's settings are unavailable.");
   });
 
   it('reports completion exactly once to the owning chat', async () => {

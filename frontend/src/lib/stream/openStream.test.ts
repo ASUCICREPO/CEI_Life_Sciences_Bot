@@ -73,6 +73,13 @@ describe('SseParser', () => {
 });
 
 describe('openStream', () => {
+  it('exposes the safe preflight model error from the server', async () => {
+    const { impl } = fakeFetch([() => new Response(JSON.stringify({ error: {
+      code: 'model_unavailable', message: "This chat's model is unavailable.", retriable: false,
+    } }), { status: 400 })]);
+    await expect(collect(openStream({ url: '/s', body: {}, getToken: async () => 'token', fetchImpl: impl })))
+      .rejects.toMatchObject({ message: "This chat's model is unavailable.", status: 400, retriable: false });
+  });
   it('reports a server error with its request id but no prompt or response body', async () => {
     const diagnostics = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     configureClientDiagnostics({ baseUrl: '/api', getToken: async () => 'token', fetchImpl: diagnostics });
