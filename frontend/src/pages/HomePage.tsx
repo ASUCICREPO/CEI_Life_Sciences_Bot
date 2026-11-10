@@ -1,9 +1,10 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { resumeState, useSessions } from '../lib/useSessions';
 import {
   ArrowRight, Clock, CheckCircle2, AlertCircle,
-  FileText, FlaskConical, Briefcase, Sparkles
+  FileText, FlaskConical, Briefcase, Sparkles, Send
 } from 'lucide-react';
 import { ViewMode } from '../design-system/tokens';
 
@@ -11,6 +12,15 @@ export function HomePage() {
   const { mode } = useApp();
   const navigate = useNavigate();
   const { sessions, isLoading: sessionsLoading, error: sessionsError } = useSessions({ limit: 5 });
+  const [askValue, setAskValue] = useState('');
+
+  // F9: free text starts a classified chat on /ask instead of a deterministic task route.
+  const handleAsk = (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmed = askValue.trim();
+    if (!trimmed) return;
+    navigate('/ask', { state: { prompt: trimmed } });
+  };
 
   const statusIcon = {
     active: <Clock size={14} className="text-cei-blue-light" />,
@@ -35,6 +45,28 @@ export function HomePage() {
         <h1 className="text-2xl font-semibold text-text-primary">Good morning, Sarah</h1>
         <p className="text-sm text-text-secondary mt-1">Home is your overview for starting work and returning to recent conversations.</p>
       </div>
+
+      <form onSubmit={handleAsk} className="mb-8">
+        <div className="relative">
+          <input
+            type="text"
+            value={askValue}
+            onChange={(event) => setAskValue(event.target.value)}
+            placeholder="Ask anything, research, drafting, analysis, or a multi-step plan..."
+            className="w-full pl-4 pr-12 py-3 rounded-xl border border-border-subtle bg-surface-elevated text-sm placeholder:text-text-tertiary focus:border-cei-blue-light focus:ring-2 focus:ring-cei-blue-light/20 transition-all shadow-sm"
+            aria-label="Ask Founder AI"
+          />
+          <button
+            type="submit"
+            disabled={!askValue.trim()}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg bg-cei-blue text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-cei-navy transition-colors"
+            aria-label="Send"
+          >
+            <Send size={14} />
+          </button>
+        </div>
+        <p className="text-xs text-text-tertiary mt-1.5 px-1">Founder AI picks the best-fit specialist automatically, or asks which one you want.</p>
+      </form>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-8">
         {quickActions.map((action) => {
