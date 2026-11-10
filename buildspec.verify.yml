@@ -17,3 +17,6 @@ phases:
       - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
       - cd "$CODEBUILD_SRC_DIR/backend" && npm test -- --runInBand
       - cd "$CODEBUILD_SRC_DIR/backend/agents" && AWS_EC2_METADATA_DISABLED=true .venv/bin/python -m pytest tests -q
+      - docker build -t cei-lsops-verify "$CODEBUILD_SRC_DIR/backend/lambdas/lsops"
+      - docker run --rm --entrypoint python cei-lsops-verify -c "import Bio, rdkit, primer3, hgvs.parser"
+      - docker run --rm --entrypoint python cei-lsops-verify -c "from lab_calculations import dilution; assert dilution(10, 2, 5)['stock_volume'] == 1"
