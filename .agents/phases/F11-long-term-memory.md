@@ -1,5 +1,5 @@
 # F11 — Long-term memory
-Status: partial (`CEIResearchMemory` has `user_preferences` and `semantic_facts` strategies; Research reads them; other agents not wired) | Depends on: F5 | Decisions: B28, B34, B36, B37, B57 | Specs: ../specs/agents.md, ../specs/data-model.md, ../specs/architecture.md
+Status: partial (shared `ResearchMemory` CfnMemory has `user_preferences` and `semantic_facts` strategies; Research, Drafting, Analysis and Pipeline Manager each have an opt-in, off-by-default recall path via `shared/memory/turns.load_long_term_context`, gated on a per-agent `CEI_<AGENT>_LONG_TERM_ENABLED` flag + `CEI_<AGENT>_MEMORY_ID`; no agent writes conversation events yet — see `shared/memory/LONG_TERM.md`) | Depends on: F5 | Decisions: B28, B34, B36, B37, B57 | Specs: ../specs/agents.md, ../specs/data-model.md, ../specs/architecture.md
 
 ## Goal
 Give the Research, Drafting, Analysis, and Pipeline Manager agents memory that lasts across chats. The agent should remember a user's stated preferences and useful facts about the user's work, without any explicit "remember" step and without a memory UI.
@@ -52,8 +52,8 @@ Give the Research, Drafting, Analysis, and Pipeline Manager agents memory that l
 ## Risks and open items
 - AgentCore Memory short-term event expiry maximum is still unverified (B57, open item in decision log and in `data-model.md`/`agents.md`). It does not block this phase (that item is about short-term HITL waits), but the same SDK research should confirm long-term extraction timing while it is being done.
 - **Proposal (not decided):** whether the Tool Agent runtime gets long-term memory at all (agents.md §5 implies no cross-source memory, but does not explicitly rule out long-term strategies). Flagged for F15 to resolve when the Tool Agent runtime is built.
-- Analysis and Pipeline Manager wiring (tasks not listed above) is deferred to F14 and F17, since those agents' node bodies do not exist yet — see Handoff notes.
+- Analysis and Pipeline Manager recall is now wired (wave2/memory, F11 follow-up); an analysis step dispatched by the Pipeline Manager's in-process dispatcher is a known exception — `analysis/run.py` does not yet forward the parent's recalled context (see `shared/memory/LONG_TERM.md`).
 
 ## Handoff notes
-- F14 (Analysis agent) and F17 (Pipeline Manager) must call `fetch_long_term_context` the same way Research/Drafting do, once their node bodies exist. This phase only guarantees the helper function and the CDK resource exist.
+- `analysis/run.py` (the Pipeline Manager's callable entry point into the Analysis graph) still needs a `long_term_context` parameter so a pipeline-dispatched analysis step can receive the parent's already-loaded context, matching `pipeline_manager/dispatcher.py`'s research/drafting steps.
 - F19 (data deletion) depends on this phase's namespace convention (`actor_id = user_id`) to delete a user's long-term memory on account delete.
