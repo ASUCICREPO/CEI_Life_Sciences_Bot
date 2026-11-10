@@ -469,6 +469,17 @@ def test_recorder_foreign_owner_refused_before_any_write(session):
     assert ChatMetadataRepository(session).get("u1", "s1").message_count == 1
 
 
-def test_delete_session_still_not_implemented(session):
-    with pytest.raises(NotImplementedError):
-        ChatHistoryRepository(session).delete_session("s1")
+def test_delete_session_removes_all_partition_items_only(session):
+    table = session.resource("dynamodb").Table(config.chat_history_table)
+    for sid, seq in [("s1", -1002), ("s1", -1), ("s1", 0), ("s1", 1), ("s2", 0)]:
+        table.put_item(Item={"session_id": sid, "sequence_number": seq, "user_id": "u1"})
+
+    repository = ChatHistoryRepository(session)
+    repository.delete_session("s1")
+    repository.delete_session("s1")  # retry is safe
+    assert table.scan()["Items"] == [{"session_id": "s2", "sequence_number": 0, "user_id": "u1"}]
+
+
+def test_delete_session_requires_partition(session):
+    with pytest.raises(ValueError):
+        ChatHistoryRepository(session).delete_session("")
