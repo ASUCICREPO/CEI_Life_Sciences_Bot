@@ -159,8 +159,8 @@ To confirm in spikes (S1–S5):
 
 Implementation details (the phase owner selects a value and records it here):
 - Trace and SSE-replay item key schema (B9, B68; chunk size is decided in B78).
-- Router low-confidence threshold value (B80, tune in F9).
-- Guardrail PII/PHI entity type list (B51a).
+- Router low-confidence threshold value (B80, tune in F9). F9 selected 0.7 as the implementation default (`DEFAULT_CONFIDENCE_THRESHOLD`; optional `CEI_ROUTER_CONFIDENCE_THRESHOLD`). The pending choice is stored in `ActiveRunsStore` (`route_choice#<session_id>`, 600-second TTL), not in a new table. Tune both after live traffic.
+- Guardrail PII/PHI entity type list (B51a). F8 selected a starting list for input only: `NAME`, `ADDRESS`, `EMAIL`, `PHONE`, `US_SOCIAL_SECURITY_NUMBER` (`model-guardrail.ts`). The full PHI list is still open for user review.
 - `usage` event cadence, grounding pending minimum duration, surface `revision > 1` rules.
 - Active-run counter table name and leak recovery. Export bucket name/key scheme. Deletion worker fan-out. User Metadata email copy vs. live Cognito read.
 - Development CORS origins. Production CloudFront CSP content and how it interacts with the Artifact sandbox CSP.
