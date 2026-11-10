@@ -16,6 +16,20 @@ foundation models. A configured non-Anthropic default can therefore fail with
 an IAM denial even though the value is propagated. Do not broaden inference
 permissions until model discovery and global blocklist enforcement are in place.
 
+Implementation note (guardContent scope, wave 3): `shared/utils.get_model()` now
+returns a `GuardScopedChatBedrockConverse` (`shared/runtime/guarded_input.py`)
+whenever a Guardrail is configured; it checks the converted Bedrock Converse
+request and raises `GuardContentRequiredError` if no `guardContent` block is
+present, unless the call site opts out with `get_model(..., user_text=False)`
+(for calls that send no user-typed text). Every `get_model()` call site under
+`backend/agents` now either wraps the user's typed text (query, clarification,
+scope/outline correction, revision feedback) in a `guard_content` block via
+`shared.runtime.guarded_input.user_turn()`/`content_blocks()`, or declares
+`user_text=False`. Retrieved evidence, tool results, recalled long-term memory,
+and system prompts stay plain text, so the Guardrail's input masking (B51a)
+never reaches paper authors, patent assignees, or FDA contact data. With no
+Guardrail configured, `get_model()` is unchanged from before this phase.
+
 ## Goal
 
 Let a user pick any (non-blocklisted) Bedrock model per chat, set science/business mode per chat (changeable mid-chat), and make every agent model call go through Bedrock Guardrails with input-only PII/PHI masking and prompt caching on the static system prompt and tool definitions.
