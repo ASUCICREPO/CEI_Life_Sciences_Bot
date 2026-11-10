@@ -19,9 +19,11 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
+from shared.config import D3_BLOCKED_MODEL_PATTERNS
 from shared.persistence.active_runs import ActiveRunRepository, ConcurrencyLimitError
 from shared.persistence.ownership import is_session_uuid
 from shared.runtime.identity import CognitoAccessTokenVerifier, UnauthenticatedError, verify_gateway_token
+from shared.runtime.model_policy import is_blocked
 
 _RUN_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 logger = logging.getLogger()
@@ -42,6 +44,14 @@ def gateway_verifier() -> CognitoAccessTokenVerifier:
 def tables() -> tuple[Any, ActiveRunRepository]:
     dynamo = boto3.resource("dynamodb")
     return dynamo.Table(os.environ["METADATA_TABLE"]), ActiveRunRepository(dynamo.Table(os.environ["ACTIVE_RUNS_TABLE"]))
+
+
+def _model_blocklist() -> tuple[str, ...]:
+    # ADR: read os.environ directly, not shared.config's AgentConfig singleton | Rationale: that singleton is
+    # constructed once at first import and would go stale across the env-var changes this Lambda's own tests make
+    # per test case; is_blocked/D3_BLOCKED_MODEL_PATTERNS are pure and have no such staleness problem.
+    extra = tuple(p.strip() for p in os.environ.get("CEI_BLOCKED_MODELS", "").split(",") if p.strip())
+    return D3_BLOCKED_MODEL_PATTERNS + extra
 
 
 def issue_token(user_id: str, session_id: str, scopes: tuple[str, ...]) -> str:
@@ -110,11 +120,14 @@ def handler(event: Any, _context: Any) -> dict[str, Any]:
             return {"status": 400, "code": "invalid_request", "message": "Invalid Research request."}
         # Fail before the Runner opens SSE. The runtime repeats the check because
         # settings can change after this owner-scoped, strongly consistent read.
+        # B18: any non-blocklisted model is allowed, not only CEI_DEFAULT_MODEL_ID; real availability
+        # (server discovery) was already checked once at write time (models-settings-handler,
+        # session-metadata-handler — shared/runtime/model_discovery.py), so this is a blocklist-only recheck.
         default_model = os.environ.get("CEI_DEFAULT_MODEL_ID", "").strip()
         if not default_model:
             raise ValueError("model configuration missing")
-        selected = session.get("model_id")
-        if selected is not None and selected != default_model:
+        candidate = session.get("model_id") or default_model
+        if is_blocked(candidate, _model_blocklist()):
             return {"status": 400, "code": "model_unavailable", "message": "This chat's model is unavailable."}
         scopes = tuple(s for s in os.environ["TOOL_SCOPES"].split(",") if s)
         if not scopes or any(not s.startswith("cei-tools/") for s in scopes):
