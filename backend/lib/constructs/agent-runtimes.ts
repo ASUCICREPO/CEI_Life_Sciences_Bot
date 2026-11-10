@@ -41,19 +41,21 @@ const UV_INSTALL_ARGS = [
   '--only-binary', ':all:',
 ];
 
-function copySources(outputDir: string): void {
-  for (const dir of SOURCE_DIRS) {
+function copySources(outputDir: string, extraDirs: string[] = [], extraFiles: string[] = []): void {
+  for (const dir of [...SOURCE_DIRS, ...extraDirs]) {
     fs.cpSync(path.join(AGENTS_DIR, dir), path.join(outputDir, dir), {
       recursive: true,
       filter: (src) => !/(__pycache__|\.pyc$|\.pytest_cache|[\\/]tests([\\/]|$))/.test(src),
     });
   }
-  for (const file of ENTRYPOINT_FILES) {
+  for (const file of [...ENTRYPOINT_FILES, ...extraFiles]) {
     fs.copyFileSync(path.join(AGENTS_DIR, file), path.join(outputDir, file));
   }
 }
 
-class LocalUvBundling implements cdk.ILocalBundling {
+export class LocalUvBundling implements cdk.ILocalBundling {
+  constructor(private readonly extraDirs: string[] = [], private readonly extraFiles: string[] = []) {}
+
   tryBundle(outputDir: string): boolean {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cei-agent-reqs-'));
     const requirements = path.join(tmp, 'requirements.txt');
@@ -70,7 +72,7 @@ class LocalUvBundling implements cdk.ILocalBundling {
       { cwd: AGENTS_DIR, stdio: ['ignore', 2, 2] },
     );
     if (installed.status !== 0) return false;
-    copySources(outputDir);
+    copySources(outputDir, this.extraDirs, this.extraFiles);
     return true;
   }
 }
