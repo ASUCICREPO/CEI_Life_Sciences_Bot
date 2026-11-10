@@ -67,7 +67,6 @@ export function ToolsPage() {
   const [query, setQuery] = useState('');
   const [runState, setRunState] = useState<RunState>('idle');
   const [stageIndex, setStageIndex] = useState(0);
-  const [expandedResultId, setExpandedResultId] = useState<string | null>(null);
   const [agentResponse, setAgentResponse] = useState<AgentEnvelope | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const timers = useRef<number[]>([]);
@@ -90,7 +89,6 @@ export function ToolsPage() {
     setQuery(nextSource.example);
     setRunState('idle');
     setStageIndex(0);
-    setExpandedResultId(null);
     setAgentResponse(null);
     setAgentError(null);
     reportTourEvent({ type: 'TOOL_SOURCE_SELECTED', id: nextSource.id });
@@ -102,7 +100,6 @@ export function ToolsPage() {
     setQuery('');
     setRunState('idle');
     setStageIndex(0);
-    setExpandedResultId(null);
     setAgentResponse(null);
     setAgentError(null);
   };
@@ -113,7 +110,6 @@ export function ToolsPage() {
     clearTimers();
     setRunState('running');
     setStageIndex(0);
-    setExpandedResultId(null);
     setAgentResponse(null);
     setAgentError(null);
 
@@ -259,7 +255,7 @@ export function ToolsPage() {
                   aria-label={`Open ${item.name}`}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <SourceLogo source={item} muted={!configured} />
+                    <SourceLogo source={item} />
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-success-bg px-2 py-1 text-[10px] font-semibold text-success">
                       <Circle size={6} className="fill-success" /> Live
                     </span>
@@ -400,7 +396,7 @@ export function ToolsPage() {
                   </div>
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-success-bg px-2.5 py-1 text-xs font-medium text-success"><Check size={12} /> Live data</span>
                 </div>
-                <div className="p-5"><CEIUISurface surface={agentResponse.ui} /></div>
+                <div className="p-5"><CEIUISurface surface={agentResponse.ui} agent="research" sessionId={getOrCreateSessionId(`tools-${source.id}`)} /></div>
               </section>
             ) : (
               <section className="rounded-xl border border-border-subtle bg-surface-elevated p-5 shadow-sm">
