@@ -37,6 +37,7 @@ def test_invalid_args_and_blast_do_not_reach_upstream(monkeypatch):
     monkeypatch.setattr(target, "taxonomy_lineage", taxonomy)
     assert target.handler({"taxon": "human", "user_id": "spoofed"}, context("ncbi-taxonomy___lineage"))["error"]["code"] == "invalid_request"
     assert target.handler({"rid": "RID123"}, context("ncbi-blast___poll"))["error"]["code"] == "invalid_request"
+    assert target.handler({"taxon": "human"}, context("ncbi-sequence___lineage"))["error"]["code"] == "invalid_request"
     taxonomy.assert_not_called()
 
 
