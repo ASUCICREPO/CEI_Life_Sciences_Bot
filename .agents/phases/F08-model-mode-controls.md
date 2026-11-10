@@ -85,6 +85,11 @@ Let a user pick any (non-blocklisted) Bedrock model per chat, set science/busine
 - Inference IAM stays Anthropic-only. A discovered non-Anthropic model can show in the list but fail at run time.
 - Not built: prompt caching (`cachePoint`). Gap: the saved `default_model_id`/`default_mode` are stored, but no code applies them to a new chat yet.
 
+## Implementation status (2026-11-10, wave3/settings-defaults)
+
+- `POST /sessions` (`backend/lambdas/session-metadata-handler/metadata_handler.py` `_create`): when the request omits `model_id`, the handler now reads the caller's profile from `UserMetadataTable` (`dynamodb:GetItem`, read-only grant added in `backend-stack.ts`) and re-validates the saved `default_model_id` with the same fail-closed blocklist/discovery check as an explicit selection. A still-available saved default is used; a now-blocklisted/undiscovered saved value, a missing profile, or a table read failure all fall back to `config.default_model_id` (the global default) rather than failing the create. `mode` is unchanged — it stays a required field on `POST /sessions`, so `default_mode` is not applied there.
+- Gap still open: the *implicit* session-creation path — a first turn arriving through `begin_turn`/`resolve_turn_config` (`backend/agents/shared/runtime/turn_config.py`) for a session row that has no stored `model_id`/`mode` — does not consult `UserMetadataTable` at all; it fills the missing value with `config.default_model_id`/`"science"` directly via `initialize_turn_settings`. That module is owned by another workstream (`backend/agents/shared/runtime/**`); applying the user's saved defaults there needs its own change: look up `UserMetadataRepository(user_id).get()` (already present in `shared/persistence/user_metadata.py`) before calling `initialize_turn_settings`, with the same re-validation and fail-open-to-global-default behavior as `_create` above.
+
 ## Needs live AWS verification
 
 - `GET /models` returns the real account model list, with blocked models removed.

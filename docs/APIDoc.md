@@ -92,7 +92,7 @@ Every public route requires the Cognito authorizer. The Status column shows what
 |---|---|---|---|---|
 | POST | `/chat/stream` | STREAM | Send a chat message; streams the answer as CEI UI 1.2 SSE | Built (SessionRunner) |
 | POST | `/tools/{source}/chat/stream` | STREAM | Chat with exactly one data source (a "tool agent"); same event catalog as `/chat/stream` | Planned |
-| POST | `/sessions` | BUFFERED | Create a chat session (an optional `model_id` must be a discovered, not-blocked model) | Built |
+| POST | `/sessions` | BUFFERED | Create a chat session (an optional `model_id` must be a discovered, not-blocked model; omitted, it uses the caller's saved `default_model_id`, falling back to the global default) | Built |
 | GET | `/sessions` | BUFFERED | List the caller's sessions (paginated) | Built |
 | GET | `/sessions/{sessionId}` | BUFFERED | Get one session's metadata | Built |
 | PATCH | `/sessions/{sessionId}` | BUFFERED | Update session title and/or mode (no `model_id`; the model is locked at create) | Built |
@@ -133,6 +133,8 @@ One Lambda (`backend/lambdas/models-settings-handler/handler.py`) serves these 3
 - `PUT /settings` accepts only `default_model_id` and `default_mode`. Any other field gets `400`. A `default_model_id` must be in the `GET /models` list, or the route returns `400`. There is no silent fallback.
 
 The settings are stored in the UserMetadataTable (`user_id` + `record`). `POST /sessions` does the same model check on its optional `model_id`. Inference permission stays Anthropic-only, so a listed non-Anthropic model can fail at run time.
+
+When `POST /sessions` is called with no `model_id`, `session-metadata-handler` reads the caller's `default_model_id` from the UserMetadataTable (`dynamodb:GetItem`, read-only) and re-checks it against the live blocklist/discovery. If it is still available, the new session uses it; if the saved value is now blocklisted, no longer discovered, no profile exists, or the table read fails, the session falls back to the global default (`CEI_DEFAULT_MODEL_ID`) instead of failing the create. `default_mode` is not yet applied the same way: `mode` is still a required field on `POST /sessions`.
 
 ### `POST /ui-actions` (F13, F9)
 

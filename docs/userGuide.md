@@ -63,7 +63,7 @@ To select a model for a chat:
 
 1. Start a new chat.
 2. Before you send the first message, open the **Model** list.
-3. Select a model. Or keep **Default** to use the deployment default model.
+3. Select a model. Or keep **Default** to use your saved default model (Settings page), or the deployment default model if you have not set one.
 4. Send your first message.
 
 After the chat starts, the model is locked. The control shows "The model is fixed when the chat starts." To use a different model, start a new chat. Some models in the list can fail at run time, because the deployment can run Anthropic models only.
@@ -165,7 +165,7 @@ To set your defaults:
 3. In **Default chat mode**, select **Science** or **Business**, or keep **No default**.
 4. Select **Save**. The page shows "Saved."
 
-Note: the app stores these defaults, but a new chat does not use them yet. A new chat uses the deployment default model unless you select a model in the chat.
+Note: a new chat with no model selected now uses your saved default model. If that saved model is no longer available (for example, it was later blocked), the chat falls back to the deployment default model instead. The default chat mode is not applied to new chats yet; a new chat still needs a mode chosen when it starts.
 
 Users can set their default model and mode, and can optionally add their own API key for a data source (for example NCBI) to get a higher rate limit, or configure additional paid sources. API keys are never shown back to the user once saved.
 
