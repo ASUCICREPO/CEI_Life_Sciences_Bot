@@ -270,7 +270,7 @@ export class ToolGateway extends Construct {
         credentialProviderConfigurations: [{ credentialProviderType: 'GATEWAY_IAM_ROLE' }],
         targetConfiguration: { mcp: { lambda: { lambdaArn: this.ncbiFunction.functionArn, toolSchema: { inlinePayload: [
           { name: tool.name, description: tool.description,
-            inputSchema: { type: 'object', properties: tool.properties, required: tool.required } },
+            inputSchema: { type: 'object', properties: tool.properties as Record<string, { type: string }>, required: tool.required } },
         ] } } } },
       });
       target.node.addDependency(gatewayRole);
