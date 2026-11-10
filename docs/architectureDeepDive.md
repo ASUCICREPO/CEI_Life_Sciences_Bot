@@ -63,7 +63,7 @@ There is **one Regional REST API Gateway (v1)** for every route, not an HTTP API
 
 **Exists (partial):** CEI UI 1.2 progressive streaming. The Research runtime emits version `1.2` events (`backend/agents/shared/streaming/research.py`), and the frontend accepts them. The SPA uses the Research stream only when `/config.json` has `researchStreamingEnabled: true`, which needs the Cedar policy mode `ENFORCE`. The other agents return one completed CEI UI 1.1 surface.
 
-**Planned — not built:** the free-text classifier path and the `ChoicePicker` for low confidence (F9). Today the Router uses only the deterministic lookup. `backend/lambdas/session-router/classifier.py` is a foundation that the handler does not call.
+**Exists (F9 backend; the free-text input in the SPA is in progress):** the free-text classifier path. A turn with `task_type: live-research` goes to Research with no model call. A turn with no `task_type` goes to `classifier.py`. The classifier calls one fixed model (`CEI_ROUTER_MODEL_ID`) through Converse with the Guardrail. At confidence 0.7 or more, the Router routes to Research, Drafting, Analysis, or Pipeline Manager. Below 0.7, the Router stores a pending choice in ActiveRunsStore (`route_choice#<session_id>`, 600-second TTL). The Runner then sends a `ChoicePicker` as a terminal `hitl_request`. UiActions handles the user's pick (`route-choice` action) and starts that agent with the original message. The Runner changes the buffered envelopes of Drafting, Analysis, and Pipeline Manager into the same SSE events. A classifier failure fails closed (`503`, no agent starts). Live AWS verification is still necessary.
 
 ---
 
@@ -122,7 +122,7 @@ Full route table: `docs/APIDoc.md`, detail: `.agents/specs/api.md`.
 - **AgentCore Gateway + Policy (Cedar)** — default-deny. One Cedar permit per source target. `tools/list` is filtered so a caller only sees the tools its scopes allow. Starts in `LOG_ONLY`, then moves to `ENFORCE`.
 - **Cognito scopes and tokens** — one resource server (`cei-tools`), one scope per source (for example `cei-tools/src.pubmed`), plus one shared scope for common tools (Life Sciences Ops, Code Interpreter, Web Search, Knowledge Base retrieval) granted to every agent. Specialist agents get every source scope — all 10 sources plus NCBI, 11 total; NCBI is not tool-agent only. Tool agents get exactly one. Only the Session Router holds the Cognito M2M client secret; it requests a token scoped to only what the current request needs, and the AgentCore runtime role cannot read that secret. A pre-token-generation trigger stamps the user's `sub` and session ID onto the token so a Gateway Lambda can read the calling user's identity directly. Before a token expires mid-run, the agent calls an internal token-refresh endpoint (IAM-authenticated) that checks the run is still active and re-issues a token with the same scopes.
 - **Life Sciences Operations** — **Exists** (`backend/lib/constructs/life-sciences-operations.ts`, container image Lambda with a Gateway target and Cedar permit). A deterministic Biopython/RDKit Lambda (no model call): sequence validation/transcription/translation/ORF finding, protein and primer properties, chemistry (SMILES/InChI, Lipinski Rule of 5, Tanimoto similarity), and lab calculations (molarity, dilution, unit conversion, HGVS check). Likely a container image because of RDKit's size.
-- **Web Search** — **Planned — not built.** Only the stack output `WebSearchEnabled` exists. Target: only the built-in AgentCore Web Search connector (region-gated to us-east-1, eu-west-1, ap-northeast-1). It is registered as a Gateway target and gated by a Cedar permit under the shared `cei-tools/common` scope, the same enforcement pattern as the other cross-cutting tools — not a bypass of the Gateway. Grounding uses returned snippets only, never full page fetches, and the trace stores only cited snippets (the connector's terms forbid bulk storage).
+- **Web Search** — **Exists (partial, F12, B103), off by default.** When the deploy config sets `webSearchEnabled: true`, `tool-gateway.ts` adds an unpinned `CfnGatewayTarget` (`web-search` connector), its Cedar permit, and `InvokeWebSearch` on the Gateway role. The runtimes get `CEI_WEB_SEARCH_ENABLED`. Research triage offers the "web" source only when this flag is `true` (`shared/tools/web_search.py`; citations use `SourceType.WEB`; the trace keeps trimmed url/title/snippet only). Analysis and Pipeline do not use web search. Live AWS verification is still necessary. Design: only the built-in AgentCore Web Search connector (region-gated to us-east-1, eu-west-1, ap-northeast-1). It is registered as a Gateway target and gated by a Cedar permit under the shared `cei-tools/common` scope, the same enforcement pattern as the other cross-cutting tools — not a bypass of the Gateway. Grounding uses returned snippets only, never full page fetches, and the trace stores only cited snippets (the connector's terms forbid bulk storage).
 - **Code Interpreter** — **Exists.** `CodeInterpreterCustom` is defined in `backend/lib/backend-stack.ts` with public network access. By design, it is never a Gateway target (unlike Web Search); it is reached directly and gated by IAM/runtime binding, not by a Cedar permit. Each of the four specialist runtimes has use of it (`grantUse`) and gets its ID as `CEI_CODE_INTERPRETER_ID`.
 
 ---
@@ -133,19 +133,20 @@ Four specialist agents plus the tool-agent runtime, all Python LangGraph applica
 
 | Agent | Goal | Status |
 |---|---|---|
-| Research | 1 — deep research, citation grounding | **Exists (partial)** — AgentCore Runtime in CDK; Gateway tools required (`CEI_REQUIRE_TOOL_GATEWAY`); `AgentCoreMemorySaver` when `CEI_RESEARCH_MEMORY_ID` is set; CEI UI 1.2 stream; no async, no HITL clarify yet |
-| Drafting | 2 — document preparation and export | **Exists (partial)** — AgentCore Runtime in CDK; export service and exports routes exist; `InMemorySaver`; no outline approval yet; calls the Research graph in-process for its research subgraph (same runtime/session, not through the Router) |
+| Research | 1 — deep research, citation grounding | **Exists (partial)** — AgentCore Runtime in CDK; Gateway tools required (`CEI_REQUIRE_TOOL_GATEWAY`); `AgentCoreMemorySaver` when `CEI_RESEARCH_MEMORY_ID` is set; CEI UI 1.2 stream; clarifying-question pause (F13); optional web source (F12); no async |
+| Drafting | 2 — document preparation and export | **Exists (partial)** — AgentCore Runtime in CDK; export service and exports routes exist; `InMemorySaver`; outline approval pause (F13); calls the Research graph in-process for its research subgraph (same runtime/session, not through the Router) |
 | Analysis | 3 — competitor/market/legal analysis | **Exists (partial)** — MVP slice (B94): AgentCore Runtime in CDK; scope pause and resume through `POST /ui-actions`; `InMemorySaver` |
 | Pipeline Manager | 4 — orchestrates the other agents | **Exists (partial)** — MVP slice (B94/B102): AgentCore Runtime in CDK; plan approval; durable Job ID Store; steps run in-process, not through `InvokeAgentRuntime` |
 | Tool Agent (13 YAML profiles, including NCBI, in `backend/agents/tool_agent/profiles/`) | single-source chat | **Exists (partial)** — code only; no runtime in CDK |
 
 Each specialist agent has science-mode and business-mode system prompt variants, set per chat and changeable mid-chat. Users select their preferred Bedrock model per chat, subject to a configurable global blocklist — no per-user model restriction.
 
-**HITL points (B72).** Only Analysis scope confirmation and Pipeline plan approval pause today. The Research and Drafting points are planned:
-- Research — a clarifying question when triage finds no suitable source, or the request is ambiguous.
-- Drafting — outline approval before the full draft; revision requests handled through an `interrupt` that resumes into the revise loop.
+**HITL points (B72, F13).** All four points below pause with a LangGraph `interrupt` and resume through `POST /ui-actions`. A resume returns one JSON envelope, not SSE. The shared resume helper is `shared/runtime/hitl_turn.py`. Live AWS verification is still necessary.
+- Research — a clarifying question when triage finds no suitable source, or sets `TriagePlan.ambiguous`. It asks once (`clarified`). On the stream path, `main.py` ends the stream with a terminal `hitl_request`.
+- Drafting — outline approval before the full draft. There is no draft-review pause; a revision request is a new chat turn.
 - Analysis — scope confirmation (competitors, market, jurisdiction) before analysis starts.
-- All agents can ask multiple-choice or free-text questions using the existing inline tools (`ask_user_question`, `present_alternatives`, `request_plan_approval`, `get_user_input`).
+- Pipeline Manager — plan approval. Its in-process sub-runs skip the Research clarify (`clarified: True`) and the Drafting outline approval (`skip_outline_approval: True`).
+- The inline tools (`ask_user_question`, `present_alternatives`, `request_plan_approval`, `get_user_input`) now really pause: `shared/tools/hitl/inline_functions.py` builds the surface and calls `interrupt`.
 
 **Checkpointer (partial):** the target is `AgentCoreMemorySaver` for every agent. Today only Research uses it (when `CEI_RESEARCH_MEMORY_ID` is set). Drafting, Analysis, and Pipeline Manager still use `InMemorySaver`. It backs crash resume, HITL pause/resume (via a LangGraph `interrupt`, with no fixed time limit on the wait, up to the checkpoint's maximum event expiry — expected around 365 days, exact value to be verified; after that the question shows "expired, start again" instead of resuming), and async-job resume after a kill.
 
@@ -156,17 +157,17 @@ Each specialist agent has science-mode and business-mode system prompt variants,
 **Exists (partial).**
 
 - **AgentCore Memory (short-term)** — **Exists (partial).** `CEIResearchMemory` (`CfnMemory`, 365-day event expiry) backs the Research checkpointer, described above.
-- **AgentCore Memory (long-term)** — **Exists (partial).** `CEIResearchMemory` has the `user_preferences` and `semantic_facts` strategies, and the Research agent reads them. The other agents do not use them yet. Target: built-in strategies only (user preferences, semantic facts, and corrections the user explicitly asks the agent to remember); no explicit "remember" tool, and users cannot see or edit memories in the first release.
+- **AgentCore Memory (long-term)** — **Exists (partial).** `CEIResearchMemory` has the `user_preferences` and `semantic_facts` strategies, and the Research agent reads them. F11 adds recall-only use for Drafting, Analysis, and Pipeline Manager on the same Memory resource. Each agent has its own flag `CEI_<AGENT>_LONG_TERM_ENABLED` (default off) and `CEI_<AGENT>_MEMORY_ID`. These 3 roles get `RetrieveMemoryRecords` only. Pipeline sub-runs get the parent's recalled context. These agents write no memory events, because writes wait for data deletion (F19). Target: built-in strategies only (user preferences, semantic facts, and corrections the user explicitly asks the agent to remember); no explicit "remember" tool, and users cannot see or edit memories in the first release.
 - **Knowledge Base** — **Planned — not built.** Amazon Bedrock Knowledge Base backed by **S3 Vectors**. Every attached document is always chunked and indexed, never inserted into context in full. Every chunk carries `user_id`, `session_id`, and `file_id` metadata; every retrieval applies that filter, enforced inside the Gateway Lambda (the agent cannot change the filter). A foundation-model parser also indexes PNG/JPG and CSV; images also go directly to vision-capable models, and CSV also goes to the Code Interpreter.
 
 ---
 
 ## 9. Guardrails, Prompt Caching, and Model Selection
 
-**Planned — not built.** `backend/agents/shared/runtime/model_policy.py` and `backend/lib/constructs/model-guardrail.ts` are foundations that no agent or stack uses yet.
+**Exists (partial, F8).** Guardrails and model selection are built. Prompt caching is not built. Live AWS verification is still necessary.
 
-- **Guardrails** — Amazon Bedrock Guardrails on every agent model call. The PII/PHI filter masks user input only; tool results and model output are not filtered, so public data (for example NPI provider names) is not broken by the filter. Guardrail configuration is never shown in the trace.
-- **Model selection** — the user selects any Bedrock model per chat; a configurable environment-variable blocklist removes specific model IDs app-wide. **Exists (partial):** `shared/config.py` has one fixed `default_model_id`; there is no picker and no blocklist enforcement yet.
+- **Guardrails** — Amazon Bedrock Guardrails on every agent model call. The PII/PHI filter masks user input only; tool results and model output are not filtered, so public data (for example NPI provider names) is not broken by the filter. Guardrail configuration is never shown in the trace. **Exists:** `BackendStack` now creates `ModelGuardrail` (`cei-input-pii`). `get_model()` in `shared/utils.py` attaches it through the Converse `guardrailConfig` (trace disabled) when `CEI_GUARDRAIL_ID` and `CEI_GUARDRAIL_VERSION` are set. The router classifier uses the same Guardrail.
+- **Model selection** — the user selects any Bedrock model per chat; a configurable environment-variable blocklist removes specific model IDs app-wide. **Exists:** the blocklist is the built-in D3 patterns plus `CEI_BLOCKED_MODELS`. `shared/runtime/model_discovery.py` lists the account's models (`ListFoundationModels`, `ListInferenceProfiles`, `GetInferenceProfile`). `GET /models` returns that filtered list. `POST /sessions` checks `model_id` against it. `GET`/`PUT /settings` store the user's default model and mode in the UserMetadataTable. The SPA shows a model picker for new chats only; the model is locked after the chat starts. Inference IAM stays Anthropic-only.
 - **Prompt caching** — cache checkpoints on the static system prompt and tool definitions; conversation history is never cached. **Planned — not built:** `get_model()` in `shared/utils.py` sets no `cachePoint` today.
 
 ---
@@ -175,9 +176,9 @@ Each specialist agent has science-mode and business-mode system prompt variants,
 
 CEI UI 1.1 is **implemented** for completed JSON responses: content type `application/vnd.cei.ui+json`, protocol `cei-ui`, servers emit version `1.1`, clients and stored history also accept `1.0`. A completed response contains one flat, allowlisted component graph built by deterministic presenters from a typed `ResponseDocument`. Models never emit component records or arbitrary UI; the only model-authored code is the sandboxed `Artifact` component, which runs only inside an iframe sandbox, never in the main page.
 
-**Exists (partial):** CEI UI 1.2 adds progressive SSE patch events (`surface_begin`, `component_add`, `text_delta`, `component_update`, `grounding_update`, `trace_event`, `progress`, `usage`, `hitl_request`, `job_handoff`, `surface_end`, `error`) on top of the same 1.1 component contract — a transport change only, not a new component catalog. This is also how the collapsible "thinking block" is populated: the client renders incoming `trace_event`s while the run is in progress, and collapses the block once the surface completes; the user can re-expand it later from the stored, lazily-loaded trace. Research emits 1.2 today; the other agents return completed 1.1 surfaces.
+**Exists (partial):** CEI UI 1.2 adds progressive SSE patch events (`surface_begin`, `component_add`, `text_delta`, `component_update`, `grounding_update`, `trace_event`, `progress`, `usage`, `hitl_request`, `job_handoff`, `surface_end`, `error`) on top of the same 1.1 component contract — a transport change only, not a new component catalog. This is also how the collapsible "thinking block" is populated: the client renders incoming `trace_event`s while the run is in progress, and collapses the block once the surface completes; the user can re-expand it later from the stored, lazily-loaded trace. Research emits 1.2 today. The other agents return completed 1.1 surfaces; on `/chat/stream`, the Session Runner changes them into 1.2 events (F9).
 
-**Exists:** typed actions go to `POST /ui-actions` (UiActions Lambda, STREAM mode). It checks session ownership and resumes the owning agent. The local demo sends actions through the agent proxy (`op: "resume"`) instead.
+**Exists:** typed actions go to `POST /ui-actions` (UiActions Lambda, STREAM mode). It checks session ownership and resumes the owning agent (Research, Drafting, Analysis, or Pipeline Manager). It also handles the router `route-choice` action. The response is one JSON envelope. The local demo sends actions through the agent proxy (`op: "resume"`) instead.
 
 See [CEI UI Protocol 1.1](./cei-ui-protocol.md) for the full contract, and its "CEI UI 1.2" section for the streaming addition. Full event catalog: `.agents/specs/streaming-protocol.md`.
 
@@ -185,7 +186,7 @@ See [CEI UI Protocol 1.1](./cei-ui-protocol.md) for the full contract, and its "
 
 ## 11. Observability, Alarms, and Security
 
-**Exists (partial).** `backend/lib/constructs/observability.ts` defines the SNS topic, the alarms for the deployed resources, and the operations dashboard; see [Observability](./observability.md). Cedar deny alarms and Guardrail alarms wait for their features.
+**Exists (partial).** `backend/lib/constructs/observability.ts` defines the SNS topic, the alarms for the deployed resources, and the operations dashboard; see [Observability](./observability.md). Cedar deny alarms and Guardrail intervention alarms are not built yet (F20). The Guardrail is now in the stack (F8), but no alarm watches it.
 
 - **Observability** — AWS-side only: AgentCore Observability (CloudWatch GenAI Observability, OTel traces) and CloudWatch dashboards, visible only to AWS account operators, not connected to the product UI.
 - **Alarms** — CloudWatch alarms to an SNS topic with an admin email set by `deploy.sh`, covering: API/Lambda errors (API Gateway 5xx rate, Lambda errors/throttles, DynamoDB throttling), security events (WAF block spikes, Cedar Policy denies, sign-up spikes), and Guardrail intervention spikes. No agent-health alarms — stale jobs are handled by the watchdog and shown in the dashboard instead.
@@ -196,7 +197,7 @@ See [CEI UI Protocol 1.1](./cei-ui-protocol.md) for the full contract, and its "
 
 ## 12. Data Stores
 
-**Exists (partial).** DynamoDB tables that exist: `ChatMetadataStore`, `ChatHistoryStore` (trace stored inline), `ExportMetadataStore`, `ActiveRunsStore`, `JobIdStore`, and `NcbiRateLimiter`. S3 buckets that exist: Attachments and Exports. Planned: User Metadata Table, Attachment Metadata Store, S3 Vectors for the Knowledge Base, and the API Key Store routes. The data-source Lambdas have key-lookup code for `cei/user-keys/{user_id}/{source_id}`, but they have no Secrets Manager grant and get no user ID yet (B99), so the lookup never runs. See `docs/provisioned-resources.md` for the full deployed list, and `.agents/specs/data-model.md` for full schemas.
+**Exists (partial).** DynamoDB tables that exist: `ChatMetadataStore`, `ChatHistoryStore` (trace stored inline), `ExportMetadataStore`, `ActiveRunsStore`, `JobIdStore`, `NcbiRateLimiter`, and `UserMetadataTable` (F8, user default model and mode). S3 buckets that exist: Attachments and Exports. Planned: Attachment Metadata Store, S3 Vectors for the Knowledge Base, and the API Key Store routes. The data-source Lambdas have key-lookup code for `cei/user-keys/{user_id}/{source_id}`, but they have no Secrets Manager grant and get no user ID yet (B99), so the lookup never runs. See `docs/provisioned-resources.md` for the full deployed list, and `.agents/specs/data-model.md` for full schemas.
 
 ---
 
@@ -236,7 +237,7 @@ The diagram at `docs/media/architecture.png` is **not updated** and does not ref
 |---|---|---|
 | Life Sciences Operations | AgentCore Gateway Lambda target | Exists |
 | Code sandbox (data analysis, transformations) | AgentCore Code Interpreter | Exists |
-| Web search | Built-in AgentCore Web Search connector | Planned |
+| Web search | Built-in AgentCore Web Search connector | Exists when `webSearchEnabled` is `true` (default off); not verified on AWS |
 | Public data source search | AgentCore Gateway Lambda targets (12 sources + NCBI) | Exists |
 
 ---
@@ -249,7 +250,7 @@ Still open:
 2. Trace key schema for entries over the DynamoDB item limit (chunk size is decided: 350 KB).
 3. AgentCore Memory short-term event expiry: the exact maximum number still needs verification (expected around 365 days); the HITL behavior once it expires ("expired, start again") is already decided.
 4. Product name and branding.
-5. Router low-confidence threshold value for when to ask the user to pick an agent (an implementation default, tuned later).
+5. Router low-confidence threshold value for when to ask the user to pick an agent. The implementation default is 0.7 (`DEFAULT_CONFIDENCE_THRESHOLD` in the Router handler). Tune it after live use.
 
 Resolved since the decision log's earlier "Still open" list: the async threshold for background-job prediction is 10 minutes, decided once before streaming starts, with no mid-run handoff.
 
