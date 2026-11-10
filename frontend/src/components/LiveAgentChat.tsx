@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Bot, Loader2, Send, User, Paperclip } from 'lucide-react';
+import { Bot, Loader2, Send, User } from 'lucide-react';
 import { CEIUISurface } from './cei-ui/cei-ui-surface';
 import { SafeMarkdown } from './cei-ui/markdown';
 import { FileUpload } from './FileUpload';
