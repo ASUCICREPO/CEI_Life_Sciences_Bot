@@ -76,8 +76,10 @@ def sequence_efetch(accession: str, *, database: str, format: str, acquire: Rate
     if database not in {"nuccore", "protein"} or format not in {"fasta", "gb"}:
         raise ValueError("invalid sequence database or format")
     acquire("eutils", None)
-    record = request(EFETCH, {"db": database, "id": accession, "rettype": format, "retmode": "text"})
-    if not record.strip() or (format == "fasta" and not record.lstrip().startswith(">")):
+    rettype = "gp" if database == "protein" and format == "gb" else format
+    record = request(EFETCH, {"db": database, "id": accession, "rettype": rettype, "retmode": "text"})
+    if (not record.strip() or (format == "fasta" and not record.lstrip().startswith(">"))
+            or (format == "gb" and (not record.lstrip().startswith("LOCUS ") or not record.rstrip().endswith("//")))):
         raise ValueError("sequence record not found")
     return {"accession": accession, "database": database, "format": format, "record": record,
             "url": f"https://www.ncbi.nlm.nih.gov/{'nuccore' if database == 'nuccore' else 'protein'}/{accession}"}

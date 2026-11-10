@@ -72,6 +72,6 @@ class NCBIRateLimiter:
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") == "TransactionCanceledException":
                 reasons = exc.response.get("CancellationReasons") or []
-                if any(reason.get("Code") == "ConditionalCheckFailed" for reason in reasons):
+                if any(reason.get("Code") in {"ConditionalCheckFailed", "TransactionConflict"} for reason in reasons):
                     raise RateLimited("NCBI request rate exceeded") from exc
             raise

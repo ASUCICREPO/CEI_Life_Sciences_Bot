@@ -37,6 +37,16 @@ def test_sequence_fetch_validates_and_limits():
         ncbi.sequence_efetch("../../url", database="nuccore", format="fasta", acquire=Mock(), request=request)
 
 
+@pytest.mark.parametrize(("database", "rettype"), [("nuccore", "gb"), ("protein", "gp")])
+def test_sequence_flatfile_uses_database_rettype(database, rettype):
+    request = Mock(return_value="LOCUS       Example\nACCESSION   ABC123\n//\n")
+    ncbi.sequence_efetch("ABC123", database=database, format="gb", acquire=Mock(), request=request)
+    assert request.call_args.args[1]["rettype"] == rettype
+    with pytest.raises(ValueError):
+        ncbi.sequence_efetch("ABC123", database=database, format="gb", acquire=Mock(),
+                             request=Mock(return_value="Error: record not found"))
+
+
 def test_blast_submit_and_poll_wait_then_ready():
     acquire = Mock()
     request = Mock(side_effect=["RID = ABC12345\nRTOE = 22\n", "Status=WAITING\n", "<?xml version='1.0'?><BlastOutput />"])

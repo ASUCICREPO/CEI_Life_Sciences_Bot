@@ -1,8 +1,21 @@
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
+from unittest.mock import Mock
 
 from limiter import NCBIRateLimiter, RateLimited
+
+
+def test_transaction_conflict_is_retryable_and_other_failures_propagate():
+    client = Mock()
+    client.transact_write_items.side_effect = ClientError({"Error": {"Code": "TransactionCanceledException"},
+        "CancellationReasons": [{"Code": "TransactionConflict"}]}, "TransactWriteItems")
+    with pytest.raises(RateLimited):
+        NCBIRateLimiter(client, "limits").acquire("eutils")
+    client.transact_write_items.side_effect = ClientError({"Error": {"Code": "AccessDeniedException"}}, "TransactWriteItems")
+    with pytest.raises(ClientError):
+        NCBIRateLimiter(client, "limits").acquire("eutils")
 
 
 @pytest.fixture
