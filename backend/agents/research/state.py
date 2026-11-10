@@ -16,6 +16,8 @@ class TriagePlan(BaseModel):
 
 
 class ResearchState(BaseAgentState):
+    # Loaded using the authenticated actor; never supplied by the model.
+    long_term_context: list[str]
     stream: bool
     grounding_pending: bool
     query: str

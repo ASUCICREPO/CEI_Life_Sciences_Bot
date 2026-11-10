@@ -63,6 +63,28 @@ async def _research_checkpoint_context(user_id: str, session_id: str):
     return persistent, checkpoint is not None, True
 
 
+async def _research_long_term_context(user_id: str, prompt: str) -> list[str]:
+    """Load only this actor's memory when the experimental read path is enabled."""
+    if os.environ.get("CEI_RESEARCH_LONG_TERM_ENABLED", "").lower() != "true":
+        return []
+    memory_id = os.environ.get("CEI_RESEARCH_MEMORY_ID", "").strip()
+    if not memory_id:
+        return []
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+    from shared.config import config
+    from shared.memory.turns import load_turn_memories
+
+    client = boto3.client("bedrock-agentcore", region_name=config.aws_region)
+    try:
+        return await load_turn_memories(client=client, memory_id=memory_id, user_id=user_id, query=prompt)
+    except (BotoCoreError, ClientError) as exc:
+        # Memory is optional context; a service failure must not fail the turn.
+        # Validation errors (e.g. a foreign namespace) still propagate.
+        log.warning("long-term memory unavailable: %s", type(exc).__name__)
+        return []
+
+
 def _runtime_port() -> int:
     raw_port = os.environ.get("CEI_RUNTIME_PORT", "8080")
     try:
@@ -137,6 +159,8 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
         )
 
+    with gateway_request_context(context, user_id, session_id):
+        memories = await _research_long_term_context(user_id, prompt)
     saver, warm, persistent = await _research_checkpoint_context(user_id, session_id)
     # Legacy in-memory mode restores snapshots; AgentCore Memory owns its own checkpoints.
     history = await begin_turn(
@@ -158,6 +182,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         "messages": [*history, HumanMessage(content=prompt)],
         "mode": mode,
         "model_id": model_id,
+        "long_term_context": memories,
         "user_id": user_id,
         "session_id": session_id,
         "query": prompt,
@@ -232,6 +257,7 @@ async def _begin_stream_research(context, session, prompt, mode, model_id):
     try:
         # Verify the forwarded token before making a history mutation.
         with gateway_request_context(context, session.user_id, session.session_id):
+            memories = await _research_long_term_context(session.user_id, prompt)
             saver, warm, persistent = await _research_checkpoint_context(session.user_id, session.session_id)
             history = await begin_turn(user_id=session.user_id, session_id=session.session_id, prompt=prompt,
                                        agent_type="research", mode=mode, model_id=model_id, warm=warm,
@@ -240,6 +266,7 @@ async def _begin_stream_research(context, session, prompt, mode, model_id):
                 _touch_thread(session.session_id)
             graph = compile_graph(checkpointer=saver)
             initial = {"messages": [*history, HumanMessage(content=prompt)], "mode": mode, "model_id": model_id,
+                       "long_term_context": memories,
                        "user_id": session.user_id, "session_id": session.session_id, "query": prompt,
                        "triage_plan": None, "retrieved_results": [], "synthesis": "",
                        "response_document": None, "trace": [], "stream": True,

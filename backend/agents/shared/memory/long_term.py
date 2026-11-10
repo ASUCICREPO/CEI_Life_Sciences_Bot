@@ -1,7 +1,7 @@
 """AgentCore long-term memory primitives; callers must supply verified identities.
 
-Not wired to any agent until strategy provisioning, deletion fencing and the
-conversation-event integration described in LONG_TERM.md are complete.
+Research reads through `turns.py` behind an off-by-default flag; no agent writes
+events yet. See LONG_TERM.md for the deletion-fencing and live-proof gates.
 """
 from __future__ import annotations
 

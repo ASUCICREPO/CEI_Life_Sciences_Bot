@@ -131,6 +131,10 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
     const memoryId = Object.keys(template.findResources('AWS::BedrockAgentCore::Memory'))[0];
     expect(research.Properties.EnvironmentVariables.CEI_RESEARCH_MEMORY_ID).toEqual({ 'Fn::GetAtt': [memoryId, 'MemoryId'] });
     expect(research.Properties.EnvironmentVariables.CEI_REQUIRE_TOOL_GATEWAY).toBe('true');
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    expect(policies.some((p) => JSON.stringify(p.Properties.Roles).includes('AgentRuntimesResearchRuntime') &&
+      p.Properties.PolicyDocument.Statement.some((s: any) => [s.Action].flat().includes('bedrock-agentcore:RetrieveMemoryRecords') &&
+        JSON.stringify(s.Resource).includes(memoryId)))).toBe(true);
   });
 
   test('zero unsuppressed cdk-nag errors after adding the runtimes', () => {

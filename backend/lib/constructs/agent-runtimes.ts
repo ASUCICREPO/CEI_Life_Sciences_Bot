@@ -216,7 +216,8 @@ export class AgentRuntimes extends Construct {
       });
       if (def.id === 'Research') {
         runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
-          actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent'],
+          actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent',
+            'bedrock-agentcore:RetrieveMemoryRecords'],
           resources: [researchMemory.attrMemoryArn],
         }));
       }
