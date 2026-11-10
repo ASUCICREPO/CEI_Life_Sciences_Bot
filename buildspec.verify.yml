@@ -1,0 +1,16 @@
+version: 0.2
+
+# Build and test the selected source revision without deploying or changing AWS resources.
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm ci
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm ci
+  build:
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm test
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm run build
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm test -- --runInBand
