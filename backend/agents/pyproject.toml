@@ -31,4 +31,5 @@ dev-dependencies = [
     "pytest",
     "pytest-asyncio",
     "moto[all]",
+    "reportlab",  # tests/test_export_pdf_safety.py; the PDF script itself runs in Code Interpreter
 ]
