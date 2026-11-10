@@ -160,3 +160,11 @@ def test_create_validates_inputs(repo):
     job = create(repo)
     with pytest.raises(JobTransitionError):
         create(repo, job_id=job["job_id"])
+
+
+def test_scopes_are_stored_privately_and_validated(repo):
+    job = create(repo, scopes=("cei-tools/src.pubmed",))
+    assert repo.get("alice", job["job_id"])["scopes"] == ["cei-tools/src.pubmed"]
+    assert "scopes" not in public_job(job)
+    with pytest.raises(ValueError):
+        create(repo, scopes=("a", "a"))

@@ -133,9 +133,13 @@ class JobRepository:
 
     def create(self, *, user_id: str, session_id: str, agent_type: str, runtime_session_id: str,
                steps: Iterable[tuple[str, str, str]] = (), job_id: str | None = None,
-               checkpoint_ref: str | None = None) -> dict[str, Any]:
+               checkpoint_ref: str | None = None, scopes: Iterable[str] = ()) -> dict[str, Any]:
+        """Create a pending job. ``scopes`` are the run's tool scopes; token refresh reads them from here only."""
         if not user_id or not session_id or not runtime_session_id or agent_type not in AGENT_TYPES:
             raise ValueError("owner, session, runtime session and a known agent type are required")
+        scope_list = list(scopes)
+        if len(set(scope_list)) != len(scope_list) or any(not isinstance(s, str) or not s for s in scope_list):
+            raise ValueError("invalid job scopes")
         job_id = job_id or new_job_id()
         if not valid_job_id(job_id):
             raise ValueError("invalid job id")
@@ -146,7 +150,7 @@ class JobRepository:
         item = {"user_id": user_id, "job_id": job_id, "session_id": session_id, "agent_type": agent_type,
                 "status": PENDING, "progress_pct": 0, "steps": step_items, "ui": None, "text": None,
                 "error": None, "cancel_requested": False, "result_in_history": False, "revision": 1,
-                "runtime_session_id": runtime_session_id, "checkpoint_ref": checkpoint_ref,
+                "runtime_session_id": runtime_session_id, "checkpoint_ref": checkpoint_ref, "scopes": scope_list,
                 "recovery_attempts": 0, "heartbeat_at": int(time.time()), "created_at": now, "updated_at": now}
         try:
             self._table.put_item(Item=item, ConditionExpression="attribute_not_exists(job_id)")
