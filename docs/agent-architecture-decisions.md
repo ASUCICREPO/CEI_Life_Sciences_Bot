@@ -6,7 +6,7 @@ Decisions made during the planning phase for the CEI Life Sciences Bot AgentCore
 
 ## D1: Agent Topology — Multi-Agent with Manager
 
-**Partly superseded by B15, B17, B80 (see `.agents/decision-log.md`).** Routing for dashboard tasks (Goals 1–3) is unchanged (deterministic lookup, no model call). Free-text chat is new: it goes to a Session Router classifier call that can pick any of the four agents (B15/B17), which D1's "already classified in the task launcher UI" wording did not cover. When that classifier's confidence is low, the Router asks the user to pick one of the four agents with a `ChoicePicker` instead of guessing (B80). B21/B26/B27/B29/B30 also add a fifth runtime — 11 single-source tool agents — alongside the four agents below. Status at this commit: the Session Router Lambda exists and uses only the deterministic lookup. The free-text classifier (F9) and the tool-agent runtime (F15) are not built.
+**Partly superseded by B15, B17, B80 (see `.agents/decision-log.md`).** Routing for dashboard tasks (Goals 1–3) is unchanged (deterministic lookup, no model call). Free-text chat is new: it goes to a Session Router classifier call that can pick any of the four agents (B15/B17), which D1's "already classified in the task launcher UI" wording did not cover. When that classifier's confidence is low, the Router asks the user to pick one of the four agents with a `ChoicePicker` instead of guessing (B80). B21/B26/B27/B29/B30 also add a fifth runtime — 11 single-source tool agents — alongside the four agents below. Status at this commit: the Session Router now calls an LLM classifier for free text (F9, backend built). A turn with `task_type: live-research` still uses the deterministic lookup, with no model call. A turn with no `task_type` goes to one fixed classifier model (`CEI_ROUTER_MODEL_ID`, Converse with the Guardrail). At confidence 0.7 or more, the Router routes to that agent. Below 0.7, it returns the B80 `ChoicePicker`, and `POST /ui-actions` (`route-choice`) starts the chosen agent. The free-text input in the SPA is in progress. Live AWS verification is still necessary. The tool-agent runtime (F15) is not built.
 
 **Decision:** Multiple specialized AgentCore agents coordinated by a manager.
 
@@ -181,7 +181,7 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 4. The server validates the action and returns `accepted`, `completed`, `stale`, `rejected`, or `error`.
 5. When pause and resume support exists, the server resumes the saved graph with the validated value.
 
-**Current limitation:** `POST /ui-actions` exists and resumes the owning agent. Only Analysis (scope confirmation) and Pipeline Manager (plan approval) pause with a LangGraph `interrupt` today. Research clarify, Drafting outline approval, and inline-tool interrupts are planned (F13).
+**Current status (F13, built; live AWS verification still necessary):** `POST /ui-actions` resumes the owning agent and returns one JSON envelope, not SSE. Research (clarifying question), Drafting (outline approval), Analysis (scope confirmation), and Pipeline Manager (plan approval) pause with a LangGraph `interrupt`. The inline tools above now really pause too (`shared/tools/hitl/inline_functions.py`). On `/chat/stream`, a Research clarify pause ends the stream with a terminal `hitl_request`. **Limitation:** the B72 Drafting revision-request interrupt is not built. A revision is a new chat turn. Pipeline in-process sub-runs skip the Research and Drafting pauses (`clarified`, `skip_outline_approval`).
 
 ---
 
