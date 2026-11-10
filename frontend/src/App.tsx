@@ -3,6 +3,7 @@ import { AppProvider } from './context/AppContext';
 import { ProductTourProvider } from './components/tour/ProductTour';
 import { AppShell } from './components/shell/AppShell';
 import { HomePage } from './pages/HomePage';
+import { AskPage } from './pages/AskPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { TaskLauncherPage } from './pages/TaskLauncherPage';
 import { PipelinePage } from './pages/PipelinePage';
@@ -23,6 +24,7 @@ function App() {
               <Route element={<RequireAuth><AppShell /></RequireAuth>}>
                 <Route path="/" element={<HomePage />} />
                 <Route path="/home" element={<Navigate to="/" replace />} />
+                <Route path="/ask" element={<AskPage />} />
                 <Route path="/tasks" element={<TaskLauncherPage />} />
                 <Route path="/history" element={<HistoryPage />} />
                 <Route path="/tools" element={<ToolsPage />} />

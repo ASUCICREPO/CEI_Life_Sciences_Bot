@@ -26,6 +26,7 @@ import { StreamingSurface, StreamView } from './streaming/StreamingSurface';
 import { ThinkingBlock } from './streaming/ThinkingBlock';
 import { ReportExports } from './ReportExports';
 import type { StreamState } from '../lib/stream/reducer';
+import { agentForAgentType } from '../lib/resumeRouting';
 
 interface LiveMessage {
   id: string;
@@ -39,10 +40,24 @@ interface LiveMessage {
   stream?: { state: StreamState; connectionError: string | null };
   /** Seq numbers of this stream's hitl_request interactions already answered via /ui-actions. */
   answeredInteractions?: ReadonlySet<number>;
+  /** F9: set when the envelope that produced this turn names the agent the router picked. */
+  routedAgent?: AgentName;
 }
 
+// F9: the router's ChoicePicker (session-runner/index.js, ui-actions/index.js) always uses this
+// fixed interaction id; its resumed envelope's action_response.value is the chosen agent string.
+const ROUTER_CHOICE_INTERACTION_ID = 'router-choice';
+
+const AGENT_LABELS: Readonly<Record<AgentName, string>> = {
+  research: 'Research',
+  drafting: 'Drafting',
+  analysis: 'Analysis',
+  pipeline: 'Pipeline Manager',
+};
+
 interface LiveAgentChatProps {
-  agent: AgentName;
+  /** Known agent for a dashboard task; absent starts a free-text turn the Session Router classifies (F9). */
+  agent?: AgentName;
   mode: AgentMode;
   analysisType?: AnalysisType;
   /** Drafting only: the document type every turn carries (the runtime requires it). */
@@ -54,6 +69,8 @@ interface LiveAgentChatProps {
   description: string;
   examples: string[];
   placeholder: string;
+  /** Sent once on mount (e.g. a prompt typed on Home before navigating here). */
+  autoSendPrompt?: string;
 }
 
 const HISTORY_PAGE_SIZE = 30;
@@ -77,12 +94,22 @@ function toLiveMessages(items: HistoryMessage[]): LiveMessage[] {
 // ADR: a dedicated live chat for the Research, Drafting, Analysis and Pipeline tasks | the mock task
 // chat (ChatResponse/taskConversations) stays untouched; this component talks
 // to the AgentCore runtimes through agentClient and reads history via sessionsClient.
-export function LiveAgentChat({ agent, mode, analysisType, documentType, threadKey, resumeSessionId, title, description, examples, placeholder }: LiveAgentChatProps) {
+export function LiveAgentChat({ agent, mode, analysisType, documentType, threadKey, resumeSessionId, title, description, examples, placeholder, autoSendPrompt }: LiveAgentChatProps) {
   const navigate = useNavigate();
   const sessionsClient = useSessionsClient();
   const modelsClient = useModelsClient();
   const { config } = useAuth();
-  const useResearchStream = agent === 'research' && config?.researchStreamingEnabled === true;
+  const streamingAvailable = config?.researchStreamingEnabled === true;
+  // F9: a free-text turn (no agent prop) is always classified by the Session Router through /chat/stream
+  // (Drafting/Analysis/Pipeline Manager arrive as adapted SSE); an explicit task page keeps Research-only
+  // streaming unchanged (api.md, F09 "Implementation notes").
+  const useChatStream = streamingAvailable && (agent === 'research' || agent === undefined);
+  const routerMode = agent === undefined;
+  const routerDisabled = routerMode && !streamingAvailable;
+  // ADR: fallback label for CEI UI dispatch before an agent is known | the owning agent for /ui-actions
+  // comes from the session's own stored agent_type, never from this value (ui-actions/index.js), so a
+  // placeholder is safe until a router pick or a classified response names the real one.
+  const effectiveAgent: AgentName = agent ?? 'research';
   // One session per mounted chat: a resumed chat continues its own session, anything else starts a new one.
   // Lazy state so the id is fixed for this chat's lifetime; the parent remounts via `key`.
   const [sessionId, setSessionId] = useState(() => resumeSessionId ?? startNewSessionId(threadKey));
@@ -204,15 +231,22 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
     if (element && element.scrollTop < LOAD_OLDER_THRESHOLD_PX) loadOlder();
   };
 
+  // F9: a router-choice resume carries no agent run on `rejected`/`stale` (expired pick or a surface
+  // that moved on); show its message like any other failed action instead of an empty bubble.
   function appendFromEnvelope(envelope: AgentEnvelope, isError = false): string {
-    const id = `${agent}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const failed = envelope.status === 'rejected' || envelope.status === 'stale';
+    const id = `${agent ?? 'router'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const actionResponse = envelope.action_response;
+    const routedValue = actionResponse && actionResponse.interaction_id === ROUTER_CHOICE_INTERACTION_ID
+      ? actionResponse.value : undefined;
     setMessages((prev) => [...prev, {
       id,
       role: 'assistant',
-      text: envelope.text,
+      text: envelope.text || (failed ? envelope.action_response?.message ?? undefined : undefined),
       surface: envelope.ui,
       uiError: envelope.ui_error,
-      isError,
+      isError: isError || failed,
+      routedAgent: typeof routedValue === 'string' ? agentForAgentType(routedValue) ?? undefined : undefined,
     }]);
     if (envelope.job_id) {
       setJobSession(envelope.job_id, sessionId);
@@ -251,13 +285,13 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
 
   async function askQuestion(prompt: string) {
     const trimmed = prompt.trim();
-    if (!trimmed || isRunning || modeSaving || historyError) return;
+    if (!trimmed || isRunning || modeSaving || historyError || routerDisabled) return;
     setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', text: trimmed }]);
     setInputValue('');
     setIsRunning(true);
     let streamStarted = false;
     try {
-      if (useResearchStream) {
+      if (useChatStream) {
         let currentSessionId = createdSessionId.current;
         if (!currentSessionId) {
           const created = await sessionsClient.createSession({
@@ -269,13 +303,15 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
           createdSessionId.current = currentSessionId;
           setSessionId(currentSessionId);
         }
-        setActiveStream({
-          sessionId: currentSessionId,
-          body: { session_id: currentSessionId, run_id: crypto.randomUUID(), message: trimmed, task_type: threadKey, mode: chatMode },
-        });
+        const body: Record<string, unknown> = { session_id: currentSessionId, run_id: crypto.randomUUID(), message: trimmed, mode: chatMode };
+        // F9: an explicit task page keeps its deterministic task_type; free text (no agent prop) omits it
+        // so the Session Router classifies the message instead.
+        if (agent) body.task_type = threadKey;
+        setActiveStream({ sessionId: currentSessionId, body });
         streamStarted = true;
         return;
       }
+      if (!agent) return; // routerDisabled already blocks this when streaming is unavailable
       const payload = buildRunPayload(agent, { prompt: trimmed, mode: chatMode, analysisType, documentType });
       const envelope = await invokeAgent(agent, payload, sessionId);
       createdSessionId.current = sessionId;
@@ -320,6 +356,17 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
     void askQuestion(inputValue);
   };
 
+  // Latest askQuestion in a ref: an effect dependency on the function itself would redefine and
+  // re-fire on every render (it is not memoized, same reasoning as the token/opener refs above).
+  const askQuestionRef = useRef(askQuestion);
+  askQuestionRef.current = askQuestion;
+  const autoSentRef = useRef(false);
+  useEffect(() => {
+    if (!autoSendPrompt || autoSentRef.current || historyLoading) return;
+    autoSentRef.current = true;
+    void askQuestionRef.current(autoSendPrompt);
+  }, [autoSendPrompt, historyLoading]);
+
   const renderMessage = (message: LiveMessage) => (
     <>
       {message.role === 'user' && (
@@ -339,22 +386,25 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
             {message.uiError && (
               <p className="text-xs text-evidence-moderate mb-1.5">{message.uiError} Showing the plain-text answer instead.</p>
             )}
-            {useResearchStream && message.historyMessageId && (
+            {useChatStream && message.historyMessageId && (
               <ThinkingBlock traceEvents={[]} status="ended" sessionId={sessionId} messageId={message.historyMessageId} />
+            )}
+            {message.routedAgent && (
+              <p className="text-xs font-medium text-cei-blue mb-1.5">Routed to {AGENT_LABELS[message.routedAgent]}</p>
             )}
             {message.stream ? (
               <StreamView
                 state={message.stream.state}
                 connectionError={message.stream.connectionError}
                 sessionId={sessionId}
-                agent={agent}
+                agent={effectiveAgent}
                 answeredInteractions={message.answeredInteractions}
                 onInteractionAction={(seq, envelope) => handleStreamInteractionAction(message.id, seq, envelope)}
               />
             ) : message.surface ? (
               <CEIUISurface
                 surface={message.surface}
-                agent={agent}
+                agent={message.routedAgent ?? effectiveAgent}
                 sessionId={sessionId}
                 fallbackText={message.text}
                 disabled={message.answered}
@@ -476,7 +526,7 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
               <Bot size={12} className="text-white" />
             </div>
             <div className="flex-1 min-w-0 max-w-3xl">
-              <StreamingSurface sessionId={activeStream.sessionId} agent={agent} body={activeStream.body} onFinished={finishStream} />
+              <StreamingSurface sessionId={activeStream.sessionId} agent={effectiveAgent} body={activeStream.body} onFinished={finishStream} />
             </div>
           </div>
         )}
@@ -496,6 +546,11 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
       </div>
 
       <div className="border-t border-border-subtle bg-surface-elevated px-6 py-4 flex-shrink-0">
+        {routerDisabled && (
+          <p role="status" className="max-w-2xl mx-auto mb-2 text-xs text-text-tertiary">
+            Free-text routing is not available in this environment yet.
+          </p>
+        )}
         <form id={formId} onSubmit={handleSend} className="max-w-2xl mx-auto">
           <div className="relative">
             <textarea
@@ -508,14 +563,14 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
                 }
               }}
               rows={1}
-              disabled={isRunning || historyLoading || modeSaving || Boolean(historyError)}
+              disabled={isRunning || historyLoading || modeSaving || Boolean(historyError) || routerDisabled}
               placeholder={placeholder}
               className="w-full resize-y pl-4 pr-12 py-3 rounded-xl border border-border-subtle bg-surface-panel text-sm placeholder:text-text-tertiary focus:border-cei-blue-light focus:ring-2 focus:ring-cei-blue-light/20 transition-all disabled:opacity-60"
               aria-label={placeholder}
             />
             <button
               type="submit"
-              disabled={!inputValue.trim() || isRunning || historyLoading || modeSaving || Boolean(historyError)}
+              disabled={!inputValue.trim() || isRunning || historyLoading || modeSaving || Boolean(historyError) || routerDisabled}
               className="absolute right-2 top-2.5 p-2 rounded-lg bg-cei-blue text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-cei-navy transition-colors"
               aria-label="Send"
             >
