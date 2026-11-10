@@ -16,13 +16,10 @@ from shared.presenters.markdown import document_sections_for_export, render_docu
 from shared.prompts.loader import PromptLoader
 from shared.schemas.citation import SourceType
 from shared.schemas.response_blocks import ResponseDocument
-from shared.config import config
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
-from shared.tools.chart import CHART_FORMATS, ChartSpec, ChartTool, place_charts
-from shared.tools.code_interpreter import CodeInterpreterTool
+from shared.tools.chart import place_charts
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
-from shared.tools.export import ExportTool
 from shared.utils import extract_tokens, get_model, last_human_message
 
 logger = logging.getLogger(__name__)
@@ -937,8 +934,11 @@ def _fetch_chart_data_from_tools(data_needed: str, tool_map: dict) -> dict[str, 
 
 
 def export_documents(state: DraftingState) -> dict[str, Any]:
-    """Render charts and export the draft to all requested formats."""
-    export_formats = state.get("export_formats", ["md", "txt"])
+    """Present the draft; exports require a separate authenticated review action.
+
+    Agent state and payload fields cannot prove a user reviewed the completed
+    response. Do not render files or publish export records from this node.
+    """
     document: ResponseDocument | None = state.get("draft_document")
     draft_text = state.get("draft", "")
     chart_specs_raw: list[dict] = state.get("chart_specs", [])
@@ -986,78 +986,14 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
                 }
             )
 
-    trace_entries: list[TraceEntry] = []
-
-    # One sandbox session serves chart rendering and PDF/DOCX generation
-    wants_charts = bool(chart_specs_raw) and bool(CHART_FORMATS.intersection(export_formats))
-    needs_ci = wants_charts or any(f in {"pdf", "docx"} for f in export_formats)
-    ci_tool = (
-        CodeInterpreterTool(
-            region=config.aws_region,
-            code_interpreter_id=config.code_interpreter_id,
-            packages_s3_bucket=config.packages_s3_bucket,
-            packages_s3_key=config.packages_s3_key,
-        )
-        if needs_ci
-        else None
-    )
-
-    rendered_charts: dict[str, bytes] = {}
-    if wants_charts:
-        chart_tool = ChartTool(ci_tool)
-        for spec_dict in chart_specs_raw:
-            try:
-                spec = ChartSpec(**spec_dict)
-                png_bytes = chart_tool.render(spec)
-                if png_bytes:
-                    rendered_charts[spec.title] = png_bytes
-                    trace_entries.append(
-                        TraceEntry(
-                            stage="CHART_RENDER", detail=f"'{spec.title}' — {len(png_bytes)} bytes"
-                        )
-                    )
-                else:
-                    trace_entries.append(
-                        TraceEntry(stage="CHART_RENDER", detail=f"'{spec.title}' — failed")
-                    )
-            except Exception as exc:
-                logger.error({"event": "chart_render_error", "error_type": type(exc).__name__})
-
-    # Determine output directory — use /tmp on AgentCore runtimes (/var is read-only)
-    results_dir = Path("/tmp/drafting_results")
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    doc_type_str = doc_type.value if hasattr(doc_type, "value") else str(doc_type)
-    chart_sections = {sd["title"]: sd.get("section", "") for sd in chart_specs_raw}
-    export_tool = ExportTool(code_interpreter=ci_tool, doc_type=doc_type_str)
-    artifacts = export_tool.generate(
-        title=title,
-        sections=sections,
-        charts=rendered_charts,
-        chart_sections=chart_sections,
-        formats=export_formats,
-        output_dir=results_dir,
-    )
-
-    for art in artifacts:
-        trace_entries.append(
-            TraceEntry(
-                stage="EXPORT",
-                detail=f"{art.format.upper()} → {art.filename} ({art.byte_size} bytes)",
-            )
-        )
-
-    export_summary = ", ".join(f"{a.format}:{a.filename}" for a in artifacts)
-    logger.info({"event": "export_documents_complete", "exports": export_summary})
-
-    # ADR: agent text never embeds base64 chart images | exports keep PNGs, the chat message stays text-only
+    chart_sections = {sd["title"]: sd.get("section", "") for sd in chart_specs_raw if isinstance(sd.get("title"), str)}
     if document is not None:
         final_text = render_document_markdown(document, chart_mode="table")
     else:
-        final_text = _render_sections_text(title, sections, list(rendered_charts), chart_sections)
+        final_text = _render_sections_text(title, sections, list(chart_sections), chart_sections)
 
     return {
         "messages": [AIMessage(content=final_text)],
-        "exports": [a.model_dump() for a in artifacts],
-        "trace": trace_entries,
+        "exports": [],
+        "trace": [],
     }
