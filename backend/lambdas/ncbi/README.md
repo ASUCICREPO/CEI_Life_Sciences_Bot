@@ -5,8 +5,10 @@ They validate inputs, call fixed NCBI endpoints, cap response bytes, and require
 a rate limiter callback on every outbound operation. No direct mode or identity
 transport has been integrated.
 
-Before deployment, implement a **shared durable** limiter covering all Lambda
-instances and tenants. NCBI's BLAST guidance requires at least 10 seconds between
+Before deployment, provision a DynamoDB table for `limiter.NCBIRateLimiter` and
+ensure every NCBI caller in the deployment uses it. The helper uses transactions
+to enforce shared global and per-RID slots, but has not been tested against a
+deployed table or integrated with existing PubMed/E-utilities calls. NCBI's BLAST guidance requires at least 10 seconds between
 server requests and at least 60 seconds between polls for the same RID; E-utilities
 limits also apply across callers. Configure the service contact email. Do not
 retry a throttled request outside the limiter. Sources: [BLAST guidelines](https://blast.ncbi.nlm.nih.gov/doc/blast-help/developerinfo.html),
