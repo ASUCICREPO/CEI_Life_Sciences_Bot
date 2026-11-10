@@ -60,7 +60,7 @@ class ExportTool:
                     out_path.write_text(data, encoding="utf-8")
                 elif fmt == "csv":
                     data = self._generate_csv(sections)
-                    out_path.write_text(data, encoding="utf-8")
+                    out_path.write_text(data, encoding="utf-8", newline="")
                 elif fmt == "latex":
                     tex_source, image_files = latex_export(
                         title=title,
@@ -149,21 +149,26 @@ class ExportTool:
         return "\n".join(lines)
 
     def _generate_csv(self, sections: list[dict[str, Any]]) -> str:
-        """Extract pipe-delimited or markdown tables from sections and convert to CSV."""
+        """Preserve each section as a CSV row, including prose and markdown tables.
+
+        Prefix formula-like cells so spreadsheet software treats generated text
+        as text rather than executing it as a formula when the file is opened.
+        """
         import csv
         import io
 
-        buf = io.StringIO()
+        def safe_cell(value: Any) -> str:
+            text = str(value or "")
+            if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")):
+                return "'" + text
+            return text
+
+        buf = io.StringIO(newline="")
         writer = csv.writer(buf)
-        writer.writerow(["Section", "Row"])
+        writer.writerow(["Section", "Content"])
 
         for sec in sorted(sections, key=lambda s: s.get("order", 0)):
-            content = sec.get("content", "")
-            heading = sec.get("heading", "")
-            for line in content.splitlines():
-                if "|" in line and not line.strip().startswith("|---"):
-                    cells = [c.strip() for c in line.strip().strip("|").split("|")]
-                    writer.writerow([heading] + cells)
+            writer.writerow([safe_cell(sec.get("heading", "")), safe_cell(sec.get("content", ""))])
 
         return buf.getvalue()
 

@@ -80,3 +80,15 @@ def test_real_text_generators_produce_persistable_bytes(format):
     saved = repo.save.call_args.kwargs
     assert saved["format"] == format
     assert isinstance(saved["data"], bytes) and saved["data"]
+
+
+def test_csv_preserves_prose_and_neutralizes_spreadsheet_formulas():
+    import csv
+    import io
+
+    repo = Mock()
+    repo.save.return_value = {"export_id": "exp-1"}
+    invoke(repo, format="csv", sections=[{"heading": "=unsafe", "content": "First line\n| A | B |"},
+                                         {"heading": "Plain", "content": "  +SUM(1,1)"}])
+    rows = list(csv.reader(io.StringIO(repo.save.call_args.kwargs["data"].decode("utf-8"))))
+    assert rows == [["Section", "Content"], ["'=unsafe", "First line\n| A | B |"], ["Plain", "'  +SUM(1,1)"]]
