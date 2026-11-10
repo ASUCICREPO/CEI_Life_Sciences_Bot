@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createHandler, validateRequest, parseEvents } = require('./index');
+const { createHandler, validateRequest, parseEvents, routerError } = require('./index');
 const session = '6f1c2d3e-0000-4000-8000-000000000001';
 const run = '6f1c2d3e-0000-4000-8000-000000000002';
 function request(extra = {}) { return { requestContext: { requestId: 'request-1', authorizer: { claims: { sub: 'user-1' } } }, headers: { Authorization: 'Bearer token' }, body: JSON.stringify({ session_id: session, run_id: run, message: 'question', task_type: 'live-research', mode: 'science', ...extra }) }; }
@@ -28,6 +28,19 @@ function harness() {
   }
   return { deps, events, calls, streamEvents, invoke };
 }
+test('model rejection is returned before opening SSE without internal detail', async () => {
+  const h = harness();
+  h.deps.start = async () => { throw routerError({ status: 400, code: 'model_unavailable', message: 'private model id' }); };
+  const response = await h.invoke(request());
+  assert.equal(response.metadata.statusCode, 400);
+  assert.equal(response.metadata.headers['Content-Type'], 'application/json');
+  const body = JSON.parse(response.text);
+  assert.equal(body.error.code, 'model_unavailable');
+  assert.equal(body.error.message, "This chat's model is unavailable.");
+  assert.doesNotMatch(response.text, /private model id/);
+  assert.ok(!h.calls.includes('finish'));
+  assert.equal(h.events[0].code, 'model_unavailable');
+});
 test('uses authorizer identity and ignores user-supplied identity', () => {
   const parsed = validateRequest(request({ user_id: 'attacker' }));
   assert.equal(parsed.userId, 'user-1'); assert.equal(parsed.request.user_id, undefined);

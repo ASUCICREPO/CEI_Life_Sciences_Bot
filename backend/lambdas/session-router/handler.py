@@ -95,7 +95,8 @@ def handler(event: Any, _context: Any) -> dict[str, Any]:
             return {"status": 400, "code": "invalid_request", "message": "Invalid request."}
         stage = "session_lookup"
         metadata, leases = tables()
-        if not metadata.get_item(Key={"user_id": user_id, "session_id": session_id}, ConsistentRead=True).get("Item"):
+        session = metadata.get_item(Key={"user_id": user_id, "session_id": session_id}, ConsistentRead=True).get("Item")
+        if not session:
             return {"status": 404, "code": "not_found", "message": "Session not found."}
         stage = "lease_lookup"
         existing = leases.find(user_id, session_id)
@@ -107,6 +108,14 @@ def handler(event: Any, _context: Any) -> dict[str, Any]:
                 or not isinstance(request.get("message"), str) or not request["message"].strip()
                 or len(request["message"]) > 16000):
             return {"status": 400, "code": "invalid_request", "message": "Invalid Research request."}
+        # Fail before the Runner opens SSE. The runtime repeats the check because
+        # settings can change after this owner-scoped, strongly consistent read.
+        default_model = os.environ.get("CEI_DEFAULT_MODEL_ID", "").strip()
+        if not default_model:
+            raise ValueError("model configuration missing")
+        selected = session.get("model_id")
+        if selected is not None and selected != default_model:
+            return {"status": 400, "code": "model_unavailable", "message": "This chat's model is unavailable."}
         scopes = tuple(s for s in os.environ["TOOL_SCOPES"].split(",") if s)
         if not scopes or any(not s.startswith("cei-tools/") for s in scopes):
             raise ValueError("invalid scope configuration")

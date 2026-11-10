@@ -147,7 +147,10 @@ function createHandler(responseFrom, deps) {
       const clientError = err instanceof RequestError && err.statusCode < 500;
       log(clientError ? 'warn' : 'error', clientError ? 'client_rejected' : 'request_failed', err);
       if (reserved && !stream && parsed) {
-        try { await deps.append(partition(parsed), { seq: 0, type: 'error', code: 'service_unavailable', message: 'The research service is unavailable.', retriable: true }); } catch (error) { stage = 'persist_terminal_error'; log('error', 'persistence_failed', error); }
+        const terminalError = clientError
+          ? { seq: 0, type: 'error', code: err.code, message: err.message, retriable: err.retriable }
+          : { seq: 0, type: 'error', code: 'service_unavailable', message: 'The research service is unavailable.', retriable: true };
+        try { await deps.append(partition(parsed), terminalError); } catch (error) { stage = 'persist_terminal_error'; log('error', 'persistence_failed', error); }
       }
       if (!stream) respondError(err);
       else if (!closed) stream.end();
@@ -156,6 +159,14 @@ function createHandler(responseFrom, deps) {
       if (started && parsed) { try { await deps.finish(parsed.bearerToken, parsed.request); } catch (error) { stage = 'router_finish'; log('error', 'cleanup_failed', error); } }
     }
   };
+}
+
+function routerError(value) {
+  const codes = ['invalid_request', 'unauthorized', 'not_found', 'concurrency_limit', 'model_unavailable'];
+  const code = codes.includes(value?.code) ? value.code : 'service_unavailable';
+  const messages = { concurrency_limit: 'Too many active runs.', model_unavailable: "This chat's model is unavailable." };
+  return new RequestError([400, 401, 404, 429].includes(value?.status) ? value.status : 503,
+    code, messages[code] || 'The research service is unavailable.', code === 'service_unavailable');
 }
 
 function productionDependencies() {
@@ -169,8 +180,7 @@ function productionDependencies() {
     if (result.FunctionError) throw new RequestError(503, 'service_unavailable', 'The research service is unavailable.', true);
     let value; try { value = JSON.parse(Buffer.from(result.Payload || []).toString()); } catch { throw new RequestError(503, 'service_unavailable', 'The research service is unavailable.', true); }
     if (value.status !== 200) {
-      const code = ['invalid_request', 'unauthorized', 'not_found', 'concurrency_limit'].includes(value.code) ? value.code : 'service_unavailable';
-      throw new RequestError([400, 401, 404, 429].includes(value.status) ? value.status : 503, code, code === 'concurrency_limit' ? 'Too many active runs.' : 'The research service is unavailable.', code === 'service_unavailable');
+      throw routerError(value);
     }
     return value;
   }
@@ -217,3 +227,4 @@ exports.createHandler = createHandler;
 exports.validateRequest = validateRequest;
 exports.parseEvents = parseEvents;
 exports.partition = partition;
+exports.routerError = routerError;

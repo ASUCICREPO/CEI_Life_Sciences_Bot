@@ -17,6 +17,7 @@ SCOPES = ("cei-tools/src.pubmed", "cei-tools/common")
 def deps(monkeypatch):
     monkeypatch.setenv("TOOL_SCOPES", ",".join(SCOPES))
     monkeypatch.setenv("RESEARCH_RUNTIME_URL", "https://example.invalid")
+    monkeypatch.setenv("CEI_DEFAULT_MODEL_ID", "default-model")
     verifier = Mock()
     verifier.verify.return_value = {"sub": "alice"}
     monkeypatch.setattr(router, "verifier", lambda: verifier)
@@ -48,6 +49,24 @@ def test_foreign_session_never_gets_token(deps):
     _, metadata, leases, issue = deps
     metadata.get_item.return_value = {}
     assert router.handler(event(), None)["status"] == 404
+    leases.acquire.assert_not_called()
+    issue.assert_not_called()
+
+
+def test_unavailable_model_rejected_before_lease_or_token(deps):
+    _, metadata, leases, issue = deps
+    metadata.get_item.return_value = {"Item": {"session_id": SESSION, "model_id": "other-private-model"}}
+    result = router.handler(event(), None)
+    assert result["status"] == 400 and result["code"] == "model_unavailable"
+    assert "other-private-model" not in str(result)
+    leases.acquire.assert_not_called()
+    issue.assert_not_called()
+
+
+def test_missing_model_configuration_fails_closed(deps, monkeypatch):
+    _, _, leases, issue = deps
+    monkeypatch.delenv("CEI_DEFAULT_MODEL_ID")
+    assert router.handler(event(), None)["status"] == 503
     leases.acquire.assert_not_called()
     issue.assert_not_called()
 
