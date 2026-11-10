@@ -27,6 +27,17 @@ class RunLease:
     scopes: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class BackgroundLease:
+    user_id: str
+    job_id: str
+    expires_at: int
+
+
+# AgentCore async sessions run for at most 8 hours (B25); the margin covers watchdog delay.
+BACKGROUND_LEASE_SECONDS = 9 * 3600
+
+
 class ActiveRunRepository:
     """Repository over a DynamoDB table keyed by ``user_id`` and ``record``."""
 
@@ -85,4 +96,49 @@ class ActiveRunRepository:
             value = item.get(f"slot_{slot}")
             if isinstance(value, dict) and value.get("session_id") == session_id and value.get("expires_at", 0) > now:
                 return RunLease(user_id, session_id, value["run_id"], slot, int(value["expires_at"]), tuple(value["scopes"]))
+        return None
+
+    def acquire_background(self, user_id: str, job_id: str, *,
+                           lease_seconds: int = BACKGROUND_LEASE_SECONDS) -> BackgroundLease:
+        """Take the single background slot (B22); re-acquiring for the same job is idempotent."""
+        if not user_id or not job_id or lease_seconds <= 0:
+            raise ValueError("user, job and a positive lease are required")
+        now = int(time.time())
+        expires = now + lease_seconds
+        try:
+            self.table.update_item(
+                Key={"user_id": user_id, "record": "background"},
+                UpdateExpression="SET #holder = :lease",
+                ConditionExpression="attribute_not_exists(#holder) OR #holder.#expires <= :now OR #holder.#job = :job",
+                ExpressionAttributeNames={"#holder": "holder", "#expires": "expires_at", "#job": "job_id"},
+                ExpressionAttributeValues={":lease": {"job_id": job_id, "expires_at": expires}, ":now": now,
+                                           ":job": job_id},
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise ConcurrencyLimitError("The background run slot is in use") from None
+            raise
+        return BackgroundLease(user_id, job_id, expires)
+
+    def release_background(self, user_id: str, job_id: str) -> bool:
+        """Free the slot only if this job still holds it; a newer job's lease is never removed."""
+        try:
+            self.table.update_item(
+                Key={"user_id": user_id, "record": "background"},
+                UpdateExpression="REMOVE #holder",
+                ConditionExpression="#holder.#job = :job",
+                ExpressionAttributeNames={"#holder": "holder", "#job": "job_id"},
+                ExpressionAttributeValues={":job": job_id},
+            )
+            return True
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return False
+            raise
+
+    def background_holder(self, user_id: str) -> str | None:
+        item = self.table.get_item(Key={"user_id": user_id, "record": "background"}, ConsistentRead=True).get("Item", {})
+        holder = item.get("holder")
+        if isinstance(holder, dict) and holder.get("expires_at", 0) > int(time.time()):
+            return holder.get("job_id")
         return None

@@ -45,3 +45,32 @@ def test_find_ignores_expired_lease_and_uses_consistent_read():
     with patch("shared.persistence.active_runs.time.time", return_value=100):
         assert ActiveRunRepository(table).find("user", "session") is None
     assert table.get_item.call_args.kwargs["ConsistentRead"] is True
+
+
+def test_background_slot_is_single_and_idempotent():
+    table = Mock()
+    with patch("shared.persistence.active_runs.time.time", return_value=100):
+        lease = ActiveRunRepository(table).acquire_background("user", "job-1", lease_seconds=50)
+    assert lease.expires_at == 150
+    kwargs = table.update_item.call_args.kwargs
+    assert kwargs["Key"] == {"user_id": "user", "record": "background"}
+    assert "#holder.#job = :job" in kwargs["ConditionExpression"]
+    table.update_item.side_effect = rejected()
+    with pytest.raises(ConcurrencyLimitError):
+        ActiveRunRepository(table).acquire_background("user", "job-2")
+
+
+def test_background_release_cannot_free_another_job():
+    table = Mock()
+    table.update_item.side_effect = rejected()
+    assert ActiveRunRepository(table).release_background("user", "old-job") is False
+    assert table.update_item.call_args.kwargs["ExpressionAttributeValues"] == {":job": "old-job"}
+
+
+def test_background_holder_ignores_expired_lease():
+    table = Mock()
+    table.get_item.return_value = {"Item": {"holder": {"job_id": "job-1", "expires_at": 100}}}
+    with patch("shared.persistence.active_runs.time.time", return_value=100):
+        assert ActiveRunRepository(table).background_holder("user") is None
+    with patch("shared.persistence.active_runs.time.time", return_value=99):
+        assert ActiveRunRepository(table).background_holder("user") == "job-1"
