@@ -6,13 +6,14 @@ import logging
 
 from shared.config import config
 from shared.persistence.conversation import GENERATED_TITLE_CHARS, TitleGenerator
+from shared.runtime.guarded_input import user_turn
 from shared.runtime.model_policy import is_blocked
 
 log = logging.getLogger(__name__)
 
-_PROMPT = (
+_PROMPT_HEADER = (
     "Write a short title (at most 6 words) for this conversation. Reply with the title only: no quotes, "
-    "no trailing punctuation.\n\nUser: {prompt}\n\nAssistant: {answer}"
+    "no trailing punctuation.\n\nUser: "
 )
 _EXCERPT_CHARS = 2000
 
@@ -35,8 +36,11 @@ def bedrock_title_generator(
         from shared.utils import extract_tokens, get_model
 
         llm = get_model(model, max_tokens=32)
-        message = _PROMPT.format(prompt=prompt[:_EXCERPT_CHARS], answer=answer[:_EXCERPT_CHARS])
-        response = await asyncio.wait_for(llm.ainvoke(message), timeout=timeout)
+        # ADR: prompt is user-typed, the assistant's own answer is not | B51a scope
+        message = user_turn(
+            prompt[:_EXCERPT_CHARS], before=_PROMPT_HEADER, after=f"\n\nAssistant: {answer[:_EXCERPT_CHARS]}"
+        )
+        response = await asyncio.wait_for(llm.ainvoke([{"role": "user", "content": message}]), timeout=timeout)
         in_tok, out_tok = extract_tokens(response)
         log.info("chat title generated: tokens in=%s out=%s", in_tok, out_tok)
         content = response.content

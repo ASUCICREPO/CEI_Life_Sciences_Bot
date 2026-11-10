@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 
+from shared.runtime.guarded_input import guard_human_messages
 from shared.tools.data_sources import TOOLS_BY_SOURCE_ID
 from shared.utils import get_model
 from tool_agent.profile import Profile
@@ -47,7 +48,9 @@ def compile_graph(profile: Profile, checkpointer, *, model=None, tool=None):
 
     async def query(state: ToolAgentState) -> dict[str, Any]:
         active_model = model if state["tool_rounds"] < MAX_TOOL_ROUNDS else raw_model
-        return {"messages": [await active_model.ainvoke([system, *state["messages"]])]}
+        # ADR: every HumanMessage here is text the user typed | B51a scope, ToolMessage/AIMessage stay plain
+        messages = [system, *guard_human_messages(state["messages"])]
+        return {"messages": [await active_model.ainvoke(messages)]}
 
     async def execute(state: ToolAgentState) -> dict[str, Any]:
         messages = []
