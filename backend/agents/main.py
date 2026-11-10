@@ -20,6 +20,10 @@ from shared.runtime.history import begin_turn, end_turn
 from shared.runtime.app_factory import create_app
 from shared.streaming.trace_redaction import redacts_trace_input
 from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
+from shared.runtime.session_guard import error_response
+from shared.runtime import history as runtime_history
+from shared.runtime.model_policy import ModelPolicyError
+from shared.runtime.turn_config import resolve_turn_config
 from shared.tools.gateway_context import gateway_request_context
 from shared.streaming.research import ResearchEventStream, text_chunks, with_heartbeats
 from typing import List, Dict, Union, Any
@@ -114,16 +118,18 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
 
     session_id = session.session_id
     user_id = session.user_id
-    mode: str = payload.get("mode", "science")
-
-    if mode not in ("science", "business"):
-        mode = "science"
+    try:
+        turn = await resolve_turn_config(runtime_history.get_recorder(), user_id=user_id, session_id=session_id,
+                                         initial_mode=payload.get("mode"))
+    except ModelPolicyError:
+        return error_response(400, "This chat's settings are unavailable.")
+    mode, model_id = turn.mode, turn.model_id
 
     from research.graph import compile_graph
 
     if payload.get("stream") is True:
         return StreamingResponse(
-            _begin_stream_research(context, session, prompt, mode),
+            _begin_stream_research(context, session, prompt, mode, model_id),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
         )
@@ -136,6 +142,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         prompt=prompt,
         agent_type="research",
         mode=mode,
+        model_id=model_id,
         warm=warm,
         saver=None if persistent else saver,
     )
@@ -147,6 +154,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         # D16: history is dynamic content — it rides in messages, after the cached system prompt/tools
         "messages": [*history, HumanMessage(content=prompt)],
         "mode": mode,
+        "model_id": model_id,
         "user_id": user_id,
         "session_id": session_id,
         "query": prompt,
@@ -207,7 +215,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     return response
 
 
-async def _begin_stream_research(context, session, prompt, mode):
+async def _begin_stream_research(context, session, prompt, mode, model_id):
     """Create async storage clients on the same loop that consumes the response."""
     from research.graph import compile_graph
 
@@ -216,12 +224,12 @@ async def _begin_stream_research(context, session, prompt, mode):
         with gateway_request_context(context, session.user_id, session.session_id):
             saver, warm, persistent = await _research_checkpoint_context(session.user_id, session.session_id)
             history = await begin_turn(user_id=session.user_id, session_id=session.session_id, prompt=prompt,
-                                       agent_type="research", mode=mode, warm=warm,
+                                       agent_type="research", mode=mode, model_id=model_id, warm=warm,
                                        saver=None if persistent else saver)
             if not persistent:
                 _touch_thread(session.session_id)
             graph = compile_graph(checkpointer=saver)
-            initial = {"messages": [*history, HumanMessage(content=prompt)], "mode": mode,
+            initial = {"messages": [*history, HumanMessage(content=prompt)], "mode": mode, "model_id": model_id,
                        "user_id": session.user_id, "session_id": session.session_id, "query": prompt,
                        "triage_plan": None, "retrieved_results": [], "synthesis": "",
                        "response_document": None, "trace": [], "stream": True,

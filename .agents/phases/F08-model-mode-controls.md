@@ -2,6 +2,15 @@
 
 Status: not started | Depends on: F6 | Decisions: B18, B51, B51a, B55, B76, D16 (kept, per B61) | Specs: [`../specs/agents.md`](../specs/agents.md) §6 (Cross-Agent Mechanisms), [`../specs/api.md`](../specs/api.md) (`/models`, `/settings`), [`../specs/security.md`](../specs/security.md) (Model calls)
 
+Implementation note: Research reads the saved chat mode and forwards its resolved
+model through its graph. Until account model discovery and the global blocklist are
+wired, Research accepts only its configured runtime default and rejects a different
+saved selection instead of silently ignoring it. The runtime currently uses the
+default in `AgentConfig`: the deployment configuration is not yet passed as
+`CEI_DEFAULT_MODEL_ID`. This temporary restriction is not the approved final model
+selection behavior. Drafting, title-model policy, Guardrails, discovery, settings,
+and prompt caching remain incomplete; no deployed behavior has been verified.
+
 ## Goal
 
 Let a user pick any (non-blocklisted) Bedrock model per chat, set science/business mode per chat (changeable mid-chat), and make every agent model call go through Bedrock Guardrails with input-only PII/PHI masking and prompt caching on the static system prompt and tool definitions.

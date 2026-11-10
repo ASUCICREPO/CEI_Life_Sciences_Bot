@@ -179,6 +179,14 @@ class ConversationRecorder:
         """
         await asyncio.to_thread(self._assert_owner, user_id, session_id)
 
+    async def session_metadata(self, *, user_id: str, session_id: str) -> ChatMetadataRecord | None:
+        """Read settings for the authorized owner, including newly updated modes."""
+        await asyncio.to_thread(self._assert_owner, user_id, session_id)
+        try:
+            return await asyncio.to_thread(self._metadata.get, user_id, session_id)
+        except Exception as exc:
+            raise OwnershipCheckError("Could not read session settings") from exc
+
     async def rehydrate(self, *, user_id: str, session_id: str, n_turns: int = 20) -> list[BaseMessage]:
         """The last `n_turns` stored messages as LangChain messages (oldest first). Empty on any failure."""
         try:

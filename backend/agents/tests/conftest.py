@@ -12,6 +12,9 @@ class _NullRecorder:
     async def assert_owner(self, **_: object) -> None:
         return None
 
+    async def session_metadata(self, **_: object) -> None:
+        return None
+
     async def finish_turn(self, **_: object) -> None:
         return None
 

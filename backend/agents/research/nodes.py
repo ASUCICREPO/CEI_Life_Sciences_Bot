@@ -105,7 +105,7 @@ def triage(state: ResearchState) -> dict[str, Any]:
     source_list = "\n".join(f"- {k.value}: {v}" for k, v in _SOURCE_DESCRIPTIONS.items())
     user_prompt = f"Available sources:\n{source_list}\n\nUser query: {query}"
 
-    model = get_model().with_structured_output(TriagePlan, include_raw=True)
+    model = get_model(model_id=state.get("model_id")).with_structured_output(TriagePlan, include_raw=True)
     raw_result = model.invoke([
         {"role": "system", "content": _TRIAGE_SYSTEM},
         {"role": "user", "content": user_prompt},
@@ -228,7 +228,7 @@ def synthesize(state: ResearchState) -> dict[str, Any]:
         writer = get_stream_writer()
         on_prose_delta = lambda delta: writer({"type": "prose_delta", "delta": delta})
     parsed, raw, error = invoke_structured(
-        get_model(max_tokens=_SYNTHESIS_MAX_TOKENS),
+        get_model(model_id=state.get("model_id"), max_tokens=_SYNTHESIS_MAX_TOKENS),
         ResponseDocument,
         [
             {"role": "system", "content": structured_system_prompt},
@@ -275,7 +275,7 @@ def synthesize(state: ResearchState) -> dict[str, Any]:
 
     # Existing prose path, unchanged.
     system_prompt = loader.system_prompt(mode) + "\n" + _SYNTHESIS_PRESENTATION_RULE
-    model = get_model()
+    model = get_model(model_id=state.get("model_id"))
     response = model.invoke([
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},

@@ -193,7 +193,8 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
         return existing
 
     def get(self, user_id: str, session_id: str) -> ChatMetadataRecord | None:
-        response = self._table.get_item(Key={"user_id": user_id, "session_id": session_id})
+        # Per-chat mode changes must take effect on the next turn.
+        response = self._table.get_item(Key={"user_id": user_id, "session_id": session_id}, ConsistentRead=True)
         item = response.get("Item")
         return ChatMetadataRecord(**from_dynamo(item)) if item else None
 

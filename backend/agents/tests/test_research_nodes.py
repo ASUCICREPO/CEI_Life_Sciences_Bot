@@ -42,9 +42,11 @@ def test_triage_prompt_ignores_presentation_phrasing(monkeypatch) -> None:
     }
     model = Mock()
     model.with_structured_output.return_value = structured_model
-    monkeypatch.setattr("research.nodes.get_model", lambda: model)
+    factory = Mock(return_value=model)
+    monkeypatch.setattr("research.nodes.get_model", factory)
 
-    triage({"messages": [HumanMessage(content="Use UI protocol for aspirin research")]})
+    triage({"messages": [HumanMessage(content="Use UI protocol for aspirin research")], "model_id": "turn-model"})
+    factory.assert_called_once_with(model_id="turn-model")
 
     system_prompt = structured_model.invoke.call_args.args[0][0]["content"].lower()
     for phrase in ("ui protocol", "show ui elements", "interactive graphics", "charts", "output formatting"):
