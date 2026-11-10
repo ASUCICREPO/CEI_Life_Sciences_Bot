@@ -79,3 +79,29 @@ def test_research_rejects_unverified_model_before_history_write(monkeypatch):
     assert response.status_code == 400
     assert b"unverified-model" not in response.body
     start_turn.assert_not_awaited()
+
+
+def test_streaming_research_uses_saved_settings(monkeypatch):
+    import main
+    from shared.runtime import history
+
+    recorder = history.get_recorder()
+    monkeypatch.setattr(recorder, "session_metadata", AsyncMock(return_value=SimpleNamespace(
+        mode="business", model_id=config.default_model_id)))
+    monkeypatch.setattr(history, "get_recorder", lambda: recorder)
+    seen = []
+
+    async def stream(_context, _session, _prompt, mode, model_id):
+        seen.append((mode, model_id))
+        yield b"data: test\n\n"
+
+    monkeypatch.setattr(main, "_begin_stream_research", stream)
+    context = SimpleNamespace(session_id="0b0c4f7e-3333-4a33-8a33-000000000001",
+                              request_headers={"Authorization": "Bearer test-token:test-user"})
+
+    async def invoke_and_read():
+        response = await main.invoke({"prompt": "question", "mode": "science", "stream": True}, context)
+        return [chunk async for chunk in response.body_iterator]
+
+    assert asyncio.run(invoke_and_read()) == [b"data: test\n\n"]
+    assert seen == [("business", config.default_model_id)]
