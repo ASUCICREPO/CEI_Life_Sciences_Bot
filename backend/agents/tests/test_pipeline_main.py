@@ -8,7 +8,7 @@ import pytest
 
 import pipeline_main
 from pipeline_manager.state import PipelinePlan, PipelineStep
-from shared.tools.hitl.inline_functions import InlineFunctionRegistry, PlanStepInput
+from shared.tools.hitl.inline_functions import PlanStepInput, build_plan_approval_surface
 
 
 class _Context:
@@ -64,7 +64,7 @@ class _FakeGraph:
 
     async def ainvoke(self, arg, config):
         if isinstance(arg, dict):
-            surface = InlineFunctionRegistry()._request_plan_approval(
+            surface = build_plan_approval_surface(
                 self._plan.summary,
                 [PlanStepInput(title=s.step_id, description=s.description) for s in self._plan.steps],
             )

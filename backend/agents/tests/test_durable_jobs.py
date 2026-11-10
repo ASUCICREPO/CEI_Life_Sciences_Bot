@@ -138,14 +138,14 @@ def test_cancelled_run_finishes_as_cancelled(monkeypatch):
 def test_concurrency_limit_keeps_the_plan_pending(monkeypatch):
     import pipeline_main
     from pipeline_manager.state import PipelinePlan, PipelineStep
-    from shared.tools.hitl.inline_functions import InlineFunctionRegistry, PlanStepInput
+    from shared.tools.hitl.inline_functions import PlanStepInput, build_plan_approval_surface
 
     plan = PipelinePlan(summary="Research then draft", estimated_duration_seconds=30,
                         steps=[PipelineStep(step_id="step-1", agent="research", description="Find sources")])
 
     class Graph:
         async def ainvoke(self, arg, config):
-            surface = InlineFunctionRegistry()._request_plan_approval(
+            surface = build_plan_approval_surface(
                 plan.summary, [PlanStepInput(title=s.step_id, description=s.description) for s in plan.steps])
             return {"__interrupt__": [SimpleNamespace(value=surface)], "plan": plan}
 

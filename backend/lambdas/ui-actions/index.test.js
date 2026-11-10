@@ -42,6 +42,18 @@ test('pipeline chats resume the pipeline runtime', async () => {
   assert.equal(h.calls[0].target, 'pipeline');
 });
 
+test('research chats resume the research runtime', async () => {
+  const h = harness({ agent: 'research' });
+  await h.handler(request(), {});
+  assert.equal(h.calls[0].target, 'research');
+});
+
+test('drafting chats resume the drafting runtime', async () => {
+  const h = harness({ agent: 'drafting' });
+  await h.handler(request(), {});
+  assert.equal(h.calls[0].target, 'drafting');
+});
+
 test('another user\'s session is not found and never reaches a runtime', async () => {
   const h = harness();
   await h.handler(request(ACTION, { sub: 'user-2' }), {});
@@ -51,7 +63,7 @@ test('another user\'s session is not found and never reaches a runtime', async (
 });
 
 test('chats whose agent cannot pause are refused', async () => {
-  for (const agent of ['research', '', 'unknown']) {
+  for (const agent of ['tool_agent', '', 'unknown']) {
     const h = harness({ agent });
     await h.handler(request(), {});
     assert.equal(h.out.metadata.statusCode, 400);

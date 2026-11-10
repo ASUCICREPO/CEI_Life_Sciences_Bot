@@ -84,8 +84,8 @@ class SSEStream(BaseModel):
         self._emit(SSEEvent(event=EventType.UI_SURFACE, data=surface))
 
     def emit_hitl_request(self, surface: CEIUISurface) -> None:
-        """Emit an interactive request as a complete CEI UI surface."""
-        self._emit(SSEEvent(event=EventType.UI_SURFACE, data=surface))
+        """Emit an interactive request as a complete CEI UI surface; pauses, not completes, the stream (B56)."""
+        self._emit(SSEEvent(event=EventType.HITL_REQUEST, data=surface))
 
     def emit_tool_use(self, tool_name: str, tool_input: dict[str, Any]) -> None:
         self._emit(

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage
+from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict
 
 from drafting.state import DocumentType, DraftingState, Guideline
@@ -15,6 +16,17 @@ from shared.grounding import build_corpus, ground_document, is_grounded
 from shared.presenters.markdown import document_sections_for_export, render_document_markdown
 from shared.prompts.loader import PromptLoader
 from shared.schemas.citation import SourceType
+from shared.schemas.cei_ui import (
+    ActionDescriptor,
+    CEIUISurface,
+    ColumnComponent,
+    MAX_PLAN_STEPS,
+    Plan,
+    PlanStep,
+    ReviewGateComponent,
+    TextComponent,
+    TextFieldComponent,
+)
 from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
@@ -296,6 +308,9 @@ def research_subagent(state: DraftingState) -> dict[str, Any]:
             "retrieved_results": [],
             "synthesis": "",
             "trace": [],
+            # ADR: skip B72's clarify pause | no interactive user, no checkpointer to pause against
+            "clarified": True,
+            "clarification_answer": None,
         }
         for i, q in enumerate(questions)
     ]
@@ -358,6 +373,143 @@ def _findings_block(findings: list[dict]) -> str:
     for f in findings:
         parts.append(f"### Question: {f['question']}\n{f['answer']}")
     return "\n\n".join(parts)
+
+
+_OUTLINE_SYSTEM = """\
+You are a drafting assistant preparing a {doc_type} document for a life sciences bot. Propose a short \
+outline for the document, before the full draft is written: a Markdown bullet list of section headings, \
+each with a one-sentence description of what that section will cover. Do not write the document itself."""
+
+
+def outline(state: DraftingState) -> dict[str, Any]:
+    """Propose a short section outline before the full draft (B72); re-run after an edit."""
+    query = last_human_message(state)
+    doc_type = state["document_type"]
+    guidelines = state.get("guidelines", [])
+    findings = state.get("research_findings", [])
+    correction = state.get("outline_correction")
+
+    guidelines_text = "\n".join(f"- [{g.source}] {g.requirement}" for g in guidelines)
+    user_prompt = f"Document type: {doc_type.value}\nUser request: {query}"
+    if guidelines_text:
+        user_prompt += f"\n\nGuidelines to follow:\n{guidelines_text}"
+    if findings:
+        user_prompt += "\n\n" + _findings_block(findings)
+    if correction:
+        user_prompt += f"\n\nThe user asked for this change to the outline: {correction}"
+
+    model = get_model()
+    response = model.invoke(
+        [
+            {"role": "system", "content": _OUTLINE_SYSTEM.format(doc_type=doc_type.value)},
+            {"role": "user", "content": user_prompt},
+        ]
+    )
+    outline_text = str(response.content).strip()
+    in_tok, out_tok = extract_tokens(response)
+    revision = state.get("outline_revision", 0) + 1
+
+    logger.info({"event": "outline_complete", "doc_type": doc_type.value, "revision": revision})
+    return {
+        "outline": outline_text,
+        "outline_revision": revision,
+        "outline_correction": None,
+        "trace": [
+            TraceEntry(
+                stage="OUTLINE",
+                detail=f"doc_type={doc_type.value} | revision={revision} | length={len(outline_text)}",
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+            )
+        ],
+    }
+
+
+def _build_outline_approval_surface(outline_text: str, *, revision: int) -> dict[str, Any]:
+    """ReviewGate approve/reject + TextField edit, modelled on analysis's `build_scope_confirmation_surface`."""
+    lines = [line.strip(" -*\t") for line in outline_text.splitlines() if line.strip()]
+    steps = [
+        PlanStep(step_id=f"outline-{index}", title=line)
+        for index, line in enumerate((lines or ["Outline"])[:MAX_PLAN_STEPS], start=1)
+    ]
+    surface = CEIUISurface(
+        surface_id="drafting-outline",
+        revision=revision,
+        root_id="outline-root",
+        components=[
+            ColumnComponent(id="outline-root", children=["outline-intro", "outline-review", "outline-edit"]),
+            TextComponent(
+                id="outline-intro",
+                content="Review the proposed outline before the full draft is written, or edit it below.",
+            ),
+            ReviewGateComponent(
+                id="outline-review",
+                interaction_id="drafting-outline-review",
+                plan=Plan(summary="Proposed document outline", steps=steps),
+                actions=[
+                    ActionDescriptor(action_id="approve-outline", label="Approve", intent="approve"),
+                    ActionDescriptor(action_id="reject-outline", label="Reject", intent="reject"),
+                ],
+            ),
+            TextFieldComponent(
+                id="outline-edit",
+                interaction_id="drafting-outline-edit",
+                label="Edit the outline (free text)",
+                placeholder="For example: add a methods section, drop the appendix",
+                multiline=True,
+                action=ActionDescriptor(action_id="edit-outline", label="Submit edit"),
+            ),
+        ],
+    )
+    return surface.model_dump(mode="json")
+
+
+def approve_outline(state: DraftingState) -> dict[str, Any]:
+    """Pause for outline approval before the full draft is generated (B72)."""
+    outline_text = state.get("outline", "")
+    revision = state.get("outline_revision", 1)
+    surface = _build_outline_approval_surface(outline_text, revision=revision)
+    decision = interrupt(surface)
+    action_id = decision.get("action_id") if isinstance(decision, dict) else None
+
+    if action_id == "approve-outline":
+        logger.info({"event": "outline_approved"})
+        return {"outline_approved": True, "trace": [TraceEntry(stage="OUTLINE_APPROVE", detail="approved")]}
+
+    if action_id == "reject-outline":
+        logger.info({"event": "outline_rejected"})
+        return {
+            "outline_approved": False,
+            "outline_correction": None,
+            "messages": [AIMessage(content="Drafting cancelled at the user's request.")],
+            "trace": [TraceEntry(stage="OUTLINE_APPROVE", detail="rejected")],
+        }
+
+    if action_id == "edit-outline":
+        value = decision.get("value") if isinstance(decision, dict) else None
+        correction = value if isinstance(value, str) else str(value)
+        logger.info({"event": "outline_edited"})
+        return {
+            "outline_approved": False,
+            "outline_correction": correction,
+            "trace": [TraceEntry(stage="OUTLINE_APPROVE", detail=f"edited: {correction}")],
+        }
+
+    logger.warning({"event": "outline_approve_unknown_action", "action_id": action_id})
+    return {
+        "outline_approved": False,
+        "outline_correction": None,
+        "messages": [AIMessage(content="Drafting cancelled — the outline approval was not understood.")],
+        "trace": [TraceEntry(stage="OUTLINE_APPROVE", detail=f"unknown action: {action_id}")],
+    }
+
+
+def route_after_outline_approval(state: DraftingState) -> str:
+    if state.get("outline_approved"):
+        return "draft"
+    if state.get("outline_correction"):
+        return "outline"
+    return "end"
 
 
 def _drafting_corpus(
@@ -439,6 +591,7 @@ def draft(state: DraftingState) -> dict[str, Any]:
     doc_type = state["document_type"]
     guidelines = state.get("guidelines", [])
     findings = state.get("research_findings", [])
+    outline_text = state.get("outline", "")
 
     loader = PromptLoader(agent_templates_dir=_DRAFTING_TEMPLATES_DIR)
 
@@ -457,6 +610,8 @@ def draft(state: DraftingState) -> dict[str, Any]:
             f"Generate a complete {doc_type.value} document draft.\n\n"
             f"{_VISUALS_RULE}"
         )
+    if outline_text:
+        user_prompt += f"\n\nFollow this approved outline:\n{outline_text}"
     if findings:
         user_prompt += "\n\n" + _findings_block(findings)
 

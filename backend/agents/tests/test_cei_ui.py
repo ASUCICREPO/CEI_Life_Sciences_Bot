@@ -98,8 +98,11 @@ from shared.schemas.response_blocks import (
 )
 from shared.tools.hitl.inline_functions import (
     AlternativeInput,
-    InlineFunctionRegistry,
     PlanStepInput,
+    build_ask_user_question_surface,
+    build_get_user_input_surface,
+    build_plan_approval_surface,
+    build_present_alternatives_surface,
 )
 from shared.transport.sse import (
     EventType,
@@ -484,20 +487,19 @@ def test_drafting_surface_filters_private_export_and_chart_fields() -> None:
 
 
 def test_hitl_tools_return_complete_interactive_surfaces() -> None:
-    registry = InlineFunctionRegistry()
     payloads = [
-        registry._ask_user_question("Choose", ["One", "Two"]),
-        registry._present_alternatives(
+        build_ask_user_question_surface("Choose", ["One", "Two"]),
+        build_present_alternatives_surface(
             "Options",
             [
                 AlternativeInput(title="One", description="First"),
                 AlternativeInput(title="Two", description="Second"),
             ],
         ),
-        registry._request_plan_approval(
+        build_plan_approval_surface(
             "Plan", [PlanStepInput(title="Search"), PlanStepInput(title="Draft")]
         ),
-        registry._get_user_input("Describe the target"),
+        build_get_user_input_surface("Describe the target"),
     ]
 
     surfaces = [CEIUISurface.model_validate(payload) for payload in payloads]
