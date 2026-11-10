@@ -42,3 +42,10 @@ without its optional reference-data dependencies, then run
 `pytest backend/lambdas/lsops/tests` with `backend/lambdas/lsops` on
 `PYTHONPATH`. Container build, cold start, dependency behavior, and Gateway
 integration require validation in the CodeBuild/development environment.
+
+The target construct builds `Dockerfile` as a CDK image asset. The current
+`cei-life-sciences-deploy` CodeBuild project uses a non-VPC standard image with
+privileged mode disabled; Docker support depends on its environment and must be
+verified during the CodeBuild image-asset build. Verify ECR asset permissions
+and the deployed image before relying on the target. The runtime and cold-start
+timing have not been validated by the unit tests.

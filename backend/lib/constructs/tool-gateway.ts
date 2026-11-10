@@ -15,6 +15,10 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { ToolPolicyMode } from '../config/deploy-config';
 import { DataSourceLayer } from './data-source-layer';
+import { cedarPermit } from './cedar-policy';
+import { LifeSciencesOperations } from './life-sciences-operations';
+
+export { cedarPermit } from './cedar-policy';
 
 const LAMBDAS_DIR = path.join(__dirname, '..', '..', 'lambdas');
 
@@ -44,16 +48,6 @@ export function assertNoScopeCollisions(scopeNames: string[]): void {
   if (clashes.length > 0) {
     throw new Error(`Tool scope names must not contain one another (B69): ${clashes.join(', ')}`);
   }
-}
-
-/**
- * One Cedar permit per Gateway target (B69). With a scope, the token's space-separated `scope` claim must
- * contain it; without one (a B70 `common` target) every authenticated caller is permitted.
- * Shape proven by S2 (.agents/phases/findings/S2.md).
- */
-export function cedarPermit(targetName: string, gatewayArn: string, scope?: string): string {
-  const condition = scope ? ` when { principal.hasTag("scope") && principal.getTag("scope") like "*${scope}*" }` : '';
-  return `permit(principal is AgentCore::OAuthUser, action in AgentCore::Action::"${targetName}", resource == AgentCore::Gateway::"${gatewayArn}")${condition};`;
 }
 
 export interface ToolGatewayProps {
@@ -235,6 +229,9 @@ export class ToolGateway extends Construct {
     });
     this.gateway.node.addDependency(gatewayRole);
 
+    // B42/B70: one deterministic target, gated by the shared common scope.
+    new LifeSciencesOperations(this, 'LifeSciencesOperations', { gateway: this.gateway, gatewayRole, policyEngine });
+
     for (const entry of schemas) {
       const fn = this.sourceFunctions[entry.sourceId];
       const target = new agentcore.CfnGatewayTarget(this, `Target-${entry.sourceId}`, {
@@ -267,8 +264,7 @@ export class ToolGateway extends Construct {
       // CreatePolicy validates the action against the target's tool schema
       policy.node.addDependency(target);
     }
-    // B70/B86: `common` targets (LS Ops, Web Search, KB retrieval) get an unconditional cedarPermit(target, arn)
-    // when F10/F12 add them; F4 has none, and CreatePolicy rejects a permit for a target that does not exist.
+    // Web Search is integrated separately. Attachment retrieval is deferred for this iteration.
 
     // Policy decisions (LOG_ONLY "would deny") are only visible in the Gateway's vended APPLICATION_LOGS
     const gatewayLogGroup = new logs.LogGroup(this, 'GatewayLogs', {

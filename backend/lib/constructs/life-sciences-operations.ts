@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import { aws_bedrockagentcore as agentcore, aws_iam as iam, aws_lambda as lambda, aws_logs as logs } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import { cedarPermit } from './tool-gateway';
+import { cedarPermit } from './cedar-policy';
 
 const DIRECTORY = path.join(__dirname, '..', '..', 'lambdas', 'lsops');
 
@@ -40,7 +40,9 @@ export class LifeSciencesOperations extends Construct {
       timeout: cdk.Duration.seconds(30),
       memorySize: 1024,
     });
-    const invokeGrant = this.function.grantInvoke(props.gatewayRole);
+    const invokeGrant = iam.Grant.addToPrincipal({
+      grantee: props.gatewayRole, actions: ['lambda:InvokeFunction'], resourceArns: [this.function.functionArn],
+    });
     this.target = new agentcore.CfnGatewayTarget(this, 'Target', {
       name: 'lsops',
       description: 'Deterministic life-sciences sequence, chemistry and lab operations',

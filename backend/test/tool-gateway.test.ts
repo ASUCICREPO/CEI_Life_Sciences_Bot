@@ -122,7 +122,7 @@ describe('ToolGateway (F4)', () => {
     });
 
     it('has one Lambda target per source, each serving exactly the generated `search` tool', () => {
-      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget');
+      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').filter((target) => target.Name !== 'lsops');
       expect(targets.map((t) => t.Name).sort()).toEqual([...SOURCE_IDS].sort());
       const schemas = new Map(loadToolSchemas().map((s) => [s.sourceId, s.tool]));
       for (const target of targets) {
@@ -134,8 +134,8 @@ describe('ToolGateway (F4)', () => {
       }
     });
 
-    it('writes one scoped Cedar permit per source target and no others (B69)', () => {
-      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy');
+    it('writes one scoped Cedar permit per source target (B69)', () => {
+      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').filter((policy) => policy.Name !== 'permit_lsops');
       expect(policies.map((p) => p.Name).sort()).toEqual(SOURCE_IDS.map((id) => `permit_${id}`).sort());
       for (const policy of policies) {
         const id = policy.Name.replace('permit_', '');
@@ -146,11 +146,15 @@ describe('ToolGateway (F4)', () => {
       }
     });
 
-    it('builds an unconditional permit for a shared (common) target (B70 mechanism)', () => {
+    it('requires the common scope for LS Ops', () => {
       expect(cedarPermit('lsops', 'arn:gw')).toBe(
         'permit(principal is AgentCore::OAuthUser, action in AgentCore::Action::"lsops", resource == AgentCore::Gateway::"arn:gw");',
       );
       expect(cedarPermit('pubmed', 'arn:gw', 'cei-tools/src.pubmed')).toContain('principal.hasTag("scope") && principal.getTag("scope") like "*cei-tools/src.pubmed*"');
+      const policy = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').find((p) => p.Name === 'permit_lsops');
+      expect(JSON.stringify(policy.Definition.Cedar.Statement)).toContain('cei-tools/common');
+      const target = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').find((t) => t.Name === 'lsops');
+      expect(target.TargetConfiguration.Mcp.Lambda.ToolSchema.InlinePayload).toHaveLength(20);
     });
 
     it('lets the Gateway role invoke exactly the configured source Lambdas', () => {
@@ -159,10 +163,11 @@ describe('ToolGateway (F4)', () => {
       const statements = resourcesOf(template, 'AWS::IAM::Policy')
         .filter((p) => p.Roles.some((r: any) => r.Ref === gatewayRole))
         .flatMap((p) => p.PolicyDocument.Statement);
-      const invoke = statements.find((s: any) => s.Action === 'lambda:InvokeFunction');
+      const invokes = statements.filter((s: any) => s.Action === 'lambda:InvokeFunction');
       const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget');
       const expected = targets.map((target) => JSON.stringify(target.TargetConfiguration.Mcp.Lambda.LambdaArn)).sort();
-      expect(invoke.Resource.map((arn: unknown) => JSON.stringify(arn)).sort()).toEqual(expected);
+      const resources = invokes.flatMap((invoke: any) => Array.isArray(invoke.Resource) ? invoke.Resource : [invoke.Resource]);
+      expect(resources.map((arn: unknown) => JSON.stringify(arn)).sort()).toEqual(expected);
     });
   });
 
