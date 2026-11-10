@@ -7,14 +7,26 @@ configure_telemetry()
 import logging
 import os
 from collections import OrderedDict
+from typing import Any, Dict
 
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
 from drafting.state import DocumentType
 from shared.presenters import build_drafting_surface
 from shared.response_text import final_ai_text
-from shared.runtime.history import begin_turn, end_turn
+from shared.runtime import (
+    PendingInterrupts,
+    RuntimeOp,
+    action_response,
+    awaiting_envelope,
+    extract_interrupt_surface,
+    parse_op,
+    resume_value,
+)
+from shared.runtime.hitl_turn import resolve_resume_action
+from shared.runtime.history import begin_turn, end_turn, record_resume
 from shared.runtime.app_factory import create_app
 from shared.streaming.trace_redaction import redacts_trace_input
 from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
@@ -26,6 +38,7 @@ logging.basicConfig(level=logging.INFO)
 _CHECKPOINT_LIMIT = 128
 _checkpointer = InMemorySaver()
 _thread_ids: OrderedDict[str, bool] = OrderedDict()
+_pending = PendingInterrupts()
 
 
 def _runtime_port() -> int:
@@ -74,9 +87,82 @@ def _format_trace(trace_entries: list) -> str:
     return "\n".join(lines)
 
 
+def _drafting_envelope(session_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the completed-turn envelope for a resumed drafting run (mirrors the `op=run` shape)."""
+    text = final_ai_text(result.get("messages", []))
+    if text is None:
+        text = "No response generated."
+        return {
+            "result": text,
+            "text": text,
+            "ui": build_drafting_surface(
+                text, surface_id="drafting-final", exports=[], chart_specs=[],
+                chart_instructions=None, document=result.get("draft_document"),
+            ).model_dump(mode="json"),
+            "exports": [],
+        }
+    trace_text = _format_trace(result.get("trace", []))
+    exports = [
+        {key: export_item[key] for key in ("format", "filename", "byte_size") if key in export_item}
+        for export_item in result.get("exports", [])
+    ]
+    log.info(f"Drafting agent complete (resume): session={session_id}, length={len(text)}, exports={len(exports)}")
+    return {
+        "result": text + trace_text,
+        "text": text,
+        "ui": build_drafting_surface(
+            text, surface_id="drafting-final", exports=exports,
+            chart_specs=result.get("chart_specs", []), chart_instructions=result.get("chart_instructions"),
+            document=result.get("draft_document"),
+        ).model_dump(mode="json"),
+        "exports": exports,
+    }
+
+
+async def _resume(payload, session_id: str, user_id: str) -> Dict[str, Any]:
+    """`op: resume` (F13): pause/resume for the outline-approval HITL point, same pattern as analysis_main."""
+    from drafting.graph import compile_graph
+
+    graph = compile_graph(checkpointer=_checkpointer)
+    action, terminal = await resolve_resume_action(
+        payload, session_id=session_id, user_id=user_id, checkpointer=_checkpointer, graph=graph,
+        pending=_pending, is_cold=session_id not in _thread_ids,
+    )
+    if terminal is not None:
+        return terminal
+
+    await record_resume(user_id=user_id, session_id=session_id, action=action)
+    _touch_thread(session_id)
+    result = await graph.ainvoke(Command(resume=resume_value(action)), config={"configurable": {"thread_id": session_id}})
+
+    surface = extract_interrupt_surface(result)
+    response = action_response(action, "completed")
+    if surface is not None:
+        _pending.register(session_id, surface)
+        envelope = awaiting_envelope(surface, "Waiting for outline approval.")
+    else:
+        _pending.clear(session_id)
+        envelope = {**_drafting_envelope(session_id, result), "status": "completed"}
+    envelope["action_response"] = response
+    await end_turn(
+        saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope, trace=result.get("trace"),
+    )
+    return envelope
+
+
 @app.entrypoint
 @guarded_entrypoint  # UUID session id + verified caller + ownership, before any session work
 async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
+    session_id = session.session_id
+    user_id = session.user_id
+    op = parse_op(payload)
+
+    if op is RuntimeOp.JOB_STATUS:
+        raise ValueError("job_status is not supported by the Drafting runtime")
+
+    if op is RuntimeOp.RESUME:
+        return await _resume(payload, session_id, user_id)
+
     prompt = payload.get("prompt", "")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
@@ -89,8 +175,6 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
             f"document_type must be one of: {', '.join(dt.value for dt in DocumentType)}"
         )
 
-    session_id = session.session_id
-    user_id = session.user_id
     mode: str = payload.get("mode", "science")
 
     if mode not in ("science", "business"):
@@ -128,6 +212,10 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         "guidelines": [],
         "research_questions": [],
         "research_findings": [],
+        "outline": "",
+        "outline_revision": 0,
+        "outline_approved": False,
+        "outline_correction": None,
         "draft": "",
         "draft_document": None,
         "revision_feedback": None,
@@ -145,6 +233,13 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         initial_state,
         config={"configurable": {"thread_id": session_id}},
     )
+
+    surface = extract_interrupt_surface(result)
+    if surface is not None:
+        _pending.register(session_id, surface)
+        envelope = awaiting_envelope(surface, "Waiting for outline approval.")
+        await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope, prompt=prompt)
+        return envelope
 
     text = final_ai_text(result.get("messages", []))
     if text is None:

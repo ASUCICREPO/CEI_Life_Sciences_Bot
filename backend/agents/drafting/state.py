@@ -29,6 +29,11 @@ class DraftingState(BaseAgentState):
     guidelines: list[Guideline]
     research_questions: list[str]
     research_findings: list[dict]  # [{"question": str, "answer": str}] from the Research Agent subagent
+    # B72 outline approval, modelled on analysis's scope/confirm_scope (HITL points, F13):
+    outline: str
+    outline_revision: int
+    outline_approved: bool
+    outline_correction: str | None
     draft: str
     draft_document: ResponseDocument | None
     revision_feedback: str | None
