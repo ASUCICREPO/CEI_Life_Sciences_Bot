@@ -19,6 +19,8 @@ import {
 import type { CEIUISurface as CEIUISurfaceType } from '../lib/cei-ui/schema';
 import { SessionsClientError, type HistoryMessage } from '../lib/sessionsClient';
 import { useSessionsClient } from '../lib/useSessions';
+import { useModelsClient } from '../lib/useModels';
+import type { ModelOption } from '../lib/modelsClient';
 import { useAuth } from '../lib/auth/AuthProvider';
 import { StreamingSurface, StreamView } from './streaming/StreamingSurface';
 import { ThinkingBlock } from './streaming/ThinkingBlock';
@@ -78,6 +80,7 @@ function toLiveMessages(items: HistoryMessage[]): LiveMessage[] {
 export function LiveAgentChat({ agent, mode, analysisType, documentType, threadKey, resumeSessionId, title, description, examples, placeholder }: LiveAgentChatProps) {
   const navigate = useNavigate();
   const sessionsClient = useSessionsClient();
+  const modelsClient = useModelsClient();
   const { config } = useAuth();
   const useResearchStream = agent === 'research' && config?.researchStreamingEnabled === true;
   // One session per mounted chat: a resumed chat continues its own session, anything else starts a new one.
@@ -97,7 +100,23 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
   const [chatMode, setChatMode] = useState<AgentMode>(mode);
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
+  // '' means "use the account/session default" (no override picked yet).
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [chatModel, setChatModel] = useState('');
+  const [modelSaving, setModelSaving] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
   const formId = useId();
+
+  // Loaded once per client identity; a failed load just hides the picker (every agent still works).
+  useEffect(() => {
+    let cancelled = false;
+    modelsClient.listModels().then((list) => {
+      if (!cancelled) setModels(list);
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [modelsClient]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Set right before prepending older messages so the layout effect can keep the viewport anchored.
@@ -129,6 +148,7 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
         setMessages(loaded);
         setOlderCursor(page.next_cursor);
         if (page.session.mode === 'science' || page.session.mode === 'business') setChatMode(page.session.mode);
+        if (page.session.model_id) setChatModel(page.session.model_id);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -204,7 +224,7 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
   }
 
   async function changeChatMode(next: AgentMode) {
-    if (next === chatMode || modeSaving || isRunning || historyLoading || historyError) return;
+    if (next === chatMode || modeSaving || modelSaving || isRunning || historyLoading || historyError) return;
     setModeError(null);
     const existingSession = createdSessionId.current;
     if (!existingSession) {
@@ -222,9 +242,29 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
     }
   }
 
+  async function changeChatModel(next: string) {
+    if (next === chatModel || modelSaving || modeSaving || isRunning || historyLoading || historyError) return;
+    setModelError(null);
+    const existingSession = createdSessionId.current;
+    if (!existingSession || !next) {
+      // No session to PATCH yet, or "use the default" — nothing to persist against the API.
+      setChatModel(next);
+      return;
+    }
+    setModelSaving(true);
+    try {
+      await sessionsClient.updateSession(existingSession, { model_id: next });
+      setChatModel(next);
+    } catch {
+      setModelError('Could not update this chat’s model. Please try again.');
+    } finally {
+      setModelSaving(false);
+    }
+  }
+
   async function askQuestion(prompt: string) {
     const trimmed = prompt.trim();
-    if (!trimmed || isRunning || modeSaving || historyError) return;
+    if (!trimmed || isRunning || modeSaving || modelSaving || historyError) return;
     setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', text: trimmed }]);
     setInputValue('');
     setIsRunning(true);
@@ -233,7 +273,11 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
       if (useResearchStream) {
         let currentSessionId = createdSessionId.current;
         if (!currentSessionId) {
-          const created = await sessionsClient.createSession({ title: trimmed.slice(0, 100), mode: chatMode });
+          const created = await sessionsClient.createSession({
+            title: trimmed.slice(0, 100),
+            mode: chatMode,
+            ...(chatModel ? { model_id: chatModel } : {}),
+          });
           currentSessionId = created.session_id;
           createdSessionId.current = currentSessionId;
           setSessionId(currentSessionId);
@@ -348,13 +392,24 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
           <div className="flex items-center gap-3">
             <label className="flex items-center gap-1.5 text-xs text-text-secondary">
               <span>Chat mode</span>
-              <select aria-label="Chat mode" value={chatMode} disabled={isRunning || modeSaving || historyLoading || Boolean(historyError)}
+              <select aria-label="Chat mode" value={chatMode} disabled={isRunning || modeSaving || modelSaving || historyLoading || Boolean(historyError)}
                 onChange={(event) => void changeChatMode(event.target.value as AgentMode)}
                 className="rounded border border-border-subtle bg-surface-elevated px-2 py-1 text-text-primary disabled:opacity-50">
                 <option value="science">Science</option>
                 <option value="business">Business</option>
               </select>
             </label>
+            {models.length > 0 && (
+              <label className="flex items-center gap-1.5 text-xs text-text-secondary">
+                <span>Model</span>
+                <select aria-label="Chat model" value={chatModel} disabled={isRunning || modelSaving || modeSaving || historyLoading || Boolean(historyError)}
+                  onChange={(event) => void changeChatModel(event.target.value)}
+                  className="rounded border border-border-subtle bg-surface-elevated px-2 py-1 text-text-primary disabled:opacity-50">
+                  <option value="">Default</option>
+                  {models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label}</option>)}
+                </select>
+              </label>
+            )}
             {agent === 'drafting' && (resumeSessionId || messages.length > 0) && (
             <button type="button" aria-expanded={showReports} onClick={() => setShowReports((open) => !open)}
               className="text-xs font-medium text-cei-blue hover:underline">
@@ -365,6 +420,7 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
         </div>
         <p className="text-xs text-text-secondary mt-0.5">{description}</p>
         {modeError && <p role="alert" className="mt-1 text-xs text-evidence-weak">{modeError}</p>}
+        {modelError && <p role="alert" className="mt-1 text-xs text-evidence-weak">{modelError}</p>}
       </div>
 
       {showReports && <ReportExports key={sessionId} sessionId={sessionId} />}
@@ -464,14 +520,14 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
                 }
               }}
               rows={1}
-              disabled={isRunning || historyLoading || modeSaving || Boolean(historyError)}
+              disabled={isRunning || historyLoading || modeSaving || modelSaving || Boolean(historyError)}
               placeholder={placeholder}
               className="w-full resize-y pl-4 pr-12 py-3 rounded-xl border border-border-subtle bg-surface-panel text-sm placeholder:text-text-tertiary focus:border-cei-blue-light focus:ring-2 focus:ring-cei-blue-light/20 transition-all disabled:opacity-60"
               aria-label={placeholder}
             />
             <button
               type="submit"
-              disabled={!inputValue.trim() || isRunning || historyLoading || modeSaving || Boolean(historyError)}
+              disabled={!inputValue.trim() || isRunning || historyLoading || modeSaving || modelSaving || Boolean(historyError)}
               className="absolute right-2 top-2.5 p-2 rounded-lg bg-cei-blue text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-cei-navy transition-colors"
               aria-label="Send"
             >

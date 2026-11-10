@@ -9,10 +9,14 @@ const mocks = vi.hoisted(() => ({
   invokeAgent: vi.fn(),
   streamProps: vi.fn<(props: unknown) => void>(),
   streamViewProps: vi.fn<(props: unknown) => void>(),
+  // A stable object: a fresh one per render would change useModelsClient's identity on every
+  // setState and re-trigger LiveAgentChat's model-list load effect (its dependency array).
+  modelsClient: { listModels: vi.fn() },
 }));
 
 vi.mock('../lib/auth/AuthProvider', () => ({ useAuth: () => ({ config: { researchStreamingEnabled: mocks.streaming } }) }));
 vi.mock('../lib/useSessions', () => ({ useSessionsClient: () => ({ createSession: mocks.createSession }) }));
+vi.mock('../lib/useModels', () => ({ useModelsClient: () => mocks.modelsClient }));
 vi.mock('../lib/agentClient', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/agentClient')>()), invokeAgent: mocks.invokeAgent,
 }));
@@ -44,6 +48,7 @@ beforeEach(() => {
   mocks.invokeAgent.mockReset();
   mocks.streamProps.mockReset();
   mocks.streamViewProps.mockReset();
+  mocks.modelsClient.listModels.mockReset().mockResolvedValue([]);
 });
 afterEach(cleanup);
 
@@ -73,6 +78,27 @@ describe('Research chat transport', () => {
     await waitFor(() => expect(mocks.invokeAgent).toHaveBeenCalledTimes(1));
     expect(mocks.createSession).not.toHaveBeenCalled();
     expect(mocks.streamProps).not.toHaveBeenCalled();
+  });
+});
+
+describe('model picker', () => {
+  it('hides the picker until the model list loads', async () => {
+    mocks.modelsClient.listModels.mockResolvedValue([{ model_id: 'us.anthropic.claude-sonnet-4-5', label: 'Claude Sonnet' }]);
+    render(<MemoryRouter><LiveAgentChat agent="research" mode="science" threadKey="live-research"
+      title="Research" description="Research" examples={[]} placeholder="Ask" /></MemoryRouter>);
+    expect(screen.queryByLabelText('Chat model')).toBeNull();
+    expect(await screen.findByLabelText('Chat model')).toBeTruthy();
+  });
+
+  it('includes the picked model in a new session\'s createSession call', async () => {
+    mocks.modelsClient.listModels.mockResolvedValue([{ model_id: 'us.anthropic.claude-sonnet-4-5', label: 'Claude Sonnet' }]);
+    mocks.createSession.mockResolvedValue({ session_id: 'server-session' });
+    render(<MemoryRouter><LiveAgentChat agent="research" mode="science" threadKey="live-research"
+      title="Research" description="Research" examples={[]} placeholder="Ask" /></MemoryRouter>);
+    fireEvent.change(await screen.findByLabelText('Chat model'), { target: { value: 'us.anthropic.claude-sonnet-4-5' } });
+    fireEvent.change(screen.getByLabelText('Ask'), { target: { value: 'question' } });
+    fireEvent.submit(screen.getByLabelText('Ask').closest('form')!);
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledWith({ title: 'question', mode: 'science', model_id: 'us.anthropic.claude-sonnet-4-5' }));
   });
 });
 
