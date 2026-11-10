@@ -1,22 +1,44 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { TaskProgress, ConfidenceBadge, CitationChip, ReviewGate, ExportCard } from '../design-system';
 import type { TaskStep } from '../design-system';
 import { CEIUISurface } from '../components/cei-ui/cei-ui-surface';
 import { SafeMarkdown } from '../components/cei-ui/markdown';
-import { AgentClientError, getJob, getJobSession, type JobEnvelope } from '../lib/agentClient';
+import { AgentClientError, getJob, getJobSession, setJobSession, type JobEnvelope } from '../lib/agentClient';
+import { useAuth } from '../lib/auth/AuthProvider';
+import { createJobsClient, type JobsClient, type JobSummary } from '../lib/jobsClient';
 import { useApp } from '../context/AppContext';
 import { CheckCircle2, Play, Pause, AlertTriangle, Loader2 } from 'lucide-react';
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'partial', 'failed', 'cancelled']);
 const POLL_INTERVAL_MS = 2_000;
 
+/** The jobs API client, or null in the local demo (B94), which has no deployed API. */
+function useJobsClient(): JobsClient | null {
+  const { getAccessToken, config } = useAuth();
+  const baseUrl = config?.apiBaseUrl;
+  return useMemo(() => (baseUrl ? createJobsClient(getAccessToken, baseUrl) : null), [getAccessToken, baseUrl]);
+}
+
 // ADR: live job polling only when ?job= is present | the sample pipeline view
 // below is unchanged for every other visit to /pipeline.
 function LivePipelineView({ jobId }: { jobId: string }) {
   const sessionId = useMemo(() => getJobSession(jobId), [jobId]);
+  const jobsClient = useJobsClient();
   const [job, setJob] = useState<JobEnvelope | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+
+  async function cancelJob() {
+    if (!jobsClient || cancelling) return;
+    setCancelling(true);
+    try {
+      await jobsClient.cancel(jobId);
+    } catch (cancelError) {
+      setError(cancelError instanceof Error ? cancelError.message : 'Could not cancel the job.');
+      setCancelling(false);
+    }
+  }
 
   useEffect(() => {
     if (!sessionId) {
@@ -65,6 +87,16 @@ function LivePipelineView({ jobId }: { jobId: string }) {
           Job <span className="font-mono">{jobId}</span>
           {job && <span> — {job.status.replace('_', ' ')}{typeof job.progress_pct === 'number' ? ` (${Math.round(job.progress_pct)}%)` : ''}</span>}
         </p>
+        {jobsClient && job && !TERMINAL_JOB_STATUSES.has(job.status) && (
+          <button
+            type="button"
+            onClick={() => void cancelJob()}
+            disabled={cancelling}
+            className="mt-3 px-3 py-1.5 text-sm rounded-md border border-border-default text-text-secondary hover:text-text-primary disabled:opacity-50"
+          >
+            {cancelling ? 'Cancelling...' : 'Cancel job'}
+          </button>
+        )}
       </div>
 
       {error && (
@@ -97,10 +129,85 @@ function LivePipelineView({ jobId }: { jobId: string }) {
   );
 }
 
+function JobsListView({ client }: { client: JobsClient }) {
+  const navigate = useNavigate();
+  const [jobs, setJobs] = useState<JobSummary[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    client.list().then((page) => {
+      if (!active) return;
+      setJobs(page.items);
+      setCursor(page.next_cursor);
+    }).catch(() => {
+      if (active) setError('Could not load your background jobs. Please try again.');
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [client]);
+
+  async function loadMore() {
+    if (!cursor || loading) return;
+    setLoading(true);
+    try {
+      const page = await client.list(cursor);
+      setJobs((current) => [...current, ...page.items]);
+      setCursor(page.next_cursor);
+    } catch {
+      setError('Could not load more jobs. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function open(job: JobSummary) {
+    setJobSession(job.job_id, job.session_id);
+    navigate(`/pipeline?job=${encodeURIComponent(job.job_id)}`);
+  }
+
+  return (
+    <div className="max-w-5xl mx-auto px-6 py-8">
+      <h1 className="text-xl font-semibold text-text-primary">Background jobs</h1>
+      <p className="text-sm text-text-secondary mt-1">Pipeline runs and other long tasks. Ask for a pipeline in chat to start one.</p>
+      {error && <p className="mt-4 text-sm text-evidence-weak">{error}</p>}
+      {!loading && !error && jobs.length === 0 && (
+        <p className="mt-6 text-sm text-text-secondary">You have no background jobs yet.</p>
+      )}
+      <ul className="mt-6 divide-y divide-border-subtle">
+        {jobs.map((job) => (
+          <li key={job.job_id}>
+            <button type="button" onClick={() => open(job)} className="w-full text-left py-3 flex items-center justify-between gap-4 hover:bg-surface-elevated">
+              <span className="text-sm text-text-primary">{job.agent_type.replace('_', ' ')}</span>
+              <span className="text-xs text-text-secondary">
+                {job.status.replace('_', ' ')} · {Math.round(job.progress_pct)}% · {new Date(job.updated_at).toLocaleString()}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {loading && (
+        <div className="mt-4 flex items-center gap-2 text-sm text-text-secondary">
+          <Loader2 size={16} className="animate-spin text-cei-blue" aria-hidden="true" /> Loading jobs...
+        </div>
+      )}
+      {cursor && !loading && (
+        <button type="button" onClick={() => void loadMore()} className="mt-4 text-sm text-cei-blue">Load more</button>
+      )}
+    </div>
+  );
+}
+
 export function PipelinePage() {
   const [searchParams] = useSearchParams();
+  const jobsClient = useJobsClient();
   const jobId = searchParams.get('job');
   if (jobId) return <LivePipelineView jobId={jobId} />;
+  // ADR: the sample view remains only for the local demo (B94), which has no jobs API
+  if (jobsClient) return <JobsListView client={jobsClient} />;
   return <SamplePipelineView />;
 }
 
