@@ -68,25 +68,14 @@ describe('per-chat mode', () => {
 describe('per-chat model', () => {
   const models = [{ model_id: 'haiku', label: 'Claude Haiku' }, { model_id: 'sonnet', label: 'Claude Sonnet' }];
 
-  it('restores the session model and persists a change via PATCH', async () => {
+  it('restores the session model and locks it for an existing chat', async () => {
     mocks.modelsClient.listModels.mockResolvedValue(models);
     mocks.client.loadHistory.mockResolvedValue({ items: [], next_cursor: null, session: { mode: 'business', model_id: 'haiku' } });
-    mocks.client.updateSession.mockResolvedValue({});
     render(chat('existing-session'));
     await waitFor(() => expect((screen.getByLabelText('Chat model') as HTMLSelectElement).value).toBe('haiku'));
-    fireEvent.change(screen.getByLabelText('Chat model'), { target: { value: 'sonnet' } });
-    await waitFor(() => expect(mocks.client.updateSession).toHaveBeenCalledWith('existing-session', { model_id: 'sonnet' }));
-    await waitFor(() => expect((screen.getByLabelText('Chat model') as HTMLSelectElement).value).toBe('sonnet'));
-  });
-
-  it('keeps the saved model when the PATCH fails', async () => {
-    mocks.modelsClient.listModels.mockResolvedValue(models);
-    mocks.client.loadHistory.mockResolvedValue({ items: [], next_cursor: null, session: { mode: 'business', model_id: 'haiku' } });
-    mocks.client.updateSession.mockRejectedValue(new Error('offline'));
-    render(chat('existing-session'));
-    await waitFor(() => expect((screen.getByLabelText('Chat model') as HTMLSelectElement).value).toBe('haiku'));
-    fireEvent.change(screen.getByLabelText('Chat model'), { target: { value: 'sonnet' } });
-    expect((await screen.findByRole('alert')).textContent).toContain('Could not update');
-    expect((screen.getByLabelText('Chat model') as HTMLSelectElement).value).toBe('haiku');
+    const picker = screen.getByLabelText('Chat model') as HTMLSelectElement;
+    expect(picker.disabled).toBe(true);
+    fireEvent.change(picker, { target: { value: 'sonnet' } });
+    expect(mocks.client.updateSession).not.toHaveBeenCalled();
   });
 });

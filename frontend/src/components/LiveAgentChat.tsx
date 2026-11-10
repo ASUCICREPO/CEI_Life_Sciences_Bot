@@ -103,8 +103,6 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
   // '' means "use the account/session default" (no override picked yet).
   const [models, setModels] = useState<ModelOption[]>([]);
   const [chatModel, setChatModel] = useState('');
-  const [modelSaving, setModelSaving] = useState(false);
-  const [modelError, setModelError] = useState<string | null>(null);
   const formId = useId();
 
   // Loaded once per client identity; a failed load just hides the picker (every agent still works).
@@ -224,7 +222,7 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
   }
 
   async function changeChatMode(next: AgentMode) {
-    if (next === chatMode || modeSaving || modelSaving || isRunning || historyLoading || historyError) return;
+    if (next === chatMode || modeSaving || isRunning || historyLoading || historyError) return;
     setModeError(null);
     const existingSession = createdSessionId.current;
     if (!existingSession) {
@@ -242,29 +240,18 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
     }
   }
 
-  async function changeChatModel(next: string) {
-    if (next === chatModel || modelSaving || modeSaving || isRunning || historyLoading || historyError) return;
-    setModelError(null);
-    const existingSession = createdSessionId.current;
-    if (!existingSession || !next) {
-      // No session to PATCH yet, or "use the default" — nothing to persist against the API.
-      setChatModel(next);
-      return;
-    }
-    setModelSaving(true);
-    try {
-      await sessionsClient.updateSession(existingSession, { model_id: next });
-      setChatModel(next);
-    } catch {
-      setModelError('Could not update this chat’s model. Please try again.');
-    } finally {
-      setModelSaving(false);
-    }
+  // ADR: the model is fixed once the chat exists | api.md: PATCH /sessions accepts only title and mode; F08: a
+  // session uses the model it was created with for every turn
+  const modelLocked = Boolean(resumeSessionId) || messages.length > 0;
+
+  function changeChatModel(next: string) {
+    if (modelLocked || next === chatModel || isRunning) return;
+    setChatModel(next);
   }
 
   async function askQuestion(prompt: string) {
     const trimmed = prompt.trim();
-    if (!trimmed || isRunning || modeSaving || modelSaving || historyError) return;
+    if (!trimmed || isRunning || modeSaving || historyError) return;
     setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', text: trimmed }]);
     setInputValue('');
     setIsRunning(true);
@@ -392,7 +379,7 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
           <div className="flex items-center gap-3">
             <label className="flex items-center gap-1.5 text-xs text-text-secondary">
               <span>Chat mode</span>
-              <select aria-label="Chat mode" value={chatMode} disabled={isRunning || modeSaving || modelSaving || historyLoading || Boolean(historyError)}
+              <select aria-label="Chat mode" value={chatMode} disabled={isRunning || modeSaving || historyLoading || Boolean(historyError)}
                 onChange={(event) => void changeChatMode(event.target.value as AgentMode)}
                 className="rounded border border-border-subtle bg-surface-elevated px-2 py-1 text-text-primary disabled:opacity-50">
                 <option value="science">Science</option>
@@ -402,7 +389,9 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
             {models.length > 0 && (
               <label className="flex items-center gap-1.5 text-xs text-text-secondary">
                 <span>Model</span>
-                <select aria-label="Chat model" value={chatModel} disabled={isRunning || modelSaving || modeSaving || historyLoading || Boolean(historyError)}
+                <select aria-label="Chat model" value={chatModel}
+                  disabled={modelLocked || isRunning || modeSaving || historyLoading || Boolean(historyError)}
+                  title={modelLocked ? 'The model is fixed when the chat starts.' : undefined}
                   onChange={(event) => void changeChatModel(event.target.value)}
                   className="rounded border border-border-subtle bg-surface-elevated px-2 py-1 text-text-primary disabled:opacity-50">
                   <option value="">Default</option>
@@ -420,7 +409,6 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
         </div>
         <p className="text-xs text-text-secondary mt-0.5">{description}</p>
         {modeError && <p role="alert" className="mt-1 text-xs text-evidence-weak">{modeError}</p>}
-        {modelError && <p role="alert" className="mt-1 text-xs text-evidence-weak">{modelError}</p>}
       </div>
 
       {showReports && <ReportExports key={sessionId} sessionId={sessionId} />}
@@ -520,14 +508,14 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
                 }
               }}
               rows={1}
-              disabled={isRunning || historyLoading || modeSaving || modelSaving || Boolean(historyError)}
+              disabled={isRunning || historyLoading || modeSaving || Boolean(historyError)}
               placeholder={placeholder}
               className="w-full resize-y pl-4 pr-12 py-3 rounded-xl border border-border-subtle bg-surface-panel text-sm placeholder:text-text-tertiary focus:border-cei-blue-light focus:ring-2 focus:ring-cei-blue-light/20 transition-all disabled:opacity-60"
               aria-label={placeholder}
             />
             <button
               type="submit"
-              disabled={!inputValue.trim() || isRunning || historyLoading || modeSaving || modelSaving || Boolean(historyError)}
+              disabled={!inputValue.trim() || isRunning || historyLoading || modeSaving || Boolean(historyError)}
               className="absolute right-2 top-2.5 p-2 rounded-lg bg-cei-blue text-white disabled:opacity-30 disabled:cursor-not-allowed hover:bg-cei-navy transition-colors"
               aria-label="Send"
             >
