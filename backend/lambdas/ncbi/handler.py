@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import logging
 import os
+import random
+import time
 from functools import lru_cache
 from typing import Any
 
@@ -22,6 +24,19 @@ def limiter() -> NCBIRateLimiter:
     return NCBIRateLimiter(boto3.client("dynamodb"), os.environ["NCBI_RATE_LIMIT_TABLE"])
 
 
+def acquire(service: str, rid: str | None = None) -> None:
+    # A taxonomy name lookup needs two E-utilities requests in succession.
+    # Wait briefly for the shared slot while keeping every request rate-limited.
+    for attempt in range(10):
+        try:
+            limiter().acquire(service, rid)
+            return
+        except RateLimited:
+            if attempt == 9:
+                raise
+            time.sleep(random.uniform(0.36, 0.46))
+
+
 def handler(event: Any, context: Any) -> dict[str, Any]:
     custom = getattr(getattr(context, "client_context", None), "custom", None) or {}
     name = custom.get("bedrockAgentCoreToolName", "")
@@ -29,7 +44,6 @@ def handler(event: Any, context: Any) -> dict[str, Any]:
         return {"error": {"code": "invalid_request", "message": "Invalid tool request."}}
     operation = name.split("___", 1)[1]
     try:
-        acquire = limiter().acquire
         if operation == "taxonomy_lineage" and set(event) == {"taxon"}:
             return {"result": taxonomy_lineage(event["taxon"], acquire=acquire)}
         if operation == "sequence_efetch" and set(event) == {"accession", "database", "format"}:

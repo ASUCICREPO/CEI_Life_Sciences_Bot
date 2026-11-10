@@ -55,6 +55,7 @@ def request(
     *,
     attempts: int = DEFAULT_ATTEMPTS,
     sleep: Callable[[float], None] = time.sleep,
+    before_request: Callable[[], None] | None = None,
     **kwargs: Any,
 ) -> requests.Response:
     """`requests.request` with retry. Returns the last response; re-raises the last network error.
@@ -65,6 +66,8 @@ def request(
         raise ValueError("attempts must be at least 1")
     host = urlsplit(url).netloc  # log the host only: query strings can carry a user's API key
     for attempt in range(1, attempts + 1):
+        if before_request is not None:
+            before_request()
         try:
             response = requests.request(method, url, **kwargs)
         except (requests.ConnectionError, requests.Timeout) as exc:

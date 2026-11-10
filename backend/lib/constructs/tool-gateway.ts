@@ -81,6 +81,8 @@ export class ToolGateway extends Construct {
   public readonly gatewayLogGroup: logs.ILogGroup;
   public readonly sourceFunctions: Record<string, lambda.Function> = {};
   public readonly operationsFunction: lambda.DockerImageFunction;
+  public readonly ncbiFunction: lambda.Function;
+  public readonly ncbiRateTable: dynamodb.Table;
   public readonly scopeNames: string[];
 
   constructor(scope: Construct, id: string, props: ToolGatewayProps) {
@@ -166,6 +168,14 @@ export class ToolGateway extends Construct {
     // ---------------------------------------------------------------
 
     const dataSourceLayer = new DataSourceLayer(this, 'DataSourceLayer');
+    this.ncbiRateTable = new dynamodb.Table(this, 'NcbiRateLimiter', {
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      timeToLiveAttribute: 'expires_at',
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
     for (const sourceId of sourceIds) {
       this.sourceFunctions[sourceId] = this.pythonFunction(`DataSource-${sourceId}`, `data-source-${sourceId}`, {
         layers: [dataSourceLayer.layer],
@@ -176,9 +186,20 @@ export class ToolGateway extends Construct {
         environment: {
           // The source Lambdas only call tool.fetch() (the real upstream call); no direct-mode switch is involved
           CEI_API_KEY_SECRET_PREFIX: 'cei/user-keys',
+          ...(sourceId === 'pubmed' ? { NCBI_RATE_LIMIT_TABLE: this.ncbiRateTable.tableName } : {}),
         },
       });
     }
+    this.sourceFunctions.pubmed.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:UpdateItem'], resources: [this.ncbiRateTable.tableArn],
+    }));
+    this.ncbiFunction = this.pythonFunction('NcbiReadOnly', 'ncbi', {
+      timeout: Duration.seconds(90), memorySize: 256,
+      environment: { NCBI_RATE_LIMIT_TABLE: this.ncbiRateTable.tableName },
+    });
+    this.ncbiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:UpdateItem'], resources: [this.ncbiRateTable.tableArn],
+    }));
     // ADR: no Secrets Manager grant on the source Lambdas yet | Rationale: B99 — no user id reaches a Lambda
     // target until F18, so the user-key lookup never runs; F18 adds GetSecretValue on cei/user-keys/* with the
     // user-id mechanism | Alternative: granting now rejected — an unused read on every user's keys
@@ -200,7 +221,7 @@ export class ToolGateway extends Construct {
       }),
     });
     gatewayRole.addToPolicy(
-      new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: Object.values(this.sourceFunctions).map((fn) => fn.functionArn) }),
+      new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [...Object.values(this.sourceFunctions).map((fn) => fn.functionArn), this.ncbiFunction.functionArn] }),
     );
     // S2: GetPolicyEngine / AuthorizeAction / PartiallyAuthorizeActions are required; PartiallyAuthorizeActions filters tools/list
     gatewayRole.addToPolicy(new iam.PolicyStatement({ actions: ['bedrock-agentcore:GetPolicyEngine'], resources: [policyEngine.attrPolicyEngineArn] }));
@@ -234,6 +255,25 @@ export class ToolGateway extends Construct {
     this.operationsFunction = new LifeSciencesOperations(this, 'LifeSciencesOperations', {
       gateway: this.gateway, gatewayRole, policyEngine,
     }).function;
+
+    const ncbiTarget = new agentcore.CfnGatewayTarget(this, 'NcbiTarget', {
+      name: 'ncbi', gatewayIdentifier: this.gateway.attrGatewayIdentifier,
+      credentialProviderConfigurations: [{ credentialProviderType: 'GATEWAY_IAM_ROLE' }],
+      targetConfiguration: { mcp: { lambda: { lambdaArn: this.ncbiFunction.functionArn, toolSchema: { inlinePayload: [
+        { name: 'taxonomy_lineage', description: 'Retrieve an NCBI taxonomy lineage by taxon name or ID.',
+          inputSchema: { type: 'object', properties: { taxon: { type: 'string' } }, required: ['taxon'] } },
+        { name: 'sequence_efetch', description: 'Retrieve an NCBI nucleotide or protein sequence by accession.',
+          inputSchema: { type: 'object', properties: { accession: { type: 'string' }, database: { type: 'string' }, format: { type: 'string' } },
+            required: ['accession', 'database', 'format'] } },
+      ] } } } },
+    });
+    ncbiTarget.node.addDependency(gatewayRole);
+    const ncbiPolicy = new agentcore.CfnPolicy(this, 'PermitNcbi', {
+      name: 'permit_ncbi', policyEngineId: policyEngine.attrPolicyEngineId,
+      definition: { cedar: { statement: cedarPermit('ncbi', this.gateway.attrGatewayArn, fullScope(sourceScopeName('ncbi'))) } },
+      validationMode: 'IGNORE_ALL_FINDINGS',
+    });
+    ncbiPolicy.node.addDependency(ncbiTarget);
 
     for (const entry of schemas) {
       const fn = this.sourceFunctions[entry.sourceId];
@@ -388,7 +428,7 @@ export class ToolGateway extends Construct {
       tracing: lambda.Tracing.ACTIVE,
       runtime: lambda.Runtime.PYTHON_3_14,
       handler: 'handler.handler',
-      code: lambda.Code.fromAsset(path.join(LAMBDAS_DIR, dir), { exclude: ['tests', '__pycache__', '*.pyc'] }),
+      code: lambda.Code.fromAsset(path.join(LAMBDAS_DIR, dir), { exclude: ['tests', 'test_*.py', '__pycache__', '*.pyc'] }),
       layers: options.layers,
       role,
       logGroup,

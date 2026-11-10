@@ -122,7 +122,7 @@ describe('ToolGateway (F4)', () => {
     });
 
     it('has one Lambda target per source, each serving exactly the generated `search` tool', () => {
-      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').filter((target) => target.Name !== 'lsops');
+      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').filter((target) => !['lsops', 'ncbi'].includes(target.Name));
       expect(targets.map((t) => t.Name).sort()).toEqual([...SOURCE_IDS].sort());
       const schemas = new Map(loadToolSchemas().map((s) => [s.sourceId, s.tool]));
       for (const target of targets) {
@@ -135,7 +135,7 @@ describe('ToolGateway (F4)', () => {
     });
 
     it('writes one scoped Cedar permit per source target (B69)', () => {
-      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').filter((policy) => policy.Name !== 'permit_lsops');
+      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').filter((policy) => !['permit_lsops', 'permit_ncbi'].includes(policy.Name));
       expect(policies.map((p) => p.Name).sort()).toEqual(SOURCE_IDS.map((id) => `permit_${id}`).sort());
       for (const policy of policies) {
         const id = policy.Name.replace('permit_', '');
@@ -155,6 +155,17 @@ describe('ToolGateway (F4)', () => {
       expect(JSON.stringify(policy.Definition.Cedar.Statement)).toContain('cei-tools/common');
       const target = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').find((t) => t.Name === 'lsops');
       expect(target.TargetConfiguration.Mcp.Lambda.ToolSchema.InlinePayload).toHaveLength(20);
+    });
+
+    it('scopes NCBI lookups and uses a shared rate table for PubMed', () => {
+      const target = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').find((t) => t.Name === 'ncbi');
+      expect(target.TargetConfiguration.Mcp.Lambda.ToolSchema.InlinePayload.map((tool: any) => tool.Name)).toEqual(['taxonomy_lineage', 'sequence_efetch']);
+      const policy = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').find((p) => p.Name === 'permit_ncbi');
+      expect(JSON.stringify(policy.Definition.Cedar.Statement)).toContain('cei-tools/src.ncbi');
+      const functions = resourcesOf(template, 'AWS::Lambda::Function');
+      const withLimiter = functions.filter((f) => f.Environment?.Variables?.NCBI_RATE_LIMIT_TABLE);
+      expect(withLimiter).toHaveLength(2);
+      expect(withLimiter[0].Environment.Variables.NCBI_RATE_LIMIT_TABLE).toEqual(withLimiter[1].Environment.Variables.NCBI_RATE_LIMIT_TABLE);
     });
 
     it('lets the Gateway role invoke exactly the configured source Lambdas', () => {

@@ -1,4 +1,4 @@
-"""Bounded NCBI target primitives. Not wired to a Gateway or Lambda handler.
+"""Bounded NCBI target primitives.
 
 Callers must supply a shared, durable rate limiter before deploying these functions.
 The limiter must raise when a request cannot be made within NCBI's limits.

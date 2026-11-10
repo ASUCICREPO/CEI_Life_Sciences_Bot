@@ -182,7 +182,7 @@ describe('BackendStack REST API + session store', () => {
 
   it('creates the session tables and active-run table with the specified keys', () => {
     const tables = template.findResources('AWS::DynamoDB::Table');
-    expect(Object.keys(tables)).toHaveLength(4);
+    expect(Object.keys(tables)).toHaveLength(5);
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       KeySchema: [
         { AttributeName: 'user_id', KeyType: 'HASH' },
@@ -201,8 +201,13 @@ describe('BackendStack REST API + session store', () => {
       // ADR: SSEEnabled without SSEType | CDK's AWS_MANAGED emits exactly this; it selects the aws/dynamodb managed key, while omitting it means an AWS-owned key
       expect(table.Properties.SSESpecification).toEqual({ SSEEnabled: true });
       expect(table.Properties.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
-      expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
-      expect(table.DeletionPolicy).toBe('Retain');
+      if (table.Properties.KeySchema[0].AttributeName === 'pk') {
+        expect(table.Properties.TimeToLiveSpecification).toEqual({ AttributeName: 'expires_at', Enabled: true });
+        expect(table.DeletionPolicy).toBe('Delete');
+      } else {
+        expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
+        expect(table.DeletionPolicy).toBe('Retain');
+      }
     }
   });
 

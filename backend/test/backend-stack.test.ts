@@ -362,12 +362,17 @@ describe('BackendStack', () => {
 
     it('enables PITR, retains, and sets no TTL on the tables', () => {
       const { all } = tables();
-      expect(all).toHaveLength(4);
+      expect(all).toHaveLength(5);
       for (const t of all) {
         expect(t.Properties.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
         expect(t.Properties.BillingMode).toBe('PAY_PER_REQUEST');
-        expect(t.Properties.TimeToLiveSpecification).toBeUndefined();
-        expect(t.DeletionPolicy).toBe('Retain');
+        if (t.Properties.KeySchema[0].AttributeName === 'pk') {
+          expect(t.Properties.TimeToLiveSpecification).toEqual({ AttributeName: 'expires_at', Enabled: true });
+          expect(t.DeletionPolicy).toBe('Delete');
+        } else {
+          expect(t.Properties.TimeToLiveSpecification).toBeUndefined();
+          expect(t.DeletionPolicy).toBe('Retain');
+        }
       }
     });
 

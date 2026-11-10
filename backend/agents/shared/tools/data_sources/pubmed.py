@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import random
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any
+from functools import lru_cache
 from urllib.parse import quote_plus
 
 from pydantic import BaseModel, Field
@@ -18,6 +22,26 @@ _HEADERS = {"User-Agent": "CEI-LifeSciences-Bot/0.1 (research-tool)"}
 _TIMEOUT = 10
 _ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 _EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+
+
+@lru_cache(maxsize=1)
+def _shared_limiter():
+    # The Lambda layer stages the same limiter implementation as the NCBI target.
+    import boto3
+    from ncbi_limiter import NCBIRateLimiter
+    return NCBIRateLimiter(boto3.client("dynamodb"), os.environ["NCBI_RATE_LIMIT_TABLE"])
+
+
+def _acquire_eutils_slot() -> None:
+    from ncbi_limiter import RateLimited
+    for attempt in range(10):
+        try:
+            _shared_limiter().acquire("eutils")
+            return
+        except RateLimited:
+            if attempt == 9:
+                raise
+            time.sleep(random.uniform(0.36, 0.46))
 
 
 class PubMedTool(DataSourceTool):
@@ -37,12 +61,14 @@ class PubMedTool(DataSourceTool):
     def fetch(self, query: str, max_results: int = 10, api_key: str | None = None, **_: Any) -> DataSourceResult:
         retrieved_at = datetime.now(timezone.utc)
         key_param = {"api_key": api_key} if api_key else {}
+        throttle = {"before_request": _acquire_eutils_slot} if os.environ.get("NCBI_RATE_LIMIT_TABLE") else {}
         try:
             search_resp = http.get(
                 _ESEARCH,
                 params={"db": "pubmed", "term": query, "retmax": max_results, "retmode": "json", **key_param},
                 headers=_HEADERS,
                 timeout=_TIMEOUT,
+                **throttle,
             )
             search_resp.raise_for_status()
             ids: list[str] = search_resp.json().get("esearchresult", {}).get("idlist", [])
@@ -54,6 +80,7 @@ class PubMedTool(DataSourceTool):
                 params={"db": "pubmed", "id": ",".join(ids), "rettype": "abstract", "retmode": "xml", **key_param},
                 headers=_HEADERS,
                 timeout=_TIMEOUT,
+                **throttle,
             )
             fetch_resp.raise_for_status()
             root = ET.fromstring(fetch_resp.text)
