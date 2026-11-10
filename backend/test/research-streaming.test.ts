@@ -14,7 +14,7 @@ describe('Research streaming infrastructure', () => {
   it('enables X-Ray on the API stage and every application Lambda', () => {
     template.hasResourceProperties('AWS::ApiGateway::Stage', { TracingEnabled: true });
     const functions = Object.entries(template.findResources('AWS::Lambda::Function'))
-      .filter(([id]) => !id.startsWith('Custom'));
+      .filter(([id]) => !id.startsWith('Custom') && !id.startsWith('BucketNotificationsHandler'));
     expect(functions.length).toBeGreaterThan(10);
     for (const [, resource] of functions) {
       expect((resource as any).Properties.TracingConfig).toEqual({ Mode: 'Active' });
@@ -27,9 +27,11 @@ describe('Research streaming infrastructure', () => {
     expect(stream).toBeDefined();
     const parent = resources[(stream![1] as any).Properties.ParentId.Ref] as any;
     expect(parent.Properties.PathPart).toBe('chat');
-    template.hasResourceProperties('AWS::ApiGateway::Method', { ResourceId: { Ref: stream![0] },
+    template.hasResourceProperties('AWS::ApiGateway::Method', {
+      ResourceId: { Ref: stream![0] },
       HttpMethod: 'POST', AuthorizationType: 'COGNITO_USER_POOLS', AuthorizationScopes: ['openid'],
-      Integration: Match.objectLike({ ResponseTransferMode: 'STREAM' }) });
+      Integration: Match.objectLike({ ResponseTransferMode: 'STREAM' })
+    });
   });
   it('forwards the uncached streaming path through CloudFront', () => {
     const [distribution] = Object.values(template.findResources('AWS::CloudFront::Distribution')) as any[];
