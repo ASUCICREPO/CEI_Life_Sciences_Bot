@@ -2,7 +2,7 @@
 
 CEI Life Sciences Bot — an AI-powered life sciences assistant for many isolated users.
 
-Status: this document describes the **target** architecture. Every component below is marked **Exists** or **Planned — not built**. Full detail and rationale live in `.agents/specs/architecture.md` (agent-facing spec); this page links to it instead of repeating it. Source of truth for all decisions: `.agents/decision-log.md` (decisions B1–B90).
+Status: this document describes the **target** architecture. Every component below is marked **Exists**, **Exists (partial)**, or **Planned — not built**. "Exists" means the code and the CDK definition exist at this commit. It does not mean that a live deployed check passed; see the phase files in `.agents/phases/` for verification status. Full detail and rationale live in `.agents/specs/architecture.md` (agent-facing spec); this page links to it instead of repeating it. Source of truth for all decisions: `.agents/decision-log.md` (decisions B1–B90).
 
 ---
 
@@ -26,15 +26,15 @@ Status: this document describes the **target** architecture. Every component bel
 
 **Exists (F2, B88–B90).** CloudFront + WAF front a static SPA build on S3. Amazon Cognito (self sign-up, email verification, no MFA per B14) authenticates users through Cognito managed login (Authorization Code + PKCE, `oidc-client-ts`). The `CLOUDFRONT`-scope WAF web ACL lives in its own stack, `EdgeWafStack`, which always deploys to `us-east-1` (AWS only accepts that scope there) and is consumed by `BackendStack` through `crossRegionReferences: true`, regardless of which Region the rest of the stack deploys to. Every user's data (chats, keys, attachments, settings) will be fully isolated by Cognito `sub` — no sharing, no teams (isolation itself lands with the data stores in later phases).
 
-The production frontend is the `founder-ai-dashboard` Vite SPA (React 19, Tailwind 4, react-router), now in `frontend/`, replacing the Next.js test harness (B1/B66). The CEI UI renderer has not yet moved into it (later phase). The archived Next.js app, including its local CEI UI preview renderer, now lives in `archive/frontend-next/` for reference.
+The production frontend is the `founder-ai-dashboard` Vite SPA (React 19, Tailwind 4, react-router) in `frontend/` (B1/B66). Its CEI UI renderer is in `frontend/src/components/cei-ui/`, and its stream reducer is in `frontend/src/lib/stream/`. The archived Next.js app lives in `archive/frontend-next/` for reference only. It is not deployed.
 
-**Planned:** the Cognito resource server and Router M2M client (F4); the REST API authorizer that consumes this user pool (F3).
+**Exists:** the Cognito resource server and Router M2M client (`backend/lib/constructs/tool-gateway.ts`), and the REST API Cognito authorizer (`backend/lib/backend-stack.ts`).
 
 ---
 
 ## 2. Real-Time Chat (Streaming Path — SSE)
 
-**Planned — not built**, except where noted.
+**Exists (partial).** The flow below is the target. The status notes after the diagram show what exists.
 
 ```
 Client → CloudFront + WAF → Cognito authorizer → REST API Gateway "/chat/stream" (STREAM)
@@ -48,26 +48,30 @@ Client → CloudFront + WAF → Cognito authorizer → REST API Gateway "/chat/s
            (a Gateway target, Cedar-gated)
         → Code Interpreter (not a Gateway target — reached directly, gated by IAM/runtime binding)
         → AgentCoreMemorySaver checkpoint per turn
-  ← Session Runner relays chunks as SSE (heartbeat every 15–20 s)
+  ← Session Runner relays chunks as SSE (SSE comment ": heartbeat" every 17 s)
 Client renders progressive CEI UI 1.2 patches, ending with the completed surface.
 If the plan step's own estimate exceeds 10 minutes, that decision is made once, before any part
 of the answer streams, and the run hands off to a background job instead — there is no mid-run
 handoff from a streaming run to an async job.
 ```
 
-A single-source "tool agent" chat (for example, "Ask PubMed") uses its own streaming route, `POST /tools/{source}/chat/stream`, handled by the same Session Runner and the same event catalog; the Router reads `{source}` from the path to pick the profile and the single-source token.
+**Planned — not built.** A single-source "tool agent" chat (for example, "Ask PubMed") uses its own streaming route, `POST /tools/{source}/chat/stream`, handled by the same Session Runner and the same event catalog; the Router reads `{source}` from the path to pick the profile and the single-source token.
 
 There is **one Regional REST API Gateway (v1)** for every route, not an HTTP API (v2), because v2 cannot stream. `/chat/stream` uses `responseTransferMode: STREAM`; every other route is `BUFFERED`. One Cognito authorizer covers both modes. Limits: 15-minute streaming cap, 5-minute idle, 2 MB/s after the first 10 MB.
 
-**Exists (partial):** the Research and Drafting LangGraph graphs run locally via the AgentCore CLI and return one completed CEI UI 1.1 JSON surface (no streaming). An SSE helper (`shared/transport/sse.py`) can serialize bounded, redacted events, but no production route uses it yet. The Analysis and Pipeline Manager graphs are wired but every node raises `NotImplementedError`.
+**Exists:** the REST API (stage `v1`) with its Cognito authorizer, the Session Runner Lambda (Node.js, `POST /chat/stream`, STREAM mode), and the Session Router Lambda (`backend/lib/constructs/session-router.ts`). The Runner sends the Router's tool token to the runtime in the `X-Cei-Gateway-Token` header. The four specialist runtimes are AgentCore Runtimes in CDK (`backend/lib/constructs/agent-runtimes.ts`).
 
-**Planned:** the Session Runner Lambda, the Session Router Lambda, the REST API Gateway, the Cognito authorizer, and CEI UI 1.2 progressive streaming (see `docs/cei-ui-protocol.md` and `.agents/specs/streaming-protocol.md`).
+**Exists (partial):** CEI UI 1.2 progressive streaming. The Research runtime emits version `1.2` events (`backend/agents/shared/streaming/research.py`), and the frontend accepts them. The SPA uses the Research stream only when `/config.json` has `researchStreamingEnabled: true`, which needs the Cedar policy mode `ENFORCE`. The other agents return one completed CEI UI 1.1 surface.
+
+**Planned — not built:** the free-text classifier path and the `ChoicePicker` for low confidence (F9). Today the Router uses only the deterministic lookup. `backend/lambdas/session-router/classifier.py` is a foundation that the handler does not call.
 
 ---
 
 ## 3. Background Jobs (Async Path)
 
-**Planned — not built.** Runs predicted to exceed 10 minutes go async, leaving a margin under the 15-minute API Gateway streaming cap. The Pipeline Manager always runs async; the other three agents go async when a plan/triage-step estimate crosses 10 minutes. This decision is made once, from the plan step's own estimate, before any part of the answer streams — there is no mid-run handoff from a streaming run to a background job.
+**Exists (partial).** The Job ID Store, the Polling Lambda (`GET /jobs`, `GET /jobs/{jobId}`, `POST /jobs/{jobId}/cancel`), and the watchdog (every 5 minutes) are in `backend/lib/constructs/background-jobs.ts`. The Pipeline Manager uses the Job ID Store for its runs. It still dispatches steps in-process (B102), not through `InvokeAgentRuntime`. The 10-minute estimate handoff for the other agents and the S3 async-session proofs are not done. The watchdog checkpoint resume is coded but off (`CEI_WATCHDOG_RESUME_ENABLED=false`).
+
+Target design: runs predicted to exceed 10 minutes go async, leaving a margin under the 15-minute API Gateway streaming cap. The Pipeline Manager always runs async; the other three agents go async when a plan/triage-step estimate crosses 10 minutes. This decision is made once, from the plan step's own estimate, before any part of the answer streams — there is no mid-run handoff from a streaming run to a background job.
 
 ```
 Client → REST API Gateway (BUFFERED)
@@ -97,12 +101,13 @@ each with its own 2 vCPU / 8 GB, and each step gets its own trace.
 
 ## 5. Session and User Management (REST Routes)
 
-**Planned — not built.** All served through the same REST API Gateway:
+**Exists (partial).** All served through the same REST API Gateway:
 
-- **Session Metadata Handler** — create/list/get/update/delete session metadata (DynamoDB).
-- **Session History Handler** — cursor-paginated turn history (default page 20, max 100); the trace for a turn loads only when the user expands that turn's thinking block.
-- **Fetch User Settings** — user preferences, configured sources, model/mode defaults (DynamoDB).
-- **Delete chat / delete account** — return `202 Accepted` at once; a worker removes DynamoDB items, S3 files, Knowledge Base chunks, memories, and checkpoints; the UI hides the item immediately.
+- **Session Metadata Handler** — **Exists** for create/list/get/update. Delete is planned (F19).
+- **Session History Handler** — **Exists.** Cursor-paginated turn history (default page 20, max 100); the trace for a turn loads only when the user expands that turn's thinking block.
+- **Exports Handler** — **Exists.** Lists the exports of a session and signs a download URL.
+- **Fetch User Settings** — **Planned — not built.** User preferences, configured sources, model/mode defaults (DynamoDB).
+- **Delete chat / delete account** — **Planned — not built** (deferred). `backend/lambdas/delete-worker/` is a tested foundation only, with no deployed resource. Target: return `202 Accepted` at once; a worker removes DynamoDB items, S3 files, Knowledge Base chunks, memories, and checkpoints; the UI hides the item immediately.
 
 Full route table: `docs/APIDoc.md`, detail: `.agents/specs/api.md`.
 
@@ -110,15 +115,15 @@ Full route table: `docs/APIDoc.md`, detail: `.agents/specs/api.md`.
 
 ## 6. Data Sources, Tool Agents, and the Gateway
 
-**Planned — not built**, except where noted.
+**Exists (partial)**, as noted per item.
 
-- **10 data source Lambdas** behind AgentCore Gateway (MCP): PubMed, ClinicalTrials.gov, bioRxiv, medRxiv, ChEMBL, Open Targets, CMS Coverage, ICD-10, NPI Registry, PubChem. **Exists (partial):** direct HTTP calls to these sources are implemented in `backend/agents/shared/tools/data_sources/`; there is no Lambda deployment and no Gateway target yet.
-- **Tool agents** — 11 single-source natural-language agents (the 10 sources above, plus NCBI: taxonomy, sequence search, BLAST) on **one** AgentCore Runtime, one generic LangGraph graph, and a YAML profile per source. A user chatting with one data source gets a Gateway token scoped to only that source, over its own streaming route, `/tools/{source}/chat/stream` (same Session Runner as `/chat/stream`). Specialist agents never call tool agents; both paths share the same Gateway Lambdas.
+- **Data source Lambdas** behind AgentCore Gateway (MCP) — **Exists.** `backend/lib/constructs/tool-gateway.ts` makes one Lambda and one Gateway target per entry in `backend/lambdas/data-source-tool-schemas.json` (12 sources at this commit, including openFDA and PatentsView), plus `NcbiReadOnly` targets. The Cedar policy mode comes from the deploy config; the default is `LOG_ONLY`.
+- **Tool agents** — **Exists (partial).** The graph and YAML profiles are in `backend/agents/tool_agent/`, but no runtime deploys them and the `/tools/{source}/chat/stream` route is not built (F15). — 11 single-source natural-language agents (the 10 sources above, plus NCBI: taxonomy, sequence search, BLAST) on **one** AgentCore Runtime, one generic LangGraph graph, and a YAML profile per source. A user chatting with one data source gets a Gateway token scoped to only that source, over its own streaming route, `/tools/{source}/chat/stream` (same Session Runner as `/chat/stream`). Specialist agents never call tool agents; both paths share the same Gateway Lambdas.
 - **AgentCore Gateway + Policy (Cedar)** — default-deny. One Cedar permit per source target. `tools/list` is filtered so a caller only sees the tools its scopes allow. Starts in `LOG_ONLY`, then moves to `ENFORCE`.
 - **Cognito scopes and tokens** — one resource server (`cei-tools`), one scope per source (for example `cei-tools/src.pubmed`), plus one shared scope for common tools (Life Sciences Ops, Code Interpreter, Web Search, Knowledge Base retrieval) granted to every agent. Specialist agents get every source scope — all 10 sources plus NCBI, 11 total; NCBI is not tool-agent only. Tool agents get exactly one. Only the Session Router holds the Cognito M2M client secret; it requests a token scoped to only what the current request needs, and the AgentCore runtime role cannot read that secret. A pre-token-generation trigger stamps the user's `sub` and session ID onto the token so a Gateway Lambda can read the calling user's identity directly. Before a token expires mid-run, the agent calls an internal token-refresh endpoint (IAM-authenticated) that checks the run is still active and re-issues a token with the same scopes.
-- **Life Sciences Operations** — a deterministic Biopython/RDKit Lambda (no model call): sequence validation/transcription/translation/ORF finding, protein and primer properties, chemistry (SMILES/InChI, Lipinski Rule of 5, Tanimoto similarity), and lab calculations (molarity, dilution, unit conversion, HGVS check). Likely a container image because of RDKit's size.
-- **Web Search** — only the built-in AgentCore Web Search connector (region-gated to us-east-1, eu-west-1, ap-northeast-1). It is registered as a Gateway target and gated by a Cedar permit under the shared `cei-tools/common` scope, the same enforcement pattern as the other cross-cutting tools — not a bypass of the Gateway. Grounding uses returned snippets only, never full page fetches, and the trace stores only cited snippets (the connector's terms forbid bulk storage).
-- **Code Interpreter** — **Exists.** `CodeInterpreterCustom` is defined in `backend/lib/backend-stack.ts` with public network access. By design, it is never a Gateway target (unlike Web Search); it is reached directly and gated by IAM/runtime binding, not by a Cedar permit. It is not yet granted to any runtime.
+- **Life Sciences Operations** — **Exists** (`backend/lib/constructs/life-sciences-operations.ts`, container image Lambda with a Gateway target and Cedar permit). A deterministic Biopython/RDKit Lambda (no model call): sequence validation/transcription/translation/ORF finding, protein and primer properties, chemistry (SMILES/InChI, Lipinski Rule of 5, Tanimoto similarity), and lab calculations (molarity, dilution, unit conversion, HGVS check). Likely a container image because of RDKit's size.
+- **Web Search** — **Planned — not built.** Only the stack output `WebSearchEnabled` exists. Target: only the built-in AgentCore Web Search connector (region-gated to us-east-1, eu-west-1, ap-northeast-1). It is registered as a Gateway target and gated by a Cedar permit under the shared `cei-tools/common` scope, the same enforcement pattern as the other cross-cutting tools — not a bypass of the Gateway. Grounding uses returned snippets only, never full page fetches, and the trace stores only cited snippets (the connector's terms forbid bulk storage).
+- **Code Interpreter** — **Exists.** `CodeInterpreterCustom` is defined in `backend/lib/backend-stack.ts` with public network access. By design, it is never a Gateway target (unlike Web Search); it is reached directly and gated by IAM/runtime binding, not by a Cedar permit. Each of the four specialist runtimes has use of it (`grantUse`) and gets its ID as `CEI_CODE_INTERPRETER_ID`.
 
 ---
 
@@ -128,37 +133,37 @@ Four specialist agents plus the tool-agent runtime, all Python LangGraph applica
 
 | Agent | Goal | Status |
 |---|---|---|
-| Research | 1 — deep research, citation grounding | **Exists (partial)** — graph runs locally; no Gateway, no `AgentCoreMemorySaver`, no async, no HITL wired in |
-| Drafting | 2 — document preparation and export | **Exists (partial)** — same gaps as Research; also calls the Research graph in-process for its research subgraph (kept in the same runtime/session, not through the Router) |
-| Analysis | 3 — competitor/market/legal analysis | **Exists (partial)** — graph wired, every node raises `NotImplementedError` |
-| Pipeline Manager | 4 — orchestrates the other agents | **Exists (partial)** — graph wired, every node raises `NotImplementedError`; always runs async; each step is planned to call the target specialist agent's runtime directly (`InvokeAgentRuntime`), in its own session and trace |
-| Tool Agent (11 profiles) | single-source chat | **Planned — not built** |
+| Research | 1 — deep research, citation grounding | **Exists (partial)** — AgentCore Runtime in CDK; Gateway tools required (`CEI_REQUIRE_TOOL_GATEWAY`); `AgentCoreMemorySaver` when `CEI_RESEARCH_MEMORY_ID` is set; CEI UI 1.2 stream; no async, no HITL clarify yet |
+| Drafting | 2 — document preparation and export | **Exists (partial)** — AgentCore Runtime in CDK; export service and exports routes exist; `InMemorySaver`; no outline approval yet; calls the Research graph in-process for its research subgraph (same runtime/session, not through the Router) |
+| Analysis | 3 — competitor/market/legal analysis | **Exists (partial)** — MVP slice (B94): AgentCore Runtime in CDK; scope pause and resume through `POST /ui-actions`; `InMemorySaver` |
+| Pipeline Manager | 4 — orchestrates the other agents | **Exists (partial)** — MVP slice (B94/B102): AgentCore Runtime in CDK; plan approval; durable Job ID Store; steps run in-process, not through `InvokeAgentRuntime` |
+| Tool Agent (13 YAML profiles, including NCBI, in `backend/agents/tool_agent/profiles/`) | single-source chat | **Exists (partial)** — code only; no runtime in CDK |
 
 Each specialist agent has science-mode and business-mode system prompt variants, set per chat and changeable mid-chat. Users select their preferred Bedrock model per chat, subject to a configurable global blocklist — no per-user model restriction.
 
-**HITL points (planned, B72):**
+**HITL points (B72).** Only Analysis scope confirmation and Pipeline plan approval pause today. The Research and Drafting points are planned:
 - Research — a clarifying question when triage finds no suitable source, or the request is ambiguous.
 - Drafting — outline approval before the full draft; revision requests handled through an `interrupt` that resumes into the revise loop.
 - Analysis — scope confirmation (competitors, market, jurisdiction) before analysis starts.
 - All agents can ask multiple-choice or free-text questions using the existing inline tools (`ask_user_question`, `present_alternatives`, `request_plan_approval`, `get_user_input`).
 
-**Checkpointer (planned):** `AgentCoreMemorySaver` for every agent, replacing today's `InMemorySaver`. It backs crash resume, HITL pause/resume (via a LangGraph `interrupt`, with no fixed time limit on the wait, up to the checkpoint's maximum event expiry — expected around 365 days, exact value to be verified; after that the question shows "expired, start again" instead of resuming), and async-job resume after a kill.
+**Checkpointer (partial):** the target is `AgentCoreMemorySaver` for every agent. Today only Research uses it (when `CEI_RESEARCH_MEMORY_ID` is set). Drafting, Analysis, and Pipeline Manager still use `InMemorySaver`. It backs crash resume, HITL pause/resume (via a LangGraph `interrupt`, with no fixed time limit on the wait, up to the checkpoint's maximum event expiry — expected around 365 days, exact value to be verified; after that the question shows "expired, start again" instead of resuming), and async-job resume after a kill.
 
 ---
 
 ## 8. Memory and Knowledge Base
 
-**Planned — not built.**
+**Exists (partial).**
 
-- **AgentCore Memory (short-term)** — `AgentCoreMemorySaver` checkpointer, described above.
-- **AgentCore Memory (long-term)** — built-in strategies only (user preferences, semantic facts, and corrections the user explicitly asks the agent to remember); no explicit "remember" tool, and users cannot see or edit memories in the first release.
-- **Knowledge Base** — Amazon Bedrock Knowledge Base backed by **S3 Vectors**. Every attached document is always chunked and indexed, never inserted into context in full. Every chunk carries `user_id`, `session_id`, and `file_id` metadata; every retrieval applies that filter, enforced inside the Gateway Lambda (the agent cannot change the filter). A foundation-model parser also indexes PNG/JPG and CSV; images also go directly to vision-capable models, and CSV also goes to the Code Interpreter.
+- **AgentCore Memory (short-term)** — **Exists (partial).** `CEIResearchMemory` (`CfnMemory`, 365-day event expiry) backs the Research checkpointer, described above.
+- **AgentCore Memory (long-term)** — **Exists (partial).** `CEIResearchMemory` has the `user_preferences` and `semantic_facts` strategies, and the Research agent reads them. The other agents do not use them yet. Target: built-in strategies only (user preferences, semantic facts, and corrections the user explicitly asks the agent to remember); no explicit "remember" tool, and users cannot see or edit memories in the first release.
+- **Knowledge Base** — **Planned — not built.** Amazon Bedrock Knowledge Base backed by **S3 Vectors**. Every attached document is always chunked and indexed, never inserted into context in full. Every chunk carries `user_id`, `session_id`, and `file_id` metadata; every retrieval applies that filter, enforced inside the Gateway Lambda (the agent cannot change the filter). A foundation-model parser also indexes PNG/JPG and CSV; images also go directly to vision-capable models, and CSV also goes to the Code Interpreter.
 
 ---
 
 ## 9. Guardrails, Prompt Caching, and Model Selection
 
-**Planned — not built**, except prompt caching design (kept from an earlier decision, not yet implemented).
+**Planned — not built.** `backend/agents/shared/runtime/model_policy.py` and `backend/lib/constructs/model-guardrail.ts` are foundations that no agent or stack uses yet.
 
 - **Guardrails** — Amazon Bedrock Guardrails on every agent model call. The PII/PHI filter masks user input only; tool results and model output are not filtered, so public data (for example NPI provider names) is not broken by the filter. Guardrail configuration is never shown in the trace.
 - **Model selection** — the user selects any Bedrock model per chat; a configurable environment-variable blocklist removes specific model IDs app-wide. **Exists (partial):** `shared/config.py` has one fixed `default_model_id`; there is no picker and no blocklist enforcement yet.
@@ -170,17 +175,17 @@ Each specialist agent has science-mode and business-mode system prompt variants,
 
 CEI UI 1.1 is **implemented** for completed JSON responses: content type `application/vnd.cei.ui+json`, protocol `cei-ui`, servers emit version `1.1`, clients and stored history also accept `1.0`. A completed response contains one flat, allowlisted component graph built by deterministic presenters from a typed `ResponseDocument`. Models never emit component records or arbitrary UI; the only model-authored code is the sandboxed `Artifact` component, which runs only inside an iframe sandbox, never in the main page.
 
-**Planned — not built:** CEI UI 1.2 adds progressive SSE patch events (`surface_begin`, `component_add`, `text_delta`, `component_update`, `grounding_update`, `trace_event`, `progress`, `usage`, `hitl_request`, `job_handoff`, `surface_end`, `error`) on top of the same 1.1 component contract — a transport change only, not a new component catalog. This is also how the collapsible "thinking block" is populated: the client renders incoming `trace_event`s while the run is in progress, and collapses the block once the surface completes; the user can re-expand it later from the stored, lazily-loaded trace.
+**Exists (partial):** CEI UI 1.2 adds progressive SSE patch events (`surface_begin`, `component_add`, `text_delta`, `component_update`, `grounding_update`, `trace_event`, `progress`, `usage`, `hitl_request`, `job_handoff`, `surface_end`, `error`) on top of the same 1.1 component contract — a transport change only, not a new component catalog. This is also how the collapsible "thinking block" is populated: the client renders incoming `trace_event`s while the run is in progress, and collapses the block once the surface completes; the user can re-expand it later from the stored, lazily-loaded trace. Research emits 1.2 today; the other agents return completed 1.1 surfaces.
 
-**Exists (partial):** the local Next.js proxy routes can submit and validate typed actions, gated behind `CEI_ENABLE_LOCAL_PROXY=true`; this is a preview only, not the production action endpoint (`POST /ui-actions`, planned).
+**Exists:** typed actions go to `POST /ui-actions` (UiActions Lambda, STREAM mode). It checks session ownership and resumes the owning agent. The local demo sends actions through the agent proxy (`op: "resume"`) instead.
 
-See [CEI UI Protocol 1.1](./cei-ui-protocol.md) for the full contract, and its "Planned: CEI UI 1.2" section for the streaming addition. Full event catalog: `.agents/specs/streaming-protocol.md`.
+See [CEI UI Protocol 1.1](./cei-ui-protocol.md) for the full contract, and its "CEI UI 1.2" section for the streaming addition. Full event catalog: `.agents/specs/streaming-protocol.md`.
 
 ---
 
 ## 11. Observability, Alarms, and Security
 
-**Planned — not built.**
+**Exists (partial).** `backend/lib/constructs/observability.ts` defines the SNS topic, the alarms for the deployed resources, and the operations dashboard; see [Observability](./observability.md). Cedar deny alarms and Guardrail alarms wait for their features.
 
 - **Observability** — AWS-side only: AgentCore Observability (CloudWatch GenAI Observability, OTel traces) and CloudWatch dashboards, visible only to AWS account operators, not connected to the product UI.
 - **Alarms** — CloudWatch alarms to an SNS topic with an admin email set by `deploy.sh`, covering: API/Lambda errors (API Gateway 5xx rate, Lambda errors/throttles, DynamoDB throttling), security events (WAF block spikes, Cedar Policy denies, sign-up spikes), and Guardrail intervention spikes. No agent-health alarms — stale jobs are handled by the watchdog and shown in the dashboard instead.
@@ -191,13 +196,13 @@ See [CEI UI Protocol 1.1](./cei-ui-protocol.md) for the full contract, and its "
 
 ## 12. Data Stores
 
-**Planned — not built.** DynamoDB: Session Metadata Store, Chat History Store (trace stored inline), Job ID Store, User Metadata Table, Attachment Metadata Store. S3: Attachments Bucket, S3 Vectors for the Knowledge Base. Secrets Manager: API Key Store, one secret per user per source (`cei/user-keys/{user_id}/{source_id}`). See `docs/provisioned-resources.md` for what is really deployed today (only the Code Interpreter), and `.agents/specs/data-model.md` for full schemas.
+**Exists (partial).** DynamoDB tables that exist: `ChatMetadataStore`, `ChatHistoryStore` (trace stored inline), `ExportMetadataStore`, `ActiveRunsStore`, `JobIdStore`, and `NcbiRateLimiter`. S3 buckets that exist: Attachments and Exports. Planned: User Metadata Table, Attachment Metadata Store, S3 Vectors for the Knowledge Base, and the API Key Store routes. The data-source Lambdas have key-lookup code for `cei/user-keys/{user_id}/{source_id}`, but they have no Secrets Manager grant and get no user ID yet (B99), so the lookup never runs. See `docs/provisioned-resources.md` for the full deployed list, and `.agents/specs/data-model.md` for full schemas.
 
 ---
 
 ## 13. Region and Deployment
 
-**Planned — not built.** Region is configurable through environment variables and CDK context — no fixed Region. `deploy.sh` checks that the chosen Region has every required service (AgentCore Runtime/Gateway/Memory/Policy, S3 Vectors, Bedrock Knowledge Base, selected models) before deploying. Single environment; developers use local AgentCore CLI runs. All AgentCore resources (runtimes, Gateway and targets, Memory, Policy engine, Knowledge Base) go into CDK; `agentcore.json` stays local-development-only. See `docs/deploymentGuide.md`.
+**Exists (partial).** Region is configurable through environment variables and CDK context — no fixed Region. `deploy.sh` checks that the chosen Region has every required service (AgentCore Runtime/Gateway/Memory/Policy, S3 Vectors, Bedrock Knowledge Base, selected models) before deploying. Single environment; developers use local AgentCore CLI runs. All AgentCore resources (runtimes, Gateway and targets, Memory, Policy engine, Knowledge Base) go into CDK; `agentcore.json` stays local-development-only. See `docs/deploymentGuide.md`.
 
 ---
 
@@ -229,10 +234,10 @@ The diagram at `docs/media/architecture.png` is **not updated** and does not ref
 
 | Tool type | Approach | Status |
 |---|---|---|
-| Life Sciences Operations | AgentCore Gateway Lambda target | Planned |
+| Life Sciences Operations | AgentCore Gateway Lambda target | Exists |
 | Code sandbox (data analysis, transformations) | AgentCore Code Interpreter | Exists |
 | Web search | Built-in AgentCore Web Search connector | Planned |
-| Public data source search | AgentCore Gateway Lambda targets (10 sources + NCBI) | Planned (direct HTTP calls exist locally) |
+| Public data source search | AgentCore Gateway Lambda targets (12 sources + NCBI) | Exists |
 
 ---
 
