@@ -99,7 +99,7 @@ def pdf_code(title: str, sections_json: str, charts_json: str) -> str:
         )
         story = []
 
-        story.append(Paragraph(title, S["title"]))
+        story.append(Paragraph(md_inline(title), S["title"]))
         story.append(HRFlowable(width="100%", thickness=1.5, color=C_H2, spaceAfter=16))
 
         for sec in sorted(sections, key=lambda s: s.get("order", 0)):
@@ -157,7 +157,7 @@ def pdf_code(title: str, sections_json: str, charts_json: str) -> str:
                     img_buf = io.BytesIO(base64.b64decode(b64))
                     story.append(KeepTogether([
                         RLImage(img_buf, width=5.5 * inch, height=3.3 * inch),
-                        Paragraph(chart_title, S["caption"]),
+                        Paragraph(md_inline(chart_title), S["caption"]),
                         Spacer(1, 0.1 * inch),
                     ]))
 
