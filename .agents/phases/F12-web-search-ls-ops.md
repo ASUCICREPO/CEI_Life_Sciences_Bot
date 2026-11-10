@@ -77,6 +77,21 @@ adds `SourceType.WEB` and an optional `snippet` field, and makes `authors`/`year
 built-in connector registers on this Gateway's `tools/list` (assumed `WebSearch` here, an
 installed-SDK fact, not yet confirmed against a live Gateway) stays an S2 open item per B86.
 
+## Implementation notes (Research wiring, wave2)
+`research/nodes.py` now offers `"web"` as a triage-selected source (same shape as the 10 data
+sources + NCBI), gated on `web_search_enabled()`: the prompt's source list and "Valid source
+keys" line only mention `web` when the flag is true, and `triage()` additionally strips any
+`web` pick from the structured-output `TriagePlan` when the flag is false, so a model that still
+emits the enum value cannot bypass the gate. `retrieve()` calls `shared/tools/web_search.py`'s
+`_run()` directly (already gateway/trim-tested) instead of going through `ALL_DATA_SOURCE_TOOLS`,
+wraps its output into a `DataSourceResult`/`Citation` list, and reuses the exact
+`except GatewayUnavailableError: raise` / `except Exception: log+continue` pattern the other
+sources use, so a web failure degrades like any other source instead of crashing the turn.
+`synthesize()`'s evidence-context line and `cite()`'s bibliography line both special-case
+`SourceType.WEB` to render `title — url` / `title. url` with no authors/year, since
+`Citation.authors`/`year` are `None` for web and the previous unconditional `cit.authors[:3]`
+slice would have raised. No change was needed in `shared/tools/web_search.py` itself.
+
 ## Risks and open items
 - Web Search deployment is resolved by B103 (above): an unpinned `ConnectorSource` target is deployed, since CloudFormation has no `source.version` field to pin against. ~~Do not deploy an unpinned default in place of B44's approved 1.2.0~~ (superseded).
 - Resolved: B70 states plainly that "all agents and tool agents always get" the shared `cei-tools/common` scope, and B86 confirms the Code Interpreter is not a Gateway target at all (so it is outside this Cedar scope question entirely — it is controlled by the runtime binding). This phase implements the granted-by-default reading for LS Ops and Web Search; no further decision is needed. If `auth-and-tool-scope.md` still shows this as open when you read it, follow B70/B86, not the older spec text — the parallel spec-update agent may not have applied them yet.
