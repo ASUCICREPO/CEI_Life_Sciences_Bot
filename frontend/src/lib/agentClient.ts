@@ -94,7 +94,20 @@ export function setAgentTokenProvider(provider: (() => Promise<string | null>) |
   tokenProvider = provider;
 }
 
-async function postInvocation(agent: AgentName, body: unknown, sessionId: string, timeoutMs: number): Promise<unknown> {
+interface PostTarget {
+  /** Absolute or same-origin URL; defaults to the agent proxy for `agent`. */
+  url?: string;
+  /** The AgentCore session header; the API Gateway CORS allowlist does not include it, so /ui-actions omits it. */
+  sessionHeader?: boolean;
+}
+
+async function postInvocation(
+  agent: AgentName,
+  body: unknown,
+  sessionId: string,
+  timeoutMs: number,
+  target: PostTarget = {},
+): Promise<unknown> {
   let token: string | null;
   try { token = tokenProvider ? await tokenProvider() : null; }
   catch (error) { reportClientFailure('auth', 'auth_error'); throw error; }
@@ -106,12 +119,12 @@ async function postInvocation(agent: AgentName, body: unknown, sessionId: string
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
-    response = await fetch(agentPath(agent), {
+    response = await fetch(target.url ?? agentPath(agent), {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         accept: 'application/json',
-        [SESSION_HEADER]: sessionId,
+        ...(target.sessionHeader === false ? {} : { [SESSION_HEADER]: sessionId }),
         authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(body),
@@ -190,8 +203,14 @@ export async function invokeAgent(agent: AgentName, payload: AgentRunPayload, se
   return toAgentEnvelope(raw);
 }
 
+// ADR: deployed builds send actions to POST /ui-actions (F13) | Rationale: the API checks session ownership and
+// picks the owning runtime from the session's stored agent, not from the browser; the local demo has no API and
+// keeps the agent proxy's op:"resume" path
 export async function sendAction(agent: AgentName, action: ActionRequest, sessionId: string): Promise<AgentEnvelope> {
-  const raw = await postInvocation(agent, { op: 'resume', action }, sessionId, RUN_TIMEOUT_MS);
+  const apiBaseUrl = getLoadedRuntimeConfig()?.apiBaseUrl;
+  const raw = apiBaseUrl
+    ? await postInvocation(agent, action, sessionId, RUN_TIMEOUT_MS, { url: `${apiBaseUrl}/ui-actions`, sessionHeader: false })
+    : await postInvocation(agent, { op: 'resume', action }, sessionId, RUN_TIMEOUT_MS);
   const envelope = toAgentEnvelope(raw);
   if (envelope.action_response && !actionResponseMatchesRequest(action, envelope.action_response)) {
     reportClientFailure('agent', 'invalid_response');
