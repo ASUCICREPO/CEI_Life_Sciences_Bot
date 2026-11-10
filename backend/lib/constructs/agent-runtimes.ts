@@ -277,6 +277,23 @@ export class AgentRuntimes extends Construct {
     resource.addPropertyOverride('RequestHeaderConfiguration.RequestHeaderAllowlist', ['Authorization', 'X-Cei-Gateway-Token']);
   }
 
+  /**
+   * F16: the Pipeline runtime records its background jobs in the Job ID Store and holds the user's single
+   * background slot in the Active-run table (B22). Exactly the actions shared/runtime/durable_jobs.py calls.
+   */
+  public configureJobStore(jobTable: dynamodb.ITable, activeRunsTable: dynamodb.ITable): void {
+    const runtime = this.runtimes.Pipeline;
+    const resource = runtime.node.defaultChild as agentcore.CfnRuntime;
+    resource.addPropertyOverride('EnvironmentVariables.CEI_JOB_TABLE', jobTable.tableName);
+    resource.addPropertyOverride('EnvironmentVariables.CEI_ACTIVE_RUNS_TABLE', activeRunsTable.tableName);
+    runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'], resources: [jobTable.tableArn],
+    }));
+    runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'], resources: [activeRunsTable.tableArn],
+    }));
+  }
+
   /** Exactly the DynamoDB actions ConversationRecorder / ChatHistoryStore / checkpoint writer call. */
   private grantData(runtime: agentcore.Runtime, props: AgentRuntimesProps): void {
     // ADR: explicit statements, not Table.grant | Rationale: Table.grant appends `<table>/index/*` once a table has GSIs (IAM5)

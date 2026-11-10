@@ -743,6 +743,7 @@ export class BackendStack extends cdk.Stack {
       allowedOrigins,
       runtimeStopUrls: agentRuntimes.stopUrls,
     });
+    agentRuntimes.configureJobStore(backgroundJobs.table, activeRunsTable);
     const gateway = new ToolGateway(this, 'ToolGateway', {
       userPool,
       cognitoDomainUrl,

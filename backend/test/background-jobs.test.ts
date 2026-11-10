@@ -102,6 +102,18 @@ describe('F16 background jobs', () => {
     expect(fn.Properties.Environment.Variables.JOB_TABLE).toBeDefined();
   });
 
+  test('only the Pipeline runtime writes jobs, with exact table actions', () => {
+    const runtimes = Object.values(template.findResources('AWS::BedrockAgentCore::Runtime')) as any[];
+    const withJobs = runtimes.filter((r) => r.Properties.EnvironmentVariables?.CEI_JOB_TABLE !== undefined);
+    expect(withJobs).toHaveLength(1);
+    expect(withJobs[0].Properties.AgentRuntimeName).toBe('CEIPipelineManager');
+    expect(withJobs[0].Properties.EnvironmentVariables.CEI_ACTIVE_RUNS_TABLE).toBeDefined();
+    const statements = statementsForRole('AgentRuntimesPipeline').filter((s) =>
+      JSON.stringify(s.Resource).includes('BackgroundJobsJobIdStore'));
+    expect(statements.flatMap((s) => ([] as string[]).concat(s.Action)).sort())
+      .toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem']);
+  });
+
   test('no unsuppressed cdk-nag errors', () => {
     const errors = Annotations.fromStack(stack).findError('*', Match.stringLikeRegexp('AwsSolutions-.*'));
     expect(errors).toEqual([]);
