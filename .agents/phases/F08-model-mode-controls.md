@@ -11,6 +11,10 @@ and model fields are filled conditionally so a concurrent settings update wins.
 This temporary restriction is not the approved final model
 selection behavior. Drafting, title-model policy, Guardrails, discovery, settings,
 and prompt caching remain incomplete; no deployed behavior has been verified.
+The current runtime IAM policy permits only Anthropic inference profiles and
+foundation models. A configured non-Anthropic default can therefore fail with
+an IAM denial even though the value is propagated. Do not broaden inference
+permissions until model discovery and global blocklist enforcement are in place.
 
 ## Goal
 
