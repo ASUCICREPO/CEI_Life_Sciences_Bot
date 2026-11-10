@@ -80,6 +80,51 @@ def test_metadata_failure_removes_uploaded_object(repository, monkeypatch):
     assert s3.list_objects_v2(Bucket="cei-export-test").get("KeyCount") == 0
 
 
+def test_ambiguous_reservation_never_uploads(repository, monkeypatch):
+    repo, s3 = repository
+    original_put = repo._table.put_item
+    def ambiguous_put(**kwargs):
+        original_put(**kwargs)
+        raise TimeoutError("reservation response lost")
+    monkeypatch.setattr(repo._table, "put_item", ambiguous_put)
+    with pytest.raises(TimeoutError):
+        save(repo)
+    pending = repo.list_for_session("alice", S1).items
+    assert len(pending) == 1 and pending[0]["status"] == "processing"
+    assert s3.list_objects_v2(Bucket="cei-export-test").get("KeyCount") == 0
+
+
+def test_ambiguous_s3_upload_remains_indexed_and_deletable(repository, monkeypatch):
+    repo, s3 = repository
+    original_put = s3.put_object
+    def ambiguous_put(**kwargs):
+        original_put(**kwargs)
+        raise TimeoutError("upload response lost")
+    monkeypatch.setattr(s3, "put_object", ambiguous_put)
+    with pytest.raises(TimeoutError):
+        save(repo)
+    pending = repo.list_for_session("alice", S1).items
+    assert len(pending) == 1 and pending[0]["status"] == "failed"
+    assert s3.head_object(Bucket="cei-export-test", Key=pending[0]["s3_key"])["ContentLength"]
+    repo.delete_session("alice", S1)
+    assert repo.list_for_session("alice", S1).items == []
+    assert s3.list_objects_v2(Bucket="cei-export-test").get("KeyCount") == 0
+
+
+def test_ambiguous_ready_status_keeps_object_indexed(repository, monkeypatch):
+    repo, s3 = repository
+    def fail_update(**kwargs):
+        raise TimeoutError("ready response lost")
+    monkeypatch.setattr(repo._table, "update_item", fail_update)
+    with pytest.raises(TimeoutError):
+        save(repo)
+    pending = repo.list_for_session("alice", S1).items
+    assert len(pending) == 1 and pending[0]["status"] == "processing"
+    assert s3.head_object(Bucket="cei-export-test", Key=pending[0]["s3_key"])["ContentLength"]
+    repo.delete_session("alice", S1)
+    assert s3.list_objects_v2(Bucket="cei-export-test").get("KeyCount") == 0
+
+
 def test_delete_session_paginates_without_s3_listing(repository, monkeypatch):
     repo, s3 = repository
     for _ in range(102):

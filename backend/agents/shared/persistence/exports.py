@@ -36,7 +36,12 @@ class ExportRepository:
 
     def save(self, *, user_id: str, session_id: str, turn_id: str, filename: str,
              format: str, data: bytes, reviewed: bool) -> dict[str, Any]:
-        """Persist a reviewed export; never publish metadata before the object exists."""
+        """Reserve metadata before writing the object, then mark the report ready.
+
+        The caller must hold a deletion fence through this entire operation.
+        A failed or ambiguous S3 write leaves an indexed record with its object
+        key so deletion and reconciliation can find any object S3 may have saved.
+        """
         if reviewed is not True:
             raise ValueError("review acknowledgment is required")
         if not user_id or not is_session_uuid(session_id) or not turn_id:
@@ -51,21 +56,34 @@ class ExportRepository:
         now = datetime.now(UTC).isoformat()
         item = {"user_id": user_id, "export_id": export_id, "session_id": session_id.lower(),
                 "turn_id": turn_id, "s3_key": object_key, "filename": filename, "format": format,
-                "size": len(data), "created_at": now, "status": "ready", "reviewed_at": now}
-        self._s3.put_object(Bucket=self._bucket, Key=object_key, Body=data, StorageClass="INTELLIGENT_TIERING")
+                "size": len(data), "created_at": now, "status": "processing", "reviewed_at": now}
+        # If this write times out, no object upload is attempted: an ambiguous
+        # reservation may remain, but an unindexed report cannot be created.
+        self._table.put_item(Item=item, ConditionExpression="attribute_not_exists(user_id)")
         try:
-            self._table.put_item(Item=item, ConditionExpression="attribute_not_exists(user_id)")
+            self._s3.put_object(Bucket=self._bucket, Key=object_key, Body=data, StorageClass="INTELLIGENT_TIERING")
         except Exception:
-            # A timeout can happen after DynamoDB committed the write. Check before deleting
-            # the object; if DynamoDB is unavailable too, preserve it for reconciliation.
+            # S3 might have committed despite a timeout. Keep its key indexed;
+            # a cleanup worker can delete it, and a missing object is harmless.
             try:
-                existing = self.get(user_id, export_id)
+                self._table.update_item(Key={"user_id": user_id, "export_id": export_id},
+                                        UpdateExpression="SET #status = :failed",
+                                        ConditionExpression="#status = :processing AND s3_key = :key",
+                                        ExpressionAttributeNames={"#status": "status"},
+                                        ExpressionAttributeValues={":failed": "failed", ":processing": "processing",
+                                                                   ":key": object_key})
             except Exception:
-                raise
-            if existing and existing.get("s3_key") == object_key:
-                return existing
-            self._s3.delete_object(Bucket=self._bucket, Key=object_key)
+                pass  # Leave the processing reservation for reconciliation.
             raise
+        # If this update fails or its result is uncertain, retain the indexed
+        # reservation. Never delete an object based on an ambiguous response.
+        self._table.update_item(Key={"user_id": user_id, "export_id": export_id},
+                                UpdateExpression="SET #status = :ready",
+                                ConditionExpression="#status = :processing AND s3_key = :key",
+                                ExpressionAttributeNames={"#status": "status"},
+                                ExpressionAttributeValues={":ready": "ready", ":processing": "processing",
+                                                           ":key": object_key})
+        item["status"] = "ready"
         return item
 
     def get(self, user_id: str, export_id: str) -> dict[str, Any] | None:
