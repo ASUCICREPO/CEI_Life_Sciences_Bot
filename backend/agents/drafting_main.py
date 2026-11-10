@@ -216,6 +216,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         "outline_revision": 0,
         "outline_approved": False,
         "outline_correction": None,
+        "skip_outline_approval": False,
         "draft": "",
         "draft_document": None,
         "revision_feedback": None,

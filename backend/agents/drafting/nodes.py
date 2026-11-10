@@ -466,6 +466,9 @@ def _build_outline_approval_surface(outline_text: str, *, revision: int) -> dict
 
 def approve_outline(state: DraftingState) -> dict[str, Any]:
     """Pause for outline approval before the full draft is generated (B72)."""
+    if state.get("skip_outline_approval"):
+        # ADR: skip B72's outline pause | non-interactive in-process run, no checkpointer to pause against
+        return {"outline_approved": True, "trace": [TraceEntry(stage="OUTLINE_APPROVE", detail="skipped: non-interactive")]}
     outline_text = state.get("outline", "")
     revision = state.get("outline_revision", 1)
     surface = _build_outline_approval_surface(outline_text, revision=revision)

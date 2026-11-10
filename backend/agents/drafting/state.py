@@ -34,6 +34,8 @@ class DraftingState(BaseAgentState):
     outline_revision: int
     outline_approved: bool
     outline_correction: str | None
+    # In-process callers (Pipeline dispatcher) have no interactive user or checkpointer to pause against
+    skip_outline_approval: bool
     draft: str
     draft_document: ResponseDocument | None
     revision_feedback: str | None

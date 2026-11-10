@@ -121,6 +121,8 @@ class InProcessDispatcher:
             "synthesis": "",
             "response_document": None,
             "trace": [],
+            # ADR: skip B72's clarify pause | no interactive user, no checkpointer to pause against
+            "clarified": True,
         }
         result = await graph.ainvoke(initial_state, config={"configurable": {"thread_id": session_id}})
         text = final_ai_text(result.get("messages", [])) or ""
@@ -149,6 +151,7 @@ class InProcessDispatcher:
             "guidelines": [],
             "research_questions": [],
             "research_findings": [],
+            "skip_outline_approval": True,
             "draft": "",
             "draft_document": None,
             "revision_feedback": None,
