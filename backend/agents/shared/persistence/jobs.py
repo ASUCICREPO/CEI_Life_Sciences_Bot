@@ -218,6 +218,12 @@ class JobRepository:
     def request_cancel(self, user_id: str, job_id: str) -> dict[str, Any]:
         return self._transition(user_id, job_id, {"cancel_requested": True}, allowed=tuple(ACTIVE_STATUSES))
 
+    def delete(self, user_id: str, job_id: str) -> None:
+        """Remove one job row (F19 account-delete cascade, B58). Idempotent: no-op if already gone."""
+        if not user_id or not valid_job_id(job_id):
+            return
+        self._table.delete_item(Key={"user_id": user_id, "job_id": job_id})
+
     def fail_if_unchanged(self, item: dict[str, Any], error: str) -> bool:
         """Watchdog: fail a stale job only if no write happened since it was observed."""
         try:

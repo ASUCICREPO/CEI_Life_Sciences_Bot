@@ -62,3 +62,7 @@ class UserMetadataRepository:
             user_id=user_id, default_model_id=default_model_id, default_mode=default_mode,
             created_at=created_at, updated_at=now,
         )
+
+    def delete(self, user_id: str) -> None:
+        """Remove the "profile" settings row (F19 account-delete cascade, B58). Idempotent."""
+        self._table.delete_item(Key={"user_id": user_id, RECORD_SORT_KEY: _PROFILE_RECORD})

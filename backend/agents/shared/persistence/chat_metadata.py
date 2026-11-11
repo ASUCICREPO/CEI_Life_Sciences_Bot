@@ -156,6 +156,9 @@ class BaseChatMetadataRepository(ABC):
     @abstractmethod
     def archive(self, user_id: str, session_id: str) -> None: ...
 
+    @abstractmethod
+    def delete(self, user_id: str, session_id: str) -> None: ...
+
 
 class ChatMetadataRepository(BaseChatMetadataRepository):
 
@@ -406,3 +409,8 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
 
     def archive(self, user_id: str, session_id: str) -> None:
         self._update(user_id, session_id, {"status": ChatStatus.ARCHIVED.value})
+
+    def delete(self, user_id: str, session_id: str) -> None:
+        """Remove one session's metadata row (F19 account-delete cascade, B58/B104). Idempotent: deleting
+        an already-deleted or never-existing row is not an error, so a retried cascade is safe."""
+        self._table.delete_item(Key={"user_id": user_id, "session_id": session_id})
