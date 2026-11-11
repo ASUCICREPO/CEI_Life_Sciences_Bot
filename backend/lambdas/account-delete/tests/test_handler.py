@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -9,6 +10,11 @@ import pytest
 from moto import mock_aws
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "handler.py"
+LAMBDAS = Path(__file__).resolve().parents[2]
+# Same as the deployed layer: `http_errors` from lambdas/shared, `shared.persistence` from backend/agents.
+for _path in (str(LAMBDAS / "shared"), str(LAMBDAS.parent / "agents")):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 
 def _load_handler():
