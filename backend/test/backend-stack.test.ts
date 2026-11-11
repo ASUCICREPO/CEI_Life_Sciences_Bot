@@ -4,6 +4,7 @@ import { Template, Match } from 'aws-cdk-lib/assertions';
 import { Annotations } from 'aws-cdk-lib/assertions';
 import { BackendStack, BackendStackProps } from '../lib/backend-stack';
 import { DeployConfig, DEFAULT_LIMITS } from '../lib/config/deploy-config';
+import { memoSynth } from './helpers/memo-synth';
 
 const FIXTURE_ASSET_PATH = path.join(__dirname, 'fixtures', 'spa');
 
@@ -31,11 +32,21 @@ function testStack(app: cdk.App, id: string, overrides: Partial<BackendStackProp
   });
 }
 
+// ADR: memo key = JSON of overrides | Rationale: every test here builds 'TestStack' with the same
+// env/frontendAssetPath; only config/webAclArn vary, so they fully determine the synthesized template
+function built(overrides: Partial<BackendStackProps> = {}) {
+  const key = JSON.stringify(overrides);
+  return memoSynth(key, () => {
+    const app = new cdk.App();
+    const stack = testStack(app, 'TestStack', overrides);
+    const template = Template.fromStack(stack);
+    return { app, stack, template };
+  });
+}
+
 describe('BackendStack', () => {
   it('creates the AgentCore Code Interpreter', () => {
-    const app = new cdk.App();
-    const stack = testStack(app, 'TestStack');
-    const template = Template.fromStack(stack);
+    const { template } = built();
     template.resourceCountIs('AWS::BedrockAgentCore::CodeInterpreterCustom', 1);
     template.hasResourceProperties('AWS::BedrockAgentCore::CodeInterpreterCustom', {
       Name: 'ceiLifeSciencesCI',
@@ -43,25 +54,19 @@ describe('BackendStack', () => {
   });
 
   it('has no WebSearchEnabled output without a config', () => {
-    const app = new cdk.App();
-    const stack = testStack(app, 'TestStack');
-    const template = Template.fromStack(stack);
+    const { template } = built();
     expect(Object.keys(template.findOutputs('WebSearchEnabled'))).toHaveLength(0);
   });
 
   it('exposes config and a WebSearchEnabled output when a config is supplied', () => {
-    const app = new cdk.App();
     const config = testConfig({ webSearchEnabled: true });
-    const stack = testStack(app, 'TestStack', { config });
+    const { stack, template } = built({ config });
     expect(stack.config).toBe(config);
-    const template = Template.fromStack(stack);
     template.hasOutput('WebSearchEnabled', { Value: 'true' });
   });
 
   it('tags the stack with Project', () => {
-    const app = new cdk.App();
-    const stack = testStack(app, 'TestStack');
-    const template = Template.fromStack(stack);
+    const { template } = built();
     template.hasResourceProperties(
       'AWS::BedrockAgentCore::CodeInterpreterCustom',
       Match.objectLike({
@@ -71,29 +76,23 @@ describe('BackendStack', () => {
   });
 
   it('produces zero unsuppressed cdk-nag AwsSolutions errors without a config', () => {
-    const app = new cdk.App();
-    const stack = testStack(app, 'TestStack');
-    Template.fromStack(stack);
+    const { stack } = built();
     const errors = Annotations.fromStack(stack).findError('*', Match.stringLikeRegexp('AwsSolutions-.*'));
     expect(errors).toHaveLength(0);
   });
 
   it('produces zero unsuppressed cdk-nag AwsSolutions errors with a config', () => {
-    const app = new cdk.App();
-    const stack = testStack(app, 'TestStack', {
+    const { stack } = built({
       config: testConfig(),
       webAclArn: 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123',
     });
-    Template.fromStack(stack);
     const errors = Annotations.fromStack(stack).findError('*', Match.stringLikeRegexp('AwsSolutions-.*'));
     expect(errors).toHaveLength(0);
   });
 
   describe('Cognito user pool', () => {
     it('requires email verification and disables MFA', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack');
-      const template = Template.fromStack(stack);
+      const { template } = built();
       template.hasResourceProperties('AWS::Cognito::UserPool', {
         AutoVerifiedAttributes: ['email'],
         MfaConfiguration: 'OFF',
@@ -101,9 +100,7 @@ describe('BackendStack', () => {
     });
 
     it('attaches the pre-sign-up trigger', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack');
-      const template = Template.fromStack(stack);
+      const { template } = built();
       template.hasResourceProperties('AWS::Cognito::UserPool', {
         LambdaConfig: Match.objectLike({ PreSignUp: Match.anyValue() }),
       });
@@ -119,9 +116,7 @@ describe('BackendStack', () => {
     });
 
     it('creates the SPA client with no secret and authorization-code-grant only', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack');
-      const template = Template.fromStack(stack);
+      const { template } = built();
       template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
         GenerateSecret: false,
         AllowedOAuthFlows: ['code'],
@@ -130,11 +125,9 @@ describe('BackendStack', () => {
     });
 
     it('adds localhost callback/logout URLs only when allowLocalhostCallback is set', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack', {
+      const { template } = built({
         config: testConfig({ allowLocalhostCallback: true }),
       });
-      const template = Template.fromStack(stack);
       template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
         CallbackURLs: Match.arrayWith(['http://localhost:5173/auth/callback']),
         LogoutURLs: Match.arrayWith(['http://localhost:5173/']),
@@ -142,18 +135,14 @@ describe('BackendStack', () => {
     });
 
     it('omits localhost callback/logout URLs without allowLocalhostCallback', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack', { config: testConfig() });
-      const template = Template.fromStack(stack);
+      const { template } = built({ config: testConfig() });
       const clients = template.findResources('AWS::Cognito::UserPoolClient');
       const client = Object.values(clients)[0];
       expect(client.Properties.CallbackURLs).not.toContain('http://localhost:5173/auth/callback');
     });
 
     it('makes the email attribute required and immutable', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack');
-      const template = Template.fromStack(stack);
+      const { template } = built();
       template.hasResourceProperties('AWS::Cognito::UserPool', {
         Schema: Match.arrayWith([
           Match.objectLike({ Name: 'email', Required: true, Mutable: false }),
@@ -162,18 +151,14 @@ describe('BackendStack', () => {
     });
 
     it('locks the SPA client to exactly ALLOW_REFRESH_TOKEN_AUTH (hosted-UI/PKCE only, no direct-auth flows)', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack');
-      const template = Template.fromStack(stack);
+      const { template } = built();
       const clients = template.findResources('AWS::Cognito::UserPoolClient');
       const client = Object.values(clients)[0];
       expect(client.Properties.ExplicitAuthFlows).toEqual(['ALLOW_REFRESH_TOKEN_AUTH']);
     });
 
     it('gives the SPA client no write access to any attribute (email is immutable at the schema level)', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack');
-      const template = Template.fromStack(stack);
+      const { template } = built();
       const clients = template.findResources('AWS::Cognito::UserPoolClient');
       const client = Object.values(clients)[0];
       expect(client.Properties.WriteAttributes ?? []).toEqual([]);
@@ -183,9 +168,7 @@ describe('BackendStack', () => {
 
   describe('Hosting', () => {
     it('creates a private S3 bucket with OAC-fronted CloudFront', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack');
-      const template = Template.fromStack(stack);
+      const { template } = built();
       template.hasResourceProperties('AWS::S3::Bucket', {
         PublicAccessBlockConfiguration: {
           BlockPublicAcls: true,
@@ -198,9 +181,7 @@ describe('BackendStack', () => {
     });
 
     it('uses a viewer-request SPA fallback without rewriting API errors', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack');
-      const template = Template.fromStack(stack);
+      const { template } = built();
       template.hasResourceProperties('AWS::CloudFront::Distribution', {
         DistributionConfig: Match.objectLike({
           CustomErrorResponses: Match.absent(),
@@ -210,9 +191,7 @@ describe('BackendStack', () => {
     });
 
     it('sets a Permissions-Policy and Cross-Origin-Opener-Policy header', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack');
-      const template = Template.fromStack(stack);
+      const { template } = built();
       template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
         ResponseHeadersPolicyConfig: Match.objectLike({
           CustomHeadersConfig: {
@@ -226,9 +205,7 @@ describe('BackendStack', () => {
     });
 
     it('expires access log objects after 90 days', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack');
-      const template = Template.fromStack(stack);
+      const { template } = built();
       template.hasResourceProperties('AWS::S3::Bucket', {
         LifecycleConfiguration: Match.objectLike({
           Rules: Match.arrayWith([Match.objectLike({ ExpirationInDays: 90, Status: 'Enabled' })]),
@@ -237,19 +214,15 @@ describe('BackendStack', () => {
     });
 
     it('attaches the web ACL when webAclArn is supplied', () => {
-      const app = new cdk.App();
       const webAclArn = 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123';
-      const stack = testStack(app, 'TestStack', { config: testConfig(), webAclArn });
-      const template = Template.fromStack(stack);
+      const { template } = built({ config: testConfig(), webAclArn });
       template.hasResourceProperties('AWS::CloudFront::Distribution', {
         DistributionConfig: Match.objectLike({ WebACLId: webAclArn }),
       });
     });
 
     it('exposes the hosting/auth CfnOutputs', () => {
-      const app = new cdk.App();
-      const stack = testStack(app, 'TestStack', { config: testConfig() });
-      const template = Template.fromStack(stack);
+      const { template } = built({ config: testConfig() });
       for (const outputName of [
         'UserPoolId',
         'UserPoolArn',
@@ -269,8 +242,7 @@ describe('BackendStack', () => {
     });
 
     it('ships the four agent proxy URLs in config.json, not raw AgentCore URLs', () => {
-      const app = new cdk.App();
-      const template = Template.fromStack(testStack(app, 'TestStack', { config: testConfig() }));
+      const { template } = built({ config: testConfig() });
       const deployments = Object.values(template.findResources('Custom::CDKBucketDeployment'));
       const configDeployment = deployments.find((d) => JSON.stringify(d).includes('application/json'));
       expect(configDeployment).toBeDefined();
@@ -285,8 +257,7 @@ describe('BackendStack', () => {
     });
 
     it('fronts the runtimes with a CORS-restricted agent proxy function URL', () => {
-      const app = new cdk.App();
-      const template = Template.fromStack(testStack(app, 'TestStack', { config: testConfig() }));
+      const { template } = built({ config: testConfig() });
       const urls = Object.values(template.findResources('AWS::Lambda::Url'));
       expect(urls).toHaveLength(1);
       const props = urls[0].Properties;
@@ -312,8 +283,7 @@ describe('BackendStack', () => {
     });
 
     it('allows the agent proxy (region-scoped Lambda URL host) in the CSP connect-src, not AgentCore', () => {
-      const app = new cdk.App();
-      const template = Template.fromStack(testStack(app, 'TestStack', { config: testConfig() }));
+      const { template } = built({ config: testConfig() });
       const policies = Object.values(template.findResources('AWS::CloudFront::ResponseHeadersPolicy'));
       const csp = JSON.stringify(policies);
       expect(csp).toMatch(/connect-src [^;]*https:\/\/\*\.lambda-url\.us-east-1\.on\.aws/);
@@ -323,8 +293,7 @@ describe('BackendStack', () => {
 
   describe('Session stores', () => {
     const tables = () => {
-      const app = new cdk.App();
-      const template = Template.fromStack(testStack(app, 'TestStack'));
+      const { template } = built();
       const all = Object.values(template.findResources('AWS::DynamoDB::Table'));
       const byPk = (pk: string) =>
         all.find((t) => t.Properties.KeySchema.some((k: any) => k.KeyType === 'HASH' && k.AttributeName === pk))!;
