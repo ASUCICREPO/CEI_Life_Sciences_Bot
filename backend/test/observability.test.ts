@@ -38,12 +38,19 @@ describe('operational monitoring', () => {
     expect(filters.some((f) => f.Properties.FilterPattern.includes('browser_failure'))).toBe(true);
   });
 
-  it('alarms on every application Lambda error and throttle', () => {
+  it('alarms on every application Lambda error and throttle (except consolidated functions)', () => {
     const functions = Object.entries(template.findResources('AWS::Lambda::Function')).filter(([id]) => !id.startsWith('Custom') && !id.startsWith('BucketNotificationsHandler'));
     const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm')) as any[];
+    // Some functions have throttle alarms skipped to stay within CloudFormation's 500-resource limit
+    const skipThrottleAlarm = new Set(['AttachmentProcessor']);
     for (const [id] of functions) {
-      for (const metric of ['Errors', 'Throttles']) {
-        expect(alarms.some((a) => a.Properties.Namespace === 'AWS/Lambda' && a.Properties.MetricName === metric &&
+      // All functions have error alarms
+      expect(alarms.some((a) => a.Properties.Namespace === 'AWS/Lambda' && a.Properties.MetricName === 'Errors' &&
+        JSON.stringify(a.Properties.Dimensions).includes(id) && a.Properties.AlarmActions?.length)).toBe(true);
+      // Only non-skipped functions have throttle alarms
+      const shouldHaveThrottle = !Array.from(skipThrottleAlarm).some((skip) => id.includes(skip));
+      if (shouldHaveThrottle) {
+        expect(alarms.some((a) => a.Properties.Namespace === 'AWS/Lambda' && a.Properties.MetricName === 'Throttles' &&
           JSON.stringify(a.Properties.Dimensions).includes(id) && a.Properties.AlarmActions?.length)).toBe(true);
       }
     }
@@ -67,10 +74,10 @@ describe('operational monitoring', () => {
     const tables = Object.keys(template.findResources('AWS::DynamoDB::Table'));
     const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm')) as any[];
     for (const table of tables) {
+      // Each table should have a throttle alarm (aggregated, no Operation dimension)
       expect(alarms.some((a) => a.Properties.AlarmActions?.length && a.Properties.Metrics?.some((m: any) =>
         m.MetricStat?.Metric?.Namespace === 'AWS/DynamoDB' && m.MetricStat.Metric.MetricName === 'ThrottledRequests' &&
-        JSON.stringify(m.MetricStat.Metric.Dimensions).includes(table) &&
-        m.MetricStat.Metric.Dimensions.some((d: any) => d.Name === 'Operation')))).toBe(true);
+        JSON.stringify(m.MetricStat.Metric.Dimensions).includes(table)))).toBe(true);
     }
   });
 

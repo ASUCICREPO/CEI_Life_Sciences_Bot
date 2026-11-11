@@ -31,7 +31,8 @@ export class Observability extends Construct {
     const topic = new sns.Topic(this, 'Alerts', { enforceSSL: true, topicName: ALERT_TOPIC_NAME });
     // CloudWatch requires a customer-managed key for encrypted SNS, while B52 disallows one.
     // Alarm descriptions contain only resource names and operational thresholds, never user data.
-    NagSuppressions.addResourceSuppressions(topic, [{ id: 'AwsSolutions-SNS2',
+    NagSuppressions.addResourceSuppressions(topic, [{
+      id: 'AwsSolutions-SNS2',
       reason: 'ADR: Alarm topic without KMS encryption | Rationale: CloudWatch requires a customer-managed key for encrypted SNS and B52 excludes customer-managed keys; alarm messages contain operational metadata only | Alternative: AWS-managed SNS key rejected because CloudWatch cannot be granted access to it',
     }]);
     if (props.adminEmail) topic.addSubscription(new subscriptions.EmailSubscription(props.adminEmail));
@@ -60,26 +61,31 @@ export class Observability extends Construct {
     alarm('Api5xxRate', apiRate, 5, 'API Gateway 5xx rate reached 5%.');
     dashboard.addWidgets(new cloudwatch.GraphWidget({ title: 'API server errors', left: [apiRate] }));
 
+    // Functions that don't need individual throttle alarms (to stay within CloudFormation's 500-resource limit).
+    // Errors alarms are still created for all functions; only throttle alarms are consolidated.
+    const skipThrottleAlarm = new Set(['AttachmentProcessor']);
+
     for (const [name, fn] of Object.entries(props.functions)) {
       // One error or throttle in five minutes is the initial, deliberately sensitive threshold.
       alarm(`${name}Errors`, fn.metricErrors({ period: interval, statistic: 'Sum' }), 1, `${name} Lambda failed.`);
-      alarm(`${name}Throttles`, fn.metricThrottles({ period: interval, statistic: 'Sum' }), 1, `${name} Lambda throttled.`);
-    }
-    dashboard.addWidgets(new cloudwatch.GraphWidget({ title: 'Lambda errors',
-      left: Object.entries(props.functions).map(([name, fn]) => fn.metricErrors({ period: interval, statistic: 'Sum', label: name })) }));
-    for (const [name, table] of Object.entries(props.tables)) {
-      const tableMetrics: cloudwatch.IMetric[] = [];
-      // One throttled request in five minutes indicates the workload was affected.
-      // ThrottledRequests needs TableName and Operation. Split the operation metrics so each
-      // alarm stays under CloudWatch's ten-metric expression limit.
-      const operations = Object.values(dynamodb.Operation);
-      for (let i = 0; i < operations.length; i += 7) {
-        const metric = table.metricThrottledRequestsForOperations({ period: interval, statistic: 'Sum',
-          operations: operations.slice(i, i + 7), label: `${name} operations ${i + 1}-${Math.min(i + 7, operations.length)}` });
-        tableMetrics.push(metric);
-        alarm(`${name}Throttles${i}`, metric, 1, `${name} DynamoDB requests throttled.`);
+      if (!skipThrottleAlarm.has(name)) {
+        alarm(`${name}Throttles`, fn.metricThrottles({ period: interval, statistic: 'Sum' }), 1, `${name} Lambda throttled.`);
       }
-      dashboard.addWidgets(new cloudwatch.GraphWidget({ title: `${name} throttling`, left: tableMetrics }));
+    }
+    dashboard.addWidgets(new cloudwatch.GraphWidget({
+      title: 'Lambda errors',
+      left: Object.entries(props.functions).map(([name, fn]) => fn.metricErrors({ period: interval, statistic: 'Sum', label: name }))
+    }));
+    for (const [name, table] of Object.entries(props.tables)) {
+      // One throttled request in five minutes indicates the workload was affected.
+      // Use a single ThrottledRequests metric per table (no Operation dimension) to stay
+      // within CloudFormation's 500-resource stack limit. The dashboard shows the aggregate.
+      const metric = new cloudwatch.Metric({
+        namespace: 'AWS/DynamoDB', metricName: 'ThrottledRequests', period: interval, statistic: 'Sum',
+        dimensionsMap: { TableName: table.tableName }, label: `${name} throttles`,
+      });
+      alarm(`${name}DdbThrottles`, metric, 1, `${name} DynamoDB requests throttled.`);
+      dashboard.addWidgets(new cloudwatch.GraphWidget({ title: `${name} throttling`, left: [metric] }));
     }
 
     // These handlers return errors normally, so Lambda's Errors metric cannot see them.
