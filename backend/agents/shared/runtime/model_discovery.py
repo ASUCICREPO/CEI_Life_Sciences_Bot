@@ -22,6 +22,7 @@ from shared.runtime.model_policy import is_blocked
 
 _DEFAULT_TTL_SECONDS = 300.0
 _cache: dict[str, tuple[float, list["DiscoveredModel"]]] = {}
+_PROFILE_PREFIXES = ("us.", "eu.", "apac.", "global.")
 
 # ADR: restrict discovery to models the agents can Converse with tool use | picker and
 # write-time validation must only ever surface models these tool-using agents can run.
@@ -64,7 +65,14 @@ def _is_tool_capable(summary: dict[str, Any], model_id: str) -> bool:
     lifecycle = summary.get("modelLifecycle")
     if isinstance(lifecycle, dict) and lifecycle.get("status") == "LEGACY":
         return False
-    return any(fnmatch.fnmatchcase(model_id, pattern) for pattern in _TOOL_CAPABLE_MODEL_ID_PATTERNS)
+    # ADR: strip a region-profile prefix before allowlist matching | mirrors model_policy's base-id
+    # matching; real ListFoundationModels ids never carry one, but this keeps both consistent.
+    base_id = model_id
+    for prefix in _PROFILE_PREFIXES:
+        if base_id.startswith(prefix):
+            base_id = base_id[len(prefix):]
+            break
+    return any(fnmatch.fnmatchcase(base_id, pattern) for pattern in _TOOL_CAPABLE_MODEL_ID_PATTERNS)
 
 
 @dataclass(frozen=True)
