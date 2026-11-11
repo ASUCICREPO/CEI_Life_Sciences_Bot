@@ -208,6 +208,9 @@ function createHandler(responseFrom, deps) {
         if (!closed) { log('error', 'replay_timeout'); stream.end(); }
         return;
       }
+      // B109/F19: a replay (above) reads data that already exists; only a new run is gated here.
+      stage = 'account_gate';
+      if (await deps.accountDeleting(parsed.userId)) throw new RequestError(403, 'forbidden', 'This account is being deleted.');
       // A run id is reserved before the Router starts. A retry can replay but cannot start it twice.
       stage = 'reserve';
       await deps.reserve(key, parsed.userId, parsed.request);
@@ -279,8 +282,10 @@ function routerError(value) {
 function productionDependencies() {
   const { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand, TransactWriteItemsCommand } = require('@aws-sdk/client-dynamodb');
   const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
+  const { isAccountDeleting } = require('../shared/account-gate');
   const db = new DynamoDBClient({}); const lambda = new LambdaClient({});
   const table = process.env.CEI_CHAT_HISTORY_TABLE, metadata = process.env.CEI_CHAT_METADATA_TABLE, runs = process.env.CEI_ACTIVE_RUNS_TABLE;
+  const userMetadata = process.env.CEI_USER_METADATA_TABLE;
   const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean));
   async function invoke(payload) {
     const result = await lambda.send(new InvokeCommand({ FunctionName: process.env.CEI_ROUTER_FUNCTION, Payload: Buffer.from(JSON.stringify(payload)) }));
@@ -298,6 +303,7 @@ function productionDependencies() {
       return { 'Content-Type': sse ? 'text/event-stream' : 'application/json', 'Cache-Control': 'no-cache, no-transform', ...(allowedOrigins.has(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}) };
     },
     async owns(userId, sessionId) { const r = await db.send(new GetItemCommand({ TableName: metadata, Key: { user_id: { S: userId }, session_id: { S: sessionId } }, ConsistentRead: true })); return !!r.Item; },
+    async accountDeleting(userId) { return isAccountDeleting(db, userMetadata, userId, GetItemCommand); },
     async exists(key) { const r = await db.send(new GetItemCommand({ TableName: table, Key: { session_id: { S: key }, sequence_number: { N: '-1' } }, ConsistentRead: true })); return !!r.Item; },
     async at(key, seq) {
       const r = await db.send(new GetItemCommand({ TableName: table, Key: { session_id: { S: key }, sequence_number: { N: String(seq) } }, ConsistentRead: true }));

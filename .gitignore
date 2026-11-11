@@ -28,6 +28,7 @@ out/
 !backend/lambdas/session-runner/*.js
 !backend/lambdas/ui-actions/*.js
 !backend/lambdas/spike-streaming-runner/*.js
+!backend/lambdas/shared/*.js
 *.d.ts
 
 # TypeScript cache

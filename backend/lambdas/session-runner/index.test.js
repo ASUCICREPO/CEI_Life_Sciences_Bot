@@ -10,6 +10,7 @@ function harness() {
   const deps = {
     headers: (_event, sse) => ({ 'Content-Type': sse ? 'text/event-stream' : 'application/json' }),
     owns: async (user, id) => user === 'user-1' && id === session,
+    accountDeleting: async () => false,
     exists: async (key) => heads.has(key),
     at: async (_key, seq) => events.find((e) => e.seq === seq) || null,
     reserve: async (key) => { if (heads.has(key)) throw new Error('duplicate'); heads.add(key); },
@@ -78,6 +79,24 @@ test('persists before streaming and finishes the lease; replay does not start a 
   assert.doesNotMatch(replay.text, /surface_begin/); assert.match(replay.text, /surface_end/);
   assert.deepEqual(h.calls, ['start', 'finish']);
 });
+test('B109: a deleting account cannot start a new run', async () => {
+  const h = harness(); h.deps.accountDeleting = async () => true;
+  const response = await h.invoke(request());
+  assert.equal(response.metadata.statusCode, 403);
+  assert.equal(JSON.parse(response.text).error.code, 'forbidden');
+  assert.deepEqual(h.calls, []);
+});
+
+test('B109: a deleting account can still replay an already-started run', async () => {
+  const h = harness();
+  const first = await h.invoke(request());
+  assert.equal(first.metadata.statusCode, 200);
+  h.deps.accountDeleting = async () => true;
+  const replay = await h.invoke(request({ resume_from_seq: 0 }));
+  assert.equal(replay.metadata.statusCode, 200);
+  assert.match(replay.text, /event: surface_end/);
+});
+
 test('foreign sessions and missing replay heads never start a run', async () => {
   const h = harness(); h.deps.owns = async () => false;
   assert.equal((await h.invoke(request())).metadata.statusCode, 404);

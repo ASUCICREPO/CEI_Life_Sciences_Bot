@@ -10,11 +10,12 @@ function request(body = ACTION, { sub = 'user-1', auth = 'Bearer token' } = {}) 
   return { requestContext: { requestId: 'req-1', authorizer: { claims: { sub } } }, headers: { Authorization: auth }, body: JSON.stringify(body) };
 }
 
-function harness({ agent = 'analysis', envelope = { status: 'completed', text: 'done' }, fail, routeChoice = {} } = {}) {
+function harness({ agent = 'analysis', envelope = { status: 'completed', text: 'done' }, fail, routeChoice = {}, deleting = false } = {}) {
   const calls = [];
   const out = { chunks: [], metadata: null, ended: false };
   const deps = {
     headers: () => ({ 'Content-Type': 'application/json' }),
+    accountDeleting: async () => deleting,
     sessionAgent: async (user, session) => (user === 'user-1' && session === SESSION ? agent : null),
     resume: async (target, parsed) => { calls.push({ target, parsed }); if (fail) throw fail; return envelope; },
     // F9: route-choice-only deps; each test below overrides only what it exercises.
@@ -227,6 +228,23 @@ test('the Router lease is always released even when the agent invocation fails',
   assert.ok(!h.out.chunks.join('').includes('secrets'));
   assert.ok(h.calls.some((c) => c.target === 'routeFinish'));
   assert.equal(h.calls.some((c) => c.target === 'clearPendingChoice'), false);
+});
+
+test('B109: a deleting account cannot resume a paused run', async () => {
+  const h = harness({ deleting: true });
+  await h.handler(request(), {});
+  assert.equal(h.out.metadata.statusCode, 403);
+  assert.equal(h.body().error.code, 'forbidden');
+  assert.equal(h.calls.length, 0);
+});
+
+test('B109: a deleting account cannot start a run through a route choice either', async () => {
+  const future = Math.floor(Date.now() / 1000) + 300;
+  const pending = { message: 'x', mode: 'science', surface_id: 'router-choice-1', expires_at: future };
+  const h = harness({ deleting: true, routeChoice: { pending } });
+  await h.handler(request(routeChoiceAction()), {});
+  assert.equal(h.out.metadata.statusCode, 403);
+  assert.equal(h.calls.some((c) => c.target === 'routeStart'), false);
 });
 
 test('actionResponse echoes the action and attaches a status and message', () => {

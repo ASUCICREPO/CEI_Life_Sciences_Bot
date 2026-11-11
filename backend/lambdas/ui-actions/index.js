@@ -137,6 +137,9 @@ function createHandler(responseFrom, deps) {
     };
     try {
       const parsed = validateRequest(event);
+      // B109/F19: both the route-choice start and a HITL resume start/continue a run; the gate blocks both.
+      stage = 'account_gate';
+      if (await deps.accountDeleting(parsed.userId)) throw new RequestError(403, 'forbidden', 'This account is being deleted.');
       if (isRouteChoice(parsed.action)) {
         // F9/B80: a ChoicePicker pick is not a graph resume -- the session has no agent_type yet -- so it
         // is handled before the RESUMABLE/agent_type lookup below, which only applies once an agent has run.
@@ -170,10 +173,12 @@ function productionDependencies() {
   const crypto = require('crypto');
   const { DynamoDBClient, GetItemCommand, DeleteItemCommand } = require('@aws-sdk/client-dynamodb');
   const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
+  const { isAccountDeleting } = require('../shared/account-gate');
   const db = new DynamoDBClient({});
   const lambda = new LambdaClient({});
   const metadata = process.env.CEI_CHAT_METADATA_TABLE;
   const activeRuns = process.env.CEI_ACTIVE_RUNS_TABLE;
+  const userMetadata = process.env.CEI_USER_METADATA_TABLE;
   const agentUrls = JSON.parse(process.env.AGENT_URLS || '{}');
   const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean));
   const pendingChoiceKey = (userId, sessionId) => ({ user_id: { S: userId }, record: { S: `route_choice#${sessionId}` } });
@@ -188,6 +193,7 @@ function productionDependencies() {
       const origin = Object.entries(event.headers || {}).find(([k]) => k.toLowerCase() === 'origin')?.[1];
       return { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...(allowedOrigins.has(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}) };
     },
+    async accountDeleting(userId) { return isAccountDeleting(db, userMetadata, userId, GetItemCommand); },
     async sessionAgent(userId, sessionId) {
       const r = await db.send(new GetItemCommand({ TableName: metadata, Key: { user_id: { S: userId }, session_id: { S: sessionId } }, ConsistentRead: true, ProjectionExpression: 'agent_type' }));
       if (!r.Item) return null;
