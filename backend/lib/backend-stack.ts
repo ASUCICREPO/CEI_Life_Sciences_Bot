@@ -782,6 +782,8 @@ export class BackendStack extends cdk.Stack {
     // F08: POST /sessions reads the caller's saved default_model_id when none is given (read-only, no PutItem)
     sessionMetadata.fn.addEnvironment('CEI_USER_METADATA_TABLE', modelSettings.table.tableName);
     modelSettings.table.grant(sessionMetadata.role, 'dynamodb:GetItem');
+    // F8 follow-up: resolve_turn_config's saved-default lookup for a chat with no stored model_id (read-only)
+    agentRuntimes.configureUserMetadataTable(modelSettings.table);
     const gateway = new ToolGateway(this, 'ToolGateway', {
       userPool,
       cognitoDomainUrl,

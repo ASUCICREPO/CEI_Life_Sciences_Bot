@@ -268,9 +268,12 @@ export class AgentRuntimes extends Construct {
       runtime.role.addToPrincipalPolicy(
         new iam.PolicyStatement({
           actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+          // B18/user decision (2026-11-10): users may pick any Bedrock model, not just Anthropic's; the
+          // D3 blocklist + discovery filter (shared/config.py, model_discovery.py) is the actual control.
           resources: [
-            `arn:${stack.partition}:bedrock:${stack.region}:${stack.account}:inference-profile/us.anthropic.*`,
-            `arn:${stack.partition}:bedrock:*::foundation-model/anthropic.*`,
+            `arn:${stack.partition}:bedrock:*::foundation-model/*`,
+            `arn:${stack.partition}:bedrock:*:${stack.account}:inference-profile/*`,
+            `arn:${stack.partition}:bedrock:*:${stack.account}:application-inference-profile/*`,
           ],
         }),
       );
@@ -287,7 +290,7 @@ export class AgentRuntimes extends Construct {
           {
             id: 'AwsSolutions-IAM5',
             reason:
-              'ADR: wildcard ARNs on the AgentCore runtime role | Rationale: (1) Bedrock: the agent and title models are cross-region inference profiles (us.anthropic.*) that route to foundation models in several Regions, so the model ARNs carry a Region wildcard limited to Anthropic models; (2) the CDK-owned Runtime construct grants its own CloudWatch Logs/X-Ray/workload-identity permissions with wildcard resources; (3) S3: object keys in the attachments bucket are per-session and created at runtime, so the object ARN is <bucket>/* scoped to that single bucket | Alternative: per-model ARNs rejected — the model id is a runtime setting and the routing Region set is AWS-managed',
+              'ADR: wildcard ARNs on the AgentCore runtime role | Rationale: (1) Bedrock: the model id is a user choice of any non-blocklisted model (B18, user decision 2026-11-10), spanning every foundation model plus every account inference profile and application inference profile, not a fixed deploy-time set — the D3 blocklist and the discovery filter (shared/config.py, shared/runtime/model_discovery.py) are the real control, not the IAM resource; (2) the CDK-owned Runtime construct grants its own CloudWatch Logs/X-Ray/workload-identity permissions with wildcard resources; (3) S3: object keys in the attachments bucket are per-session and created at runtime, so the object ARN is <bucket>/* scoped to that single bucket | Alternative: per-model ARNs rejected — the model id is a user-facing runtime choice, not a fixed deploy-time set',
           },
         ],
         true,
@@ -327,6 +330,20 @@ export class AgentRuntimes extends Construct {
     runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'], resources: [activeRunsTable.tableArn],
     }));
+  }
+
+  /**
+   * F8 follow-up: shared/runtime/turn_config.py's owner-scoped saved-default lookup, used only for a chat
+   * with no stored model_id. Read-only GetItem on the same table ModelSettings/session-metadata-handler use;
+   * called after ModelSettings exists (backend-stack.ts), same post-construction pattern as configureJobStore.
+   */
+  public configureUserMetadataTable(table: dynamodb.ITable): void {
+    for (const def of AGENT_RUNTIMES) {
+      const runtime = this.runtimes[def.id];
+      const resource = runtime.node.defaultChild as agentcore.CfnRuntime;
+      resource.addPropertyOverride('EnvironmentVariables.CEI_USER_METADATA_TABLE', table.tableName);
+      table.grant(runtime.role, 'dynamodb:GetItem');
+    }
   }
 
   /** Exactly the DynamoDB actions ConversationRecorder / ChatHistoryStore / checkpoint writer call. */

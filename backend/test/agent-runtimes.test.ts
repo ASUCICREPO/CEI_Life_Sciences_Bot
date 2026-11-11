@@ -171,6 +171,47 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
         [s.Action].flat().includes('bedrock:ApplyGuardrail') && !JSON.stringify(s.Resource).includes('"*"')))).toBe(true);
   });
 
+  test('every runtime gets the UserMetadataTable name and a GetItem-only grant (F8 saved default)', () => {
+    const userMetadataTableId = tableIds.find((id) => id.includes('UserMetadataTable'));
+    expect(userMetadataTableId).toBeDefined();
+    for (const [, runtime] of runtimes) {
+      expect((runtime as any).Properties.EnvironmentVariables.CEI_USER_METADATA_TABLE).toEqual({ Ref: userMetadataTableId });
+    }
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    const roleFragments = [
+      'AgentRuntimesResearchRuntime', 'AgentRuntimesDraftingRuntime',
+      'AgentRuntimesAnalysisRuntime', 'AgentRuntimesPipelineRuntime',
+    ];
+    for (const roleFragment of roleFragments) {
+      const onUserMetadata = policies
+        .filter((p) => JSON.stringify(p.Properties.Roles).includes(roleFragment))
+        .flatMap((p) => p.Properties.PolicyDocument.Statement)
+        .filter((s: any) => JSON.stringify(s.Resource).includes('UserMetadataTable'));
+      expect(onUserMetadata).toHaveLength(1);
+      expect([onUserMetadata[0].Action].flat()).toEqual(['dynamodb:GetItem']);
+    }
+  });
+
+  test('model-invocation policy allows any foundation model and inference profile, not Anthropic-only (user decision 2026-11-10)', () => {
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    const roleFragments = [
+      'AgentRuntimesResearchRuntime', 'AgentRuntimesDraftingRuntime',
+      'AgentRuntimesAnalysisRuntime', 'AgentRuntimesPipelineRuntime',
+    ];
+    for (const roleFragment of roleFragments) {
+      const invokeStatements = policies
+        .filter((p) => JSON.stringify(p.Properties.Roles).includes(roleFragment))
+        .flatMap((p) => p.Properties.PolicyDocument.Statement)
+        .filter((s: any) => [s.Action].flat().includes('bedrock:InvokeModel'));
+      expect(invokeStatements).toHaveLength(1);
+      const resources = [invokeStatements[0].Resource].flat().map((r: unknown) => JSON.stringify(r));
+      expect(resources.some((r) => r.includes('foundation-model/*'))).toBe(true);
+      expect(resources.some((r) => r.includes(':inference-profile/*'))).toBe(true);
+      expect(resources.some((r) => r.includes('application-inference-profile/*'))).toBe(true);
+      expect(resources.join(' ')).not.toContain('anthropic');
+    }
+  });
+
   test('zero unsuppressed cdk-nag errors after adding the runtimes', () => {
     const errors = Annotations.fromStack(stack).findError('*', Match.stringLikeRegexp('AwsSolutions-.*'));
     expect(errors).toHaveLength(0);
