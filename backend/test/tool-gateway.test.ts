@@ -5,6 +5,7 @@ import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { BackendStack } from '../lib/backend-stack';
 import { DeployConfig, DEFAULT_LIMITS } from '../lib/config/deploy-config';
 import { assertNoScopeCollisions, cedarPermit, loadToolSchemas } from '../lib/constructs/tool-gateway';
+import { memoSynth } from './helpers/memo-synth';
 
 const FIXTURE_ASSET_PATH = path.join(__dirname, 'fixtures', 'spa');
 const SOURCE_IDS = ['pubmed', 'clinicaltrials', 'biorxiv', 'medrxiv', 'chembl', 'opentargets', 'cmscoverage', 'icd10', 'npi', 'pubchem', 'openfda', 'patentsview'];
@@ -26,15 +27,18 @@ function testConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
   };
 }
 
+// ADR: cache keyed by config | webAclArn is fully determined by config truthiness, so it's not a separate input
 function build(config?: DeployConfig): { stack: BackendStack; template: Template } {
-  const app = new cdk.App();
-  const stack = new BackendStack(app, 'TestStack', {
-    env: { region: 'us-east-1', account: '123456789012' },
-    frontendAssetPath: FIXTURE_ASSET_PATH,
-    config,
-    webAclArn: config ? 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123' : undefined,
+  return memoSynth(JSON.stringify({ config }), () => {
+    const app = new cdk.App();
+    const stack = new BackendStack(app, 'TestStack', {
+      env: { region: 'us-east-1', account: '123456789012' },
+      frontendAssetPath: FIXTURE_ASSET_PATH,
+      config,
+      webAclArn: config ? 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123' : undefined,
+    });
+    return { stack, template: Template.fromStack(stack) };
   });
-  return { stack, template: Template.fromStack(stack) };
 }
 
 function resourcesOf(template: Template, type: string): any[] {
