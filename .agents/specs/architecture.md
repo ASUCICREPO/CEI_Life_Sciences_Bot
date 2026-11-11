@@ -204,7 +204,7 @@ flowchart TB
     AsyncSession --> TokenRefresh
     TokenRefresh --> JobStore
 
-    RestLambdas -->|DELETE/POST 202| DeletionWorker[Deletion Worker Lambda]
+    RestLambdas -->|POST /account/delete 202| DeletionWorker[Deletion Worker Lambda]
     DeletionWorker --> ChatHist
     DeletionWorker --> AttMeta
     DeletionWorker --> KB
