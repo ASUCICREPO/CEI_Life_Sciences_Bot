@@ -274,23 +274,39 @@ export class ToolGateway extends Construct {
       gateway: this.gateway, gatewayRole, policyEngine,
     }).function;
 
-    const ncbiTools: Array<{ id: string; name: string; description: string;
-      properties: Record<string, { type: string }>; required: string[] }> = [
-      { id: 'taxonomy', name: 'lineage', description: 'Retrieve an NCBI taxonomy lineage by taxon name or ID.',
-        properties: { taxon: { type: 'string' } }, required: ['taxon'] },
-      { id: 'sequence', name: 'efetch', description: 'Retrieve an NCBI nucleotide or protein sequence by accession.',
-        properties: { accession: { type: 'string' }, database: { type: 'string' }, format: { type: 'string' } },
-        required: ['accession', 'database', 'format'] },
-    ];
+    const ncbiTools: Array<{
+      id: string; name: string; description: string;
+      properties: Record<string, { type: string }>; required: string[]
+    }> = [
+        {
+          id: 'taxonomy', name: 'lineage', description: 'Retrieve an NCBI taxonomy lineage by taxon name or ID.',
+          properties: { taxon: { type: 'string' } }, required: ['taxon']
+        },
+        {
+          id: 'sequence', name: 'efetch', description: 'Retrieve an NCBI nucleotide or protein sequence by accession.',
+          properties: { accession: { type: 'string' }, database: { type: 'string' }, format: { type: 'string' } },
+          required: ['accession', 'database', 'format']
+        },
+      ];
     for (const tool of ncbiTools) {
       const targetName = `ncbi-${tool.id}`;
       const target = new agentcore.CfnGatewayTarget(this, `NcbiTarget-${tool.id}`, {
         name: targetName, gatewayIdentifier: this.gateway.attrGatewayIdentifier,
         credentialProviderConfigurations: [{ credentialProviderType: 'GATEWAY_IAM_ROLE' }],
-        targetConfiguration: { mcp: { lambda: { lambdaArn: this.ncbiFunction.functionArn, toolSchema: { inlinePayload: [
-          { name: tool.name, description: tool.description,
-            inputSchema: { type: 'object', properties: tool.properties, required: tool.required } },
-        ] } } } },
+        targetConfiguration: {
+          mcp: {
+            lambda: {
+              lambdaArn: this.ncbiFunction.functionArn, toolSchema: {
+                inlinePayload: [
+                  {
+                    name: tool.name, description: tool.description,
+                    inputSchema: { type: 'object', properties: tool.properties, required: tool.required }
+                  },
+                ]
+              }
+            }
+          }
+        },
       });
       target.node.addDependency(gatewayRole);
       const policy = new agentcore.CfnPolicy(this, `PermitNcbi-${tool.id}`, {
@@ -348,7 +364,14 @@ export class ToolGateway extends Construct {
         description: 'AgentCore Web Search built-in connector (B44) -- url/title/snippet only, no bulk storage',
         gatewayIdentifier: this.gateway.attrGatewayIdentifier,
         credentialProviderConfigurations: [{ credentialProviderType: 'GATEWAY_IAM_ROLE' }],
-        targetConfiguration: { mcp: { connector: { source: { connectorId: 'web-search' } } } },
+        targetConfiguration: {
+          mcp: {
+            connector: {
+              source: { connectorId: 'web-search' },
+              configurations: [{ name: 'WebSearch', parameterValues: {} }],
+            },
+          },
+        },
       });
       this.webSearchTarget.node.addDependency(gatewayRole);
 
