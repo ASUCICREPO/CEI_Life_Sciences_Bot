@@ -15,7 +15,7 @@ from drafting.state import DocumentType, DraftingState, Guideline
 from shared.grounding import build_corpus, ground_document, is_grounded
 from shared.presenters.markdown import document_sections_for_export, render_document_markdown
 from shared.prompts.loader import PromptLoader
-from shared.schemas.citation import SourceType
+from shared.schemas.citation import Citation, SourceType
 from shared.schemas.cei_ui import (
     ActionDescriptor,
     CEIUISurface,
@@ -31,6 +31,7 @@ from shared.runtime.guarded_input import content_blocks, user_turn, Guarded
 from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
+from shared.tools.attachments_kb import retrieve_attachments
 from shared.tools.chart import place_charts
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
 from shared.utils import extract_tokens, get_model, last_human_message
@@ -38,6 +39,16 @@ from shared.utils import extract_tokens, get_model, last_human_message
 logger = logging.getLogger(__name__)
 
 _DRAFTING_TEMPLATES_DIR = Path(__file__).parent / "prompts" / "templates"
+
+def _format_citation_line(cit: Citation) -> str:
+    # ADR: web/attachment citations have no authors/year (B44/B110) | drop them from this line only
+    if cit.source_type is SourceType.WEB:
+        return f"[{cit.source_id}] {cit.title} — {cit.url}"
+    if cit.source_type is SourceType.ATTACHMENTS:
+        # B110: no external URL for an attachment citation -- the filename is the title.
+        return f"[{cit.source_id}] {cit.title}"
+    return f"[{cit.source_id}] {cit.title} ({cit.year}) — {cit.url}"
+
 
 _GUIDELINE_SOURCES: dict[DocumentType, list[SourceType]] = {
     DocumentType.GRANT: [SourceType.PUBMED, SourceType.CLINICAL_TRIALS, SourceType.CMS_COVERAGE],
@@ -165,7 +176,7 @@ def research_guidelines(state: DraftingState) -> dict[str, Any]:
             for item in result.results:
                 context_parts.append(str(item))
             for cit in result.citations:
-                context_parts.append(f"[{cit.source_id}] {cit.title} ({cit.year}) — {cit.url}")
+                context_parts.append(_format_citation_line(cit))
             trace_entries.append(
                 TraceEntry(
                     stage="TOOL_CALL",
@@ -193,6 +204,22 @@ def research_guidelines(state: DraftingState) -> dict[str, Any]:
                     detail=f"{source.value} | query={search_query!r} | ERROR",
                 )
             )
+
+    # B110: deterministic per-chat attachments retrieval, once per turn alongside the fixed source map.
+    attachment_result = retrieve_attachments(
+        query, user_id=state.get("user_id", ""), session_id=state.get("session_id", "")
+    )
+    if attachment_result is not None:
+        for item in attachment_result.results:
+            context_parts.append(str(item))
+        for cit in attachment_result.citations:
+            context_parts.append(_format_citation_line(cit))
+    trace_entries.append(
+        TraceEntry(
+            stage="TOOL_CALL",
+            detail=f"attachments | results={len(attachment_result.results) if attachment_result else 0}",
+        )
+    )
 
     # LLM call 2: extract structured guidelines from raw results
     context = "\n".join(context_parts)

@@ -77,6 +77,7 @@ def test_run_analysis_skips_interrupt_and_returns_outcome(monkeypatch) -> None:
     outcome = asyncio.run(run_analysis(
         "Analyze Our Co vs Acme Bio",
         "science",
+        "u1",
         "pipeline-session-1",
         analysis_type="competitor",
         scope={"competitors": ["Acme Bio"], "focal_entity": "Our Co"},

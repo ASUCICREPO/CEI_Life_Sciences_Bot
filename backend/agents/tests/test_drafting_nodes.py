@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from drafting.nodes import draft, export_documents, plan_visuals, revise
+from drafting.nodes import (
+    GuidelinePlan,
+    GuidelinesExtraction,
+    draft,
+    export_documents,
+    plan_visuals,
+    research_guidelines,
+    revise,
+)
 from drafting.state import DocumentType
+from shared.schemas.citation import Citation, SourceType
 from shared.schemas.response_blocks import (
     ChartBlock,
     ChartSeriesItem,
@@ -13,6 +23,7 @@ from shared.schemas.response_blocks import (
     ResponseDocument,
     ResponseSection,
 )
+from shared.tools.base import DataSourceResult
 
 
 def _sample_document(title: str = "Grant Proposal") -> ResponseDocument:
@@ -204,3 +215,79 @@ def test_export_documents_legacy_path_has_no_base64_in_text() -> None:
     text = result["messages"][-1].content
     assert "data:image/png;base64" not in text
     assert "*Figure: Revenue*" in text
+
+
+# ── research_guidelines: B110 attachments wiring ────────────────────────────
+
+
+def _attachment_result() -> DataSourceResult:
+    return DataSourceResult(
+        source_type=SourceType.ATTACHMENTS,
+        results=[{"file_id": "f1", "filename": "notes.pdf", "text": "The chunk text.", "score": 0.5}],
+        citations=[Citation(
+            source_id="attachment:f1:0",
+            source_type=SourceType.ATTACHMENTS,
+            url="",
+            title="notes.pdf",
+            relevant_passage="The chunk text.",
+            retrieved_at=datetime.now(UTC),
+        )],
+    )
+
+
+def _guideline_models(monkeypatch, parsed_extraction: GuidelinesExtraction) -> None:
+    raw = AIMessage(content="", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
+
+    def _with_structured_output(schema, include_raw=True):
+        structured = Mock()
+        if schema is GuidelinePlan:
+            structured.invoke.return_value = {
+                "parsed": GuidelinePlan(guideline_focus="formatting", reasoning="test"), "raw": raw,
+            }
+        else:
+            structured.invoke.return_value = {"parsed": parsed_extraction, "raw": raw}
+        return structured
+
+    model = Mock()
+    model.with_structured_output.side_effect = _with_structured_output
+    monkeypatch.setattr("drafting.nodes.get_model", lambda *a, **k: model)
+
+
+def test_research_guidelines_appends_attachments_result_to_context(monkeypatch) -> None:
+    monkeypatch.setattr("drafting.nodes.ALL_DATA_SOURCE_TOOLS", [])
+    captured = {}
+
+    def fake_retrieve_attachments(query, *, user_id, session_id):
+        captured["user_id"] = user_id
+        captured["session_id"] = session_id
+        return _attachment_result()
+
+    monkeypatch.setattr("drafting.nodes.retrieve_attachments", fake_retrieve_attachments)
+    _guideline_models(monkeypatch, GuidelinesExtraction(guidelines=[]))
+
+    state = {
+        "messages": [HumanMessage(content="Draft a grant about aspirin.")],
+        "document_type": DocumentType.GRANT,
+        "long_term_context": [],
+        "user_id": "u1",
+        "session_id": "s1",
+    }
+    result = research_guidelines(state)
+
+    assert captured == {"user_id": "u1", "session_id": "s1"}
+    assert any("attachments | results=1" in t.detail for t in result["trace"])
+
+
+def test_research_guidelines_handles_no_attachments(monkeypatch) -> None:
+    monkeypatch.setattr("drafting.nodes.ALL_DATA_SOURCE_TOOLS", [])
+    monkeypatch.setattr("drafting.nodes.retrieve_attachments", lambda *a, **k: None)
+    _guideline_models(monkeypatch, GuidelinesExtraction(guidelines=[]))
+
+    state = {
+        "messages": [HumanMessage(content="Draft a grant about aspirin.")],
+        "document_type": DocumentType.GRANT,
+        "long_term_context": [],
+    }
+    result = research_guidelines(state)
+
+    assert any("attachments | results=0" in t.detail for t in result["trace"])

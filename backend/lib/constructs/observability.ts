@@ -1,4 +1,4 @@
-import { Duration } from 'aws-cdk-lib';
+import { Duration, NestedStack } from 'aws-cdk-lib';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as actions from 'aws-cdk-lib/aws-cloudwatch-actions';
@@ -7,6 +7,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { NagSuppressions } from 'cdk-nag';
 import { Construct } from 'constructs';
 
@@ -22,6 +23,8 @@ export interface ObservabilityProps {
   gatewayLogs: logs.ILogGroup;
   clientLogs: logs.ILogGroup;
   agentProxyLogs: logs.ILogGroup;
+  /** B110: attachment-processing DLQ; one alarm fires on any message landing here (kept minimal, see the 500-resource limit). */
+  attachmentProcessorDlq?: sqs.IQueue;
 }
 
 /** Operational signals for the resources that are deployed today. */
@@ -39,8 +42,15 @@ export class Observability extends Construct {
     const notify = new actions.SnsAction(topic);
     const dashboard = new cloudwatch.Dashboard(this, 'Dashboard', { dashboardName: `${scope.node.id}-operations` });
     const interval = Duration.minutes(5);
+    // ADR: alarms and log metric filters live in a nested stack | Rationale: they are about 100 of BackendStack's
+    // resources and CloudFormation allows 500 per stack; a nested stack has its own limit. The SNS topic and the
+    // dashboard stay here because they have fixed names, and a named resource that moves between stacks fails on
+    // create-before-delete (and the admin email would have to confirm a new subscription) | Alternative: deleting
+    // more alarms rejected (loses signal and only delays the limit); splitting whole feature stacks rejected (many
+    // cross-stack references and export locks)
+    const alarmStack = new NestedStack(this, 'Alarms', { description: 'CEI Life Sciences alarms and log metric filters' });
     const alarm = (id: string, metric: cloudwatch.IMetric, threshold: number, description: string) => {
-      const resource = new cloudwatch.Alarm(this, id, {
+      const resource = new cloudwatch.Alarm(alarmStack, id, {
         metric, threshold, evaluationPeriods: 1,
         comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
@@ -91,7 +101,7 @@ export class Observability extends Construct {
     // These handlers return errors normally, so Lambda's Errors metric cannot see them.
     const handledFailureMetrics: cloudwatch.IMetric[] = [];
     for (const [name, entry] of Object.entries(props.caughtFailures)) {
-      const filter = new logs.MetricFilter(this, `${name}FailureFilter`, {
+      const filter = new logs.MetricFilter(alarmStack, `${name}FailureFilter`, {
         logGroup: entry.logGroup,
         metricNamespace: 'CEI/Application', metricName: `${scope.node.id}-${name}-Failures`,
         filterPattern: logs.FilterPattern.anyTerm(...entry.terms), metricValue: '1',
@@ -103,13 +113,13 @@ export class Observability extends Construct {
     dashboard.addWidgets(new cloudwatch.GraphWidget({ title: 'Handled failures', left: handledFailureMetrics }));
     // AgentCore can return an application error inside a successful HTTP response.
     // Keep this visible without adding an agent-health alarm (B75).
-    const agentApplicationErrors = new logs.MetricFilter(this, 'AgentApplicationErrorsFilter', {
+    const agentApplicationErrors = new logs.MetricFilter(alarmStack, 'AgentApplicationErrorsFilter', {
       logGroup: props.agentProxyLogs, filterPattern: logs.FilterPattern.anyTerm('agent_proxy_application_error'),
       metricNamespace: 'CEI/Application', metricName: `${scope.node.id}-AgentApplicationErrors`, metricValue: '1',
     }).metric({ period: interval, statistic: 'Sum', label: 'Agent application errors' });
     dashboard.addWidgets(new cloudwatch.GraphWidget({ title: 'Agent application errors', left: [agentApplicationErrors] }));
     // Dashboard only: B75 does not include a separate browser-failure alarm.
-    const browser = new logs.MetricFilter(this, 'BrowserFailuresFilter', {
+    const browser = new logs.MetricFilter(alarmStack, 'BrowserFailuresFilter', {
       logGroup: props.clientLogs, filterPattern: logs.FilterPattern.anyTerm('browser_failure'),
       metricNamespace: 'CEI/Application', metricName: `${scope.node.id}-BrowserFailures`, metricValue: '1',
     }).metric({ period: interval, statistic: 'Sum', label: 'Browser failures' });
@@ -125,7 +135,7 @@ export class Observability extends Construct {
       ['SignUpAttempts', props.signupLogs, 'pre_signup_domain_check', 20],
       ['PolicyDenials', props.gatewayLogs, 'DENY', 5],
     ] as const) {
-      const filter = new logs.MetricFilter(this, `${name}Filter`, {
+      const filter = new logs.MetricFilter(alarmStack, `${name}Filter`, {
         logGroup, filterPattern: logs.FilterPattern.anyTerm(term),
         metricNamespace: 'CEI/Security', metricName: `${scope.node.id}-${name}`, metricValue: '1',
       });
@@ -134,5 +144,15 @@ export class Observability extends Construct {
       alarm(`${name}Spike`, metric, threshold, `${name} exceeded the starting threshold.`);
     }
     dashboard.addWidgets(new cloudwatch.GraphWidget({ title: 'Security events', left: securityMetrics }));
+
+    // B110: one alarm for the attachment-processing DLQ -- any message here means an attachment never got
+    // ingested into the Knowledge Base after retries, kept as a single alarm (500-resource stack limit).
+    if (props.attachmentProcessorDlq) {
+      const dlqMetric = props.attachmentProcessorDlq.metricApproximateNumberOfMessagesVisible({
+        period: interval, statistic: 'Maximum',
+      });
+      alarm('AttachmentProcessorDlqMessages', dlqMetric, 1, 'Attachment processing DLQ received a message.');
+      dashboard.addWidgets(new cloudwatch.GraphWidget({ title: 'Attachment processor DLQ', left: [dlqMetric] }));
+    }
   }
 }

@@ -15,6 +15,8 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { DeployConfig, DEFAULT_LIMITS, DEFAULT_TOOL_POLICY_MODE } from './config/deploy-config';
 import { PythonDepsLayer } from './constructs/python-deps-layer';
 import { AgentRuntimes } from './constructs/agent-runtimes';
@@ -26,7 +28,7 @@ import { suppressXrayWildcard } from './constructs/tracing';
 import { Observability } from './constructs/observability';
 import { BackgroundJobs } from './constructs/background-jobs';
 import { AccountDeletion } from './constructs/account-deletion';
-// import * as sqs from 'aws-cdk-lib/aws-sqs';
+import { AttachmentsKnowledgeBase } from './constructs/attachments-knowledge-base';
 
 // B109/F19: session-runner and ui-actions both require('../shared/account-gate') (backend/lambdas/shared/
 // account-gate.js). A plain `Code.fromAsset(lambdas/<dir>)` zips only that one directory, so `shared/` would
@@ -471,16 +473,9 @@ export class BackendStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // ADR: separate KB bucket for extracted text chunks | Rationale: Bedrock KB indexes text files only;
-    // keeping chunks separate from the raw uploads bucket avoids confusion and allows different lifecycle rules
-    const kbBucket = new s3.Bucket(this, 'KBChunksBucket', {
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
-      serverAccessLogsBucket: logsBucket,
-      serverAccessLogsPrefix: 'kb-chunks-access-logs/',
-      removalPolicy: RemovalPolicy.RETAIN,
-    });
+    // B110 (supersedes B33/B77): Managed Knowledge Base for attachment retrieval -- no S3 Vectors/KB chunks
+    // bucket. The processor ingests extracted text straight into the KB via IngestKnowledgeBaseDocuments.
+    const attachmentsKb = new AttachmentsKnowledgeBase(this, 'AttachmentsKnowledgeBase', { attachmentsBucket });
 
     // ---------------------------------------------------------------
     // Session Lambdas (Python 3.14) sharing one dependency layer
@@ -638,7 +633,27 @@ export class BackendStack extends cdk.Stack {
       true,
     );
 
-    // Processor Lambda — triggered by S3 events
+    // Processor Lambda — triggered by S3 events via SQS (B110: S3 -> SQS(+DLQ) -> processor, not S3 -> Lambda
+    // directly, so a transient IngestKnowledgeBaseDocuments failure retries instead of being dropped)
+    const processorTimeout = Duration.minutes(5);
+    const attachmentProcessorDlq = new sqs.Queue(this, 'AttachmentProcessorDLQ', {
+      enforceSSL: true,
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: Duration.days(14),
+    });
+    NagSuppressions.addResourceSuppressions(attachmentProcessorDlq, [{
+      id: 'AwsSolutions-SQS3',
+      reason: 'ADR: DLQ has no DLQ of its own | Rationale: this queue is the end of the retry chain for failed attachment-processing messages; a further redrive target has nothing left to catch | Alternative: a second-level DLQ rejected -- no failure mode it would catch',
+    }], true);
+    const attachmentProcessorQueue = new sqs.Queue(this, 'AttachmentProcessorQueue', {
+      enforceSSL: true,
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      // ADR: 6x the Lambda timeout | Rationale: SQS best practice -- the visibility timeout must comfortably
+      // exceed the consumer's processing time so a slow IngestKnowledgeBaseDocuments call never causes a duplicate delivery
+      visibilityTimeout: Duration.seconds(processorTimeout.toSeconds() * 6),
+      deadLetterQueue: { queue: attachmentProcessorDlq, maxReceiveCount: 3 },
+    });
+
     const processorLogGroup = new logs.LogGroup(this, 'AttachmentProcessorLogs', {
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: RemovalPolicy.DESTROY,
@@ -658,21 +673,21 @@ export class BackendStack extends cdk.Stack {
     );
     processorRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
-        actions: ['s3:PutObject'],
-        resources: [`${kbBucket.bucketArn}/chunks/*`],
+        actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
+        resources: [attachmentsTable.tableArn],
       }),
     );
     processorRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
-        actions: ['dynamodb:UpdateItem'],
-        resources: [attachmentsTable.tableArn],
+        actions: ['bedrock:IngestKnowledgeBaseDocuments', 'bedrock:GetKnowledgeBaseDocuments'],
+        resources: [attachmentsKb.knowledgeBaseArn],
       }),
     );
     NagSuppressions.addResourceSuppressions(
       processorRole,
       [{
         id: 'AwsSolutions-IAM5',
-        reason: 'ADR: Wildcard in S3 paths for uploads and chunks prefixes | Rationale: processor reads from uploads/* and writes to chunks/*; paths are constrained to those prefixes | Alternative: per-file policies rejected — impractical',
+        reason: 'ADR: Wildcard in S3 path for uploads prefix | Rationale: processor reads whichever object the SQS message names under uploads/; object keys are per-user/session/attachment and created at runtime | Alternative: per-file policies rejected — impractical',
       }],
       true,
     );
@@ -686,19 +701,25 @@ export class BackendStack extends cdk.Stack {
       }),
       role: processorRole,
       logGroup: processorLogGroup,
-      timeout: Duration.minutes(5),
+      timeout: processorTimeout,
       memorySize: 1024,
       environment: {
         ATTACHMENTS_TABLE: attachmentsTable.tableName,
-        KB_BUCKET: kbBucket.bucketName,
+        ATTACHMENTS_BUCKET: attachmentsBucket.bucketName,
+        KNOWLEDGE_BASE_ID: attachmentsKb.knowledgeBaseId,
+        KNOWLEDGE_BASE_DATA_SOURCE_ID: attachmentsKb.dataSourceId,
       },
       layers: [pythonDeps.layer],
     });
+    attachmentProcessor.addEventSource(new SqsEventSource(attachmentProcessorQueue, {
+      batchSize: 1,
+      reportBatchItemFailures: true,
+    }));
 
-    // S3 notification triggers processor on uploads
+    // S3 notification enqueues onto SQS on uploads; the processor consumes via the event source above
     attachmentsBucket.addEventNotification(
       s3.EventType.OBJECT_CREATED,
-      new s3n.LambdaDestination(attachmentProcessor),
+      new s3n.SqsDestination(attachmentProcessorQueue),
       { prefix: 'uploads/' },
     );
 
@@ -740,6 +761,8 @@ export class BackendStack extends cdk.Stack {
       chatHistoryTable,
       codeInterpreter,
       attachmentsBucket,
+      knowledgeBaseId: attachmentsKb.knowledgeBaseId,
+      knowledgeBaseArn: attachmentsKb.knowledgeBaseArn,
       // Same origin set as the sessions API CORS; the containers answer CORS only if a browser ever reaches them
       // directly (the SPA goes through the agent proxy below)
       allowedOrigins,
@@ -1119,6 +1142,7 @@ export class BackendStack extends cdk.Stack {
       gatewayLogs: gateway.gatewayLogGroup,
       clientLogs: clientDiagnostics.fn.logGroup,
       agentProxyLogs: agentProxyLogGroup,
+      attachmentProcessorDlq,
       caughtFailures: {
         SessionRunner: { logGroup: runnerLogs, terms: ['request_failed', 'stream_failed', 'agent_error', 'write_failed', 'stream_transport_failed', 'replay_timeout', 'persistence_failed', 'cleanup_failed'] },
         SessionRouter: { logGroup: router.function.logGroup, terms: ['failed'] },

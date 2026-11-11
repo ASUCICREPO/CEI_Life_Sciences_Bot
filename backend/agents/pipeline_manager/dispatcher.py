@@ -103,7 +103,8 @@ class InProcessDispatcher:
                 )
             if step.agent == "analysis":
                 return await self._run_analysis(
-                    prompt, mode, sub_session_id, step.step_id, step.analysis_type, step.scope, long_term_context,
+                    prompt, mode, user_id, sub_session_id, step.step_id, step.analysis_type, step.scope,
+                    long_term_context,
                 )
             return StepOutcome(status="failed", error=f"unknown agent {step.agent!r}")
         except Exception as exc:  # ADR: catch-all | one bad step must not crash the pipeline run
@@ -188,6 +189,7 @@ class InProcessDispatcher:
         self,
         prompt: str,
         mode: str,
+        user_id: str,
         session_id: str,
         step_id: str,
         analysis_type: str | None,
@@ -198,7 +200,8 @@ class InProcessDispatcher:
 
         resolved_type = analysis_type if analysis_type in _VALID_ANALYSIS_TYPES else None
         outcome = await run_analysis(
-            prompt, mode, session_id, analysis_type=resolved_type, scope=scope, long_term_context=long_term_context,
+            prompt, mode, user_id, session_id,
+            analysis_type=resolved_type, scope=scope, long_term_context=long_term_context,
         )
         return StepOutcome(
             status="completed",

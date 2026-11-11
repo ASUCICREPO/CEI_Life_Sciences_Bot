@@ -25,6 +25,7 @@ class AnalysisOutcome:
 async def run_analysis(
     prompt: str,
     mode: str,
+    user_id: str,
     session_id: str,
     *,
     analysis_type: str | None = None,
@@ -37,6 +38,9 @@ async def run_analysis(
     may give ``competitors``/``market``/``jurisdiction``/``focal_entity``; when it is
     ``None`` the ``scope`` node still extracts them from ``prompt``, but
     ``confirmed_scope=True`` means the graph never pauses on ``confirm_scope``.
+    # ADR: user_id is the parent run's authenticated actor (B110) | a hardcoded placeholder here
+    # would make shared.tools.attachments_kb.retrieve_attachments fail its id validation and
+    # silently skip every pipeline-dispatched analysis step's attachments.
     """
     graph = compile_graph(checkpointer=None)
     scope_values = scope or {}
@@ -44,7 +48,7 @@ async def run_analysis(
     initial_state = {
         "messages": [HumanMessage(content=prompt)],
         "mode": mode if mode in ("science", "business") else "science",
-        "user_id": "pipeline",
+        "user_id": user_id,
         "session_id": session_id,
         "query": prompt,
         "analysis_type": AnalysisType(analysis_type) if analysis_type else None,
