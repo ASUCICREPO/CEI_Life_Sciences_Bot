@@ -17,7 +17,7 @@ Status legend: **planned** = not yet built. **exists (partial)** = some code exi
 | Session Runner Lambda (Node.js) | Native response streaming; relays `InvokeAgentRuntime` chunks over SSE; writes each SSE event with a sequence number to the Chat History Store for reconnect replay (B3/B68) | S1 (spike), F5 (live) | planned |
 | Session Router Lambda (Python) | Deterministic lookup for dashboard tasks (Goals 1–3) + classifier model call for free text (B15/B17); on low classifier confidence, returns a `ChoicePicker` of the 4 agents instead of guessing (B80); also routes `/tools/{source}/chat/stream` by reading `source` (B84) | F5 (deterministic), F9 (classifier) | planned |
 | Token Refresh Lambda (Python, internal, IAM auth) | `POST /internal/token-refresh` — checks the Job ID Store (background jobs) or the Active-run counters record (real-time runs) for an active run, then mints a new scoped M2M token with the same scopes and user (B67). The calling agent never holds the M2M client secret. | F4 | planned |
-| Deletion Worker Lambda | Processes chat-delete and account-delete cascades after the `202 Accepted` response (B58, B73) | F19 | planned |
+| Deletion Worker Lambda | Account-delete only (B104; no chat delete). Runs on a schedule, 9 hours after the `202 Accepted` response, once the account "deleting" gate and the 8 h run maximum have ended any late write (B58, B73, B109) | F19 | planned |
 | AgentCore Runtime — Research | Goal 1 specialist agent | F5 | exists (partial) — LangGraph graph runs locally (`backend/agents/research/`); no runtime deployment, no `AgentCoreMemorySaver` |
 | AgentCore Runtime — Drafting | Goal 2 specialist agent | F7 | exists (partial) — graph and nodes implemented locally; same gaps as Research |
 | AgentCore Runtime — Analysis | Goal 3 specialist agent | F14 | exists (partial) — graph wired, all nodes `raise NotImplementedError` |
@@ -92,13 +92,19 @@ InvokeAgentRuntime (not an in-process call). Concurrent steps run in separate Ag
 sessions (each its own 2 vCPU / 8 GB) with separate traces per step.
 ```
 
-### 2.6 Delete path (chat / account)
+### 2.6 Delete path (account only, B104)
+
+There is no chat delete. `DELETE /sessions/{id}` is removed (B104).
 
 ```
-Client → REST API Gateway → Session Metadata Handler (DELETE /sessions/{id}) or POST /account/delete
-  → item(s) marked "deleting"; response 202 Accepted at once (B73)
-  → Deletion Worker Lambda removes DynamoDB items, S3 files, KB chunks, memories and checkpoints
-Client hides the item at once on the 202 response (B73).
+Client → REST API Gateway → POST /account/delete (behind a flag, off by default)
+  → Cognito AdminDisableUser + AdminUserGlobalSignOut; account "deleting" gate written
+  → every run-starting route checks the gate first; no new run can start
+  → response 202 Accepted at once (B73); running AgentCore sessions end on their own (8 h max)
+  → 9 hours later, a scheduled Deletion Worker Lambda removes DynamoDB items, S3 files,
+    KB chunks, memories and checkpoints (B109 — the delay covers the 8 h run max plus the
+    1 h access-token life, so a late write has already finished; no epoch-conditional write needed)
+Client hides the account's data at once on the 202 response (B73).
 ```
 
 ### 2.3 Attachment path

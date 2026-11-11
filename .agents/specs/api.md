@@ -103,7 +103,7 @@ Called by a running agent (real-time or async) before its 1 h tool token expires
 | GET | `/sessions` | BUFFERED | F3 |
 | GET | `/sessions/{sessionId}` | BUFFERED | F3 |
 | PATCH | `/sessions/{sessionId}` | BUFFERED | F3 |
-| DELETE | `/sessions/{sessionId}` | BUFFERED | F19 |
+| DELETE | `/sessions/{sessionId}` | BUFFERED | Removed by B104 |
 
 `POST /sessions` request/response:
 
@@ -115,7 +115,7 @@ Called by a running agent (real-time or async) before its 1 h tool token expires
 { "session_id": "session-123", "title": "New chat", "mode": "science", "status": "active", "created_at": "2026-09-29T00:00:00Z" }
 ```
 
-`GET /sessions` — paginated list, cursor as above. `GET /sessions/{sessionId}` — one session's metadata. `PATCH /sessions/{sessionId}` — partial update of `title` and/or `mode` (B55: mode is set per chat and can change mid-chat). `DELETE /sessions/{sessionId}` — marks the session "deleting" and returns `202 Accepted` at once; the Deletion Worker Lambda then runs the chat-delete cascade defined in `.agents/specs/data-model.md` (B58, B73). The UI hides the session immediately on the `202` response.
+`GET /sessions` — paginated list, cursor as above. `GET /sessions/{sessionId}` — one session's metadata. `PATCH /sessions/{sessionId}` — partial update of `title` and/or `mode` (B55: mode is set per chat and can change mid-chat). `DELETE /sessions/{sessionId}` is removed (B104): a user can not delete one chat, and there is no hide/archive action for one chat. Only `POST /account/delete` (below) deletes data.
 
 ### Chat history (Session History Handler)
 
@@ -256,7 +256,7 @@ There is no `POST /jobs` route. Jobs are started internally by the Session Route
 |---|---|---|---|
 | POST | `/account/delete` | BUFFERED | F19 |
 
-Marks the account "deleting" and returns `202 Accepted` at once; the Deletion Worker Lambda then runs the account-delete cascade (B58, B73, `.agents/specs/data-model.md`).
+Behind a flag, off by default (B109). Disables the Cognito user (`AdminDisableUser`) and revokes every session (`AdminUserGlobalSignOut`), then writes an account "deleting" gate; every run-starting route checks this gate first, so no new run can start. Returns `202 Accepted` at once. A scheduled worker runs the account-delete cascade 9 hours later (B58 for the cascade list, B73 for the `202`-then-worker pattern, B109 for the 9-hour delay and the gate, `.agents/specs/data-model.md`).
 
 ## Errors table (per-route summary)
 
@@ -276,4 +276,4 @@ Marks the account "deleting" and returns `202 Accepted` at once; the Deletion Wo
 - TBD: whether the Router→Runtime token (and the refreshed token from `/internal/token-refresh`) travels as an allowlisted custom header or as `Authorization` — cross-ref `.agents/specs/auth-and-tool-scope.md` §5.
 - TBD: denied-call error shape inside LangGraph when the Gateway returns a Cedar deny (cross-ref `.agents/specs/auth-and-tool-scope.md` §8).
 
-Resolved by B67–B86: default/max pagination limit 20/100 (B78); `/chat/stream` reconnect/resume via `resume_from_seq` and Chat History Store replay (B68); the internal token-refresh route (B67); chat/account delete responses are `202 Accepted` with a Deletion Worker cascade (B73); the client-initiated export route `POST /sessions/{id}/turns/{turn}/export` (B74); export download URL TTL 15 min (B78); async threshold is 10 minutes with no mid-run handoff (B79); low-confidence routing uses a `ChoicePicker` of the 4 agents (B80); the tool-agent stream route `/tools/{source}/chat/stream` (B84).
+Resolved by B67–B109: default/max pagination limit 20/100 (B78); `/chat/stream` reconnect/resume via `resume_from_seq` and Chat History Store replay (B68); the internal token-refresh route (B67); `DELETE /sessions/{sessionId}` is removed, no chat delete (B104); account delete is a `202 Accepted` response, a disable-plus-gate step, and a worker cascade 9 hours later (B73, B109); the client-initiated export route `POST /sessions/{id}/turns/{turn}/export` (B74); export download URL TTL 15 min (B78); async threshold is 10 minutes with no mid-run handoff (B79); low-confidence routing uses a `ChoicePicker` of the 4 agents (B80); the tool-agent stream route `/tools/{source}/chat/stream` (B84).
