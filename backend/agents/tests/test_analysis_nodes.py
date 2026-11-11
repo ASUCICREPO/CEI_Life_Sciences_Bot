@@ -407,3 +407,157 @@ def test_scope_dedupes_repeated_competitors() -> None:
         "Elrexfio (elranatamab)",
         "Tecvayli",
     ]
+
+
+# -- scope correction: guarded in the user turn, not the system prompt -------
+
+
+def test_scope_correction_is_guarded_in_user_turn_not_system_prompt(monkeypatch) -> None:
+    raw = AIMessage(content="", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
+    structured_model = Mock()
+    structured_model.invoke.return_value = {
+        "parsed": ScopeProposal(
+            analysis_type=AnalysisType.COMPETITOR,
+            competitors=["Acme Bio"],
+            market="Oncology",
+            jurisdiction="US",
+            focal_entity="Our Co",
+        ),
+        "raw": raw,
+    }
+    model = Mock()
+    model.with_structured_output.return_value = structured_model
+    monkeypatch.setattr("analysis.nodes.get_model", lambda *a, **k: model)
+
+    scope({
+        "query": "Compare Acme Bio to us",
+        "analysis_type": None,
+        "scope_revision": 1,
+        "scope_correction": "Add Beta Bio as a competitor",
+    })
+
+    messages = structured_model.invoke.call_args.args[0]
+    system_prompt = messages[0]["content"]
+    user_content = messages[1]["content"]
+
+    assert "Add Beta Bio as a competitor" not in system_prompt
+
+    guard_texts = [block["text"] for block in user_content if block.get("type") == "guard_content"]
+    assert guard_texts == ["Compare Acme Bio to us", "Add Beta Bio as a competitor"]
+
+
+def test_scope_system_prompt_is_static_regardless_of_correction(monkeypatch) -> None:
+    captured_prompts: list[str] = []
+
+    def _structured_invoke(messages):
+        captured_prompts.append(messages[0]["content"])
+        return {
+            "parsed": ScopeProposal(
+                analysis_type=AnalysisType.COMPETITOR, competitors=[], market=None, jurisdiction=None, focal_entity=None,
+            ),
+            "raw": AIMessage(content=""),
+        }
+
+    def _get_model(*a, **k):
+        structured_model = Mock()
+        structured_model.invoke.side_effect = _structured_invoke
+        model = Mock()
+        model.with_structured_output.return_value = structured_model
+        return model
+
+    monkeypatch.setattr("analysis.nodes.get_model", _get_model)
+
+    scope({"query": "Compare Acme Bio to us", "analysis_type": None, "scope_revision": 0, "scope_correction": None})
+    scope({
+        "query": "Compare Acme Bio to us", "analysis_type": None, "scope_revision": 1,
+        "scope_correction": "Add Beta Bio",
+    })
+
+    assert len(captured_prompts) == 2
+    assert captured_prompts[0] == captured_prompts[1]
+
+
+# -- gather: web search only when enabled ------------------------------------
+
+
+def test_gather_skips_web_search_when_disabled(monkeypatch) -> None:
+    monkeypatch.setattr("analysis.nodes.web_search_enabled", lambda: False)
+    raw = AIMessage(content="")
+    structured_model = Mock()
+    structured_model.invoke.return_value = {
+        "parsed": GatherQueries(source_queries={"pubmed": "oncology trials"}), "raw": raw,
+    }
+    model = Mock()
+    model.with_structured_output.return_value = structured_model
+    monkeypatch.setattr("analysis.nodes.get_model", lambda *a, **k: model)
+
+    pubmed_tool = Mock(source_type=SourceType.PUBMED)
+    pubmed_tool.invoke.return_value = _result(SourceType.PUBMED)
+    monkeypatch.setattr("analysis.nodes.ALL_DATA_SOURCE_TOOLS", [pubmed_tool])
+    web_search_mock = Mock()
+    monkeypatch.setattr("analysis.nodes.call_web_search", web_search_mock)
+
+    state = {
+        "analysis_type": AnalysisType.LEGAL_LANDSCAPE,
+        "query": "legal landscape for Acme",
+        "competitors": [],
+        "market": None,
+        "jurisdiction": "US",
+        "focal_entity": "Acme",
+    }
+    result = gather(state)
+
+    web_search_mock.assert_not_called()
+    assert all(r.source_type != SourceType.WEB for r in result["retrieved_results"])
+
+
+def test_gather_calls_web_search_when_enabled_and_builds_web_citations(monkeypatch) -> None:
+    monkeypatch.setattr("analysis.nodes.web_search_enabled", lambda: True)
+    raw = AIMessage(content="")
+    structured_model = Mock()
+    structured_model.invoke.return_value = {
+        "parsed": GatherQueries(source_queries={"pubmed": "oncology trials", "web": "latest oncology news"}),
+        "raw": raw,
+    }
+    model = Mock()
+    model.with_structured_output.return_value = structured_model
+    monkeypatch.setattr("analysis.nodes.get_model", lambda *a, **k: model)
+
+    pubmed_tool = Mock(source_type=SourceType.PUBMED)
+    pubmed_tool.invoke.return_value = _result(SourceType.PUBMED)
+    monkeypatch.setattr("analysis.nodes.ALL_DATA_SOURCE_TOOLS", [pubmed_tool])
+
+    web_payload = {
+        "results": [{"url": "https://example.com", "title": "News", "snippet": "latest update"}],
+        "citations": [{
+            "source_id": "https://example.com",
+            "source_type": "web",
+            "url": "https://example.com",
+            "title": "News",
+            "relevant_passage": "latest update",
+            "snippet": "latest update",
+            "retrieved_at": datetime.now(UTC).isoformat(),
+        }],
+    }
+    web_search_mock = Mock(return_value=web_payload)
+    monkeypatch.setattr("analysis.nodes.call_web_search", web_search_mock)
+
+    state = {
+        "analysis_type": AnalysisType.LEGAL_LANDSCAPE,
+        "query": "legal landscape for Acme",
+        "competitors": [],
+        "market": None,
+        "jurisdiction": "US",
+        "focal_entity": "Acme",
+    }
+    result = gather(state)
+
+    web_search_mock.assert_called_once_with(query="latest oncology news")
+    web_results = [r for r in result["retrieved_results"] if r.source_type == SourceType.WEB]
+    assert len(web_results) == 1
+    citation = web_results[0].citations[0]
+    assert citation.source_type == SourceType.WEB
+    assert citation.url == "https://example.com"
+    assert citation.title == "News"
+    assert citation.relevant_passage == "latest update"
+    assert citation.authors is None and citation.year is None
