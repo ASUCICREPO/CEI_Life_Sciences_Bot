@@ -164,10 +164,10 @@ test('validateRequest accepts a free-text request (no task_type) and rejects an 
   assert.throws(() => validateRequest(request({ task_type: 'not-a-real-task' })), { statusCode: 400 });
 });
 
-test('requestBodyFor defaults a document_type for drafting only', () => {
+test('requestBodyFor sends no document_type for free text, drafting included', () => {
   const parsed = { request: { message: 'hello', mode: 'science' } };
   assert.deepEqual(requestBodyFor('analysis', parsed), { prompt: 'hello', mode: 'science' });
-  assert.deepEqual(requestBodyFor('drafting', parsed), { prompt: 'hello', mode: 'science', document_type: 'whitepaper' });
+  assert.deepEqual(requestBodyFor('drafting', parsed), { prompt: 'hello', mode: 'science' });
 });
 
 test('walkComponents visits parent-first and clears container children', () => {

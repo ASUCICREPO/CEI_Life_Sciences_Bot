@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createHandler, validateRequest, isRouteChoice, actionResponse, mapRouterError, ROUTE_CHOICE_INTERACTION_ID, ROUTE_CHOICE_COMPONENT_ID, ROUTE_CHOICE_ACTION_ID } = require('./index');
+const { createHandler, validateRequest, isRouteChoice, actionResponse, mapRouterError, agentRunBodyFor, ROUTE_CHOICE_INTERACTION_ID, ROUTE_CHOICE_COMPONENT_ID, ROUTE_CHOICE_ACTION_ID } = require('./index');
 
 const SESSION = '6f1c2d3e-0000-4000-8000-000000000001';
 const ACTION = { request_id: 'r1', session_id: SESSION, surface_id: 'analysis-scope', revision: 1, interaction_id: 'i-1', component_id: 'c-1', action_id: 'approve-scope', value: null };
@@ -75,6 +75,10 @@ test('drafting chats resume the drafting runtime', async () => {
   const h = harness({ agent: 'drafting' });
   await h.handler(request(), {});
   assert.equal(h.calls[0].target, 'drafting');
+});
+
+test('agentRunBodyFor sends no document_type for a free-text route-choice pick', () => {
+  assert.deepEqual(agentRunBodyFor({ message: 'hello', mode: 'science' }), { prompt: 'hello', mode: 'science' });
 });
 
 test('another user\'s session is not found and never reaches a runtime', async () => {
