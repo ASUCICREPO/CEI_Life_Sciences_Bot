@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Circle, Info, RotateCcw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Circle, Info, RotateCcw } from 'lucide-react';
 import { useProductTour } from '../components/tour/ProductTour';
 import { toolSources } from '../mocks/tools';
 import { useModelsClient } from '../lib/useModels';
 import { ModelsClientError, type ModelOption, type SettingsMode } from '../lib/modelsClient';
+import { useAuth } from '../lib/auth/AuthProvider';
+import { DeleteAccountDialog } from '../components/DeleteAccountDialog';
 
 type LoadStatus = 'loading' | 'ready' | 'error';
 
@@ -107,6 +109,37 @@ function ModelSettingsSection() {
           </div>
         </div>
       )}
+    </section>
+  );
+}
+
+// ADR: flag read from /config.json, off by default (B109) | matches researchStreamingEnabled's pattern
+// in lib/auth/config.ts; the section is not rendered at all when the flag is off.
+function DeleteAccountSection() {
+  const { config } = useAuth();
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  if (config?.accountDeletionEnabled !== true) return null;
+
+  return (
+    <section className="border border-evidence-weak/30 bg-evidence-weak-bg rounded-lg p-5 mb-4">
+      <div className="flex items-start gap-3">
+        <AlertTriangle size={18} className="text-evidence-weak shrink-0 mt-0.5" aria-hidden="true" />
+        <div className="flex-1 min-w-0">
+          <h2 className="text-sm font-semibold text-evidence-weak">Delete account</h2>
+          <p className="text-xs text-text-secondary mt-1">
+            Permanently delete your account and all of its data. This can not be undone.
+          </p>
+          <button
+            type="button"
+            onClick={() => setDialogOpen(true)}
+            className="mt-3 text-xs font-medium px-3 py-1.5 rounded-md border border-evidence-weak/40 text-evidence-weak hover:bg-evidence-weak-bg"
+          >
+            Delete account
+          </button>
+        </div>
+      </div>
+      <DeleteAccountDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
     </section>
   );
 }
@@ -219,6 +252,8 @@ export function SettingsPage() {
           </div>
         </div>
       </section>
+
+      <DeleteAccountSection />
 
     </div>
   );

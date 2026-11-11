@@ -10,14 +10,19 @@ import { ProductTourProvider } from '../components/tour/ProductTour';
 // on every setState and re-trigger ModelSettingsSection's load effect (its dependency array).
 const mocks = vi.hoisted(() => ({
   client: { listModels: vi.fn(), getSettings: vi.fn(), updateSettings: vi.fn() },
+  auth: { config: null as { accountDeletionEnabled?: boolean } | null, getAccessToken: vi.fn(async () => 'token'), signOut: vi.fn(async () => {}) },
 }));
 
 vi.mock('../lib/useModels', () => ({ useModelsClient: () => mocks.client }));
+// ADR: mock AuthProvider here too | DeleteAccountSection (added below) reads the flag from useAuth().config,
+// same mocking pattern as ReportExports.test.tsx.
+vi.mock('../lib/auth/AuthProvider', () => ({ useAuth: () => mocks.auth }));
 
 beforeEach(() => {
   mocks.client.listModels.mockReset();
   mocks.client.getSettings.mockReset();
   mocks.client.updateSettings.mockReset();
+  mocks.auth.config = null;
 });
 afterEach(cleanup);
 
@@ -64,5 +69,28 @@ describe('SettingsPage model and mode defaults', () => {
     render(<MemoryRouter><AppProvider><ProductTourProvider><SettingsPage /></ProductTourProvider></AppProvider></MemoryRouter>);
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Could not reach the settings service.');
     expect(screen.queryByLabelText('Default model')).toBeNull();
+  });
+});
+
+describe('SettingsPage delete account section', () => {
+  beforeEach(() => {
+    mocks.client.listModels.mockResolvedValue([]);
+    mocks.client.getSettings.mockResolvedValue({ default_model_id: null, default_mode: null, configured_sources: [] });
+  });
+
+  it('is not rendered when accountDeletionEnabled is off', async () => {
+    mocks.auth.config = null;
+    render(<MemoryRouter><AppProvider><ProductTourProvider><SettingsPage /></ProductTourProvider></AppProvider></MemoryRouter>);
+    await waitFor(() => expect(screen.queryByLabelText('Default model')).toBeTruthy());
+    expect(screen.queryByRole('heading', { name: 'Delete account' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete account' })).toBeNull();
+  });
+
+  it('is rendered when accountDeletionEnabled is on', async () => {
+    mocks.auth.config = { accountDeletionEnabled: true };
+    render(<MemoryRouter><AppProvider><ProductTourProvider><SettingsPage /></ProductTourProvider></AppProvider></MemoryRouter>);
+    await waitFor(() => expect(screen.queryByLabelText('Default model')).toBeTruthy());
+    expect(screen.getByRole('heading', { name: 'Delete account' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Delete account' })).toBeTruthy();
   });
 });
