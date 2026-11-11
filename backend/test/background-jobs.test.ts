@@ -130,10 +130,15 @@ describe('F13 POST /ui-actions', () => {
     expect(post.Properties.Integration.ResponseTransferMode).toBe('STREAM');
   });
 
-  test('the handler can only read chat metadata; runtimes authenticate the forwarded user token', () => {
+  test('the handler reads chat metadata and clears route choices only; runtimes authenticate the user token', () => {
     const data = statementsForRole('UiActionsRole').filter((s) =>
       ([] as string[]).concat(s.Action).some((a) => a.startsWith('dynamodb:') || a.startsWith('bedrock')));
-    expect(data.flatMap((s) => ([] as string[]).concat(s.Action))).toEqual(['dynamodb:GetItem']);
-    expect(JSON.stringify(data[0].Resource)).toContain('ChatMetadataStore');
+    // F9: the route-choice action reads then deletes the pending choice in ActiveRunsStore (route_choice#<session>)
+    const byTable = (name: string) => data.filter((s) => JSON.stringify(s.Resource).includes(name))
+      .flatMap((s) => ([] as string[]).concat(s.Action)).sort();
+    expect(byTable('ChatMetadataStore')).toEqual(['dynamodb:GetItem']);
+    expect(byTable('ActiveRunsStore')).toEqual(['dynamodb:DeleteItem', 'dynamodb:GetItem']);
+    expect(data.flatMap((s) => ([] as string[]).concat(s.Action)).sort())
+      .toEqual(['dynamodb:DeleteItem', 'dynamodb:GetItem', 'dynamodb:GetItem']);
   });
 });
