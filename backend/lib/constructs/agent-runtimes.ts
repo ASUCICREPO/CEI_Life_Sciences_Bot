@@ -130,6 +130,10 @@ export interface AgentRuntimesProps {
   readonly codeInterpreter: agentcore.CodeInterpreterCustom;
   /** CDK-created attachments bucket; its generated name reaches the agents as CEI_ATTACHMENTS_BUCKET. */
   readonly attachmentsBucket: s3.IBucket;
+  /** B110: Managed Knowledge Base id, for the runtime's own bedrock:Retrieve call (CEI_KNOWLEDGE_BASE_ID). */
+  readonly knowledgeBaseId: string;
+  /** B110: Managed Knowledge Base ARN, to scope the bedrock:Retrieve grant to this one resource. */
+  readonly knowledgeBaseArn: string;
   /**
    * Browser origins allowed to call the runtimes directly (site URL, plus localhost when enabled). Reaches the
    * container as CEI_ALLOWED_ORIGINS, where shared/runtime/app_factory.py answers the CORS preflight.
@@ -216,6 +220,9 @@ export class AgentRuntimes extends Construct {
       CEI_CHAT_HISTORY_TABLE: props.chatHistoryTable.tableName,
       CEI_CODE_INTERPRETER_ID: props.codeInterpreter.codeInterpreterId,
       CEI_ATTACHMENTS_BUCKET: props.attachmentsBucket.bucketName,
+      // B110: retrieval is runtime code (not a Gateway target) -- the graph step calls bedrock:Retrieve
+      // itself with an andAll user_id+session_id filter; the model only ever supplies the query text.
+      CEI_KNOWLEDGE_BASE_ID: props.knowledgeBaseId,
       // ADOT's opt-out=true keeps GenAI payloads on spans. Keep extraction enabled and
       // discard extracted OTLP logs so recognized GenAI content is not exported.
       AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT: 'false',
@@ -380,6 +387,10 @@ export class AgentRuntimes extends Construct {
     );
     runtime.role.addToPrincipalPolicy(
       new iam.PolicyStatement({ actions: ['s3:ListBucket'], resources: [props.attachmentsBucket.bucketArn] }),
+    );
+    // B110: the deterministic retrieval graph step calls bedrock:Retrieve directly, scoped to this one KB
+    runtime.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({ actions: ['bedrock:Retrieve'], resources: [props.knowledgeBaseArn] }),
     );
   }
 }

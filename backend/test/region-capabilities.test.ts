@@ -122,6 +122,16 @@ describe('evaluateRegion', () => {
     expect(result.errors.some((e) => e.includes('inference profile') && e.includes('CREATING'))).toBe(true);
   });
 
+  it('B110: Managed KB needs only "bedrock", not "s3vectors"', () => {
+    const input: EvaluateRegionInput = {
+      region: 'us-east-1',
+      ssmServices: { 'bedrock-agentcore': true, s3vectors: false, bedrock: true },
+      models: [okModel({ role: 'default' }), okModel({ role: 'router' })],
+    };
+    const result = evaluateRegion(input);
+    expect(result.errors.some((e) => e.includes('Knowledge Bases'))).toBe(false);
+  });
+
   it('reports a model-check error passthrough', () => {
     const input: EvaluateRegionInput = {
       region: 'us-east-1',

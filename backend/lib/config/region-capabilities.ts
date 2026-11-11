@@ -106,9 +106,10 @@ export const FEATURE_MATRIX: Record<string, RegionListFeature | RuleFeature> = {
   },
   bedrockKnowledgeBases: {
     kind: 'rule',
-    rule: 'SSM global-infrastructure service ids "bedrock" and "s3vectors" both exist in the Region',
+    // B110: Managed Knowledge Base (type: MANAGED) -- AWS runs the vector store, so no S3 Vectors capability is needed.
+    rule: 'SSM global-infrastructure service id "bedrock" exists in the Region',
     docUrl: KB_DOC_URL,
-    checkedOn: '2026-09-29',
+    checkedOn: '2026-11-11',
   },
   webSearch: {
     kind: 'region-list',
@@ -194,12 +195,13 @@ function evaluateS3Vectors(input: EvaluateRegionInput, errors: string[]): boolea
 }
 
 function evaluateBedrockKnowledgeBases(input: EvaluateRegionInput, errors: string[]): void {
-  if (input.ssmServices.bedrock && input.ssmServices.s3vectors) {
+  // B110: the attachments KB is Managed (AWS-run vector store), so only the "bedrock" service id matters here.
+  if (input.ssmServices.bedrock) {
     return;
   }
   errors.push(
-    `Bedrock Knowledge Bases (with S3 Vectors) are not available in ${input.region} ` +
-      `(SSM service "bedrock" and/or "s3vectors" not found for this Region). ` +
+    `Bedrock Knowledge Bases are not available in ${input.region} ` +
+      `(SSM service "bedrock" not found for this Region). ` +
       `See ${FEATURE_MATRIX.bedrockKnowledgeBases.docUrl} (checked ${FEATURE_MATRIX.bedrockKnowledgeBases.checkedOn}).`,
   );
 }
