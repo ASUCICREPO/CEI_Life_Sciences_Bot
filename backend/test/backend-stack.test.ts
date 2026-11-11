@@ -60,7 +60,9 @@ describe('BackendStack', () => {
 
   it('exposes config and a WebSearchEnabled output when a config is supplied', () => {
     const config = testConfig({ webSearchEnabled: true });
-    const { stack, template } = built({ config });
+    // Own build, not built(): toBe() checks object identity, which a shared cached stack can not promise.
+    const stack = testStack(new cdk.App(), 'TestStack', { config });
+    const template = Template.fromStack(stack);
     expect(stack.config).toBe(config);
     template.hasOutput('WebSearchEnabled', { Value: 'true' });
   });
