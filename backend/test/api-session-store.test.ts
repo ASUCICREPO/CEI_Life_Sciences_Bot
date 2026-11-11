@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { BackendStack } from '../lib/backend-stack';
 import { DeployConfig, DEFAULT_LIMITS } from '../lib/config/deploy-config';
+import { memoSynth } from './helpers/memo-synth';
 
 const FIXTURE_ASSET_PATH = path.join(__dirname, 'fixtures', 'spa');
 
@@ -23,14 +24,18 @@ function testConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
 }
 
 function build(config?: DeployConfig): { stack: BackendStack; template: Template } {
-  const app = new cdk.App();
-  const stack = new BackendStack(app, 'TestStack', {
-    env: { region: 'us-east-1', account: '123456789012' },
-    frontendAssetPath: FIXTURE_ASSET_PATH,
-    config,
-    webAclArn: config ? 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123' : undefined,
+  // ADR: memoize by config content | many tests build the identical stack and only read it
+  const key = JSON.stringify({ config: config ?? null });
+  return memoSynth(key, () => {
+    const app = new cdk.App();
+    const stack = new BackendStack(app, 'TestStack', {
+      env: { region: 'us-east-1', account: '123456789012' },
+      frontendAssetPath: FIXTURE_ASSET_PATH,
+      config,
+      webAclArn: config ? 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123' : undefined,
+    });
+    return { stack, template: Template.fromStack(stack) };
   });
-  return { stack, template: Template.fromStack(stack) };
 }
 
 function policyActionsFor(template: Template, roleLogicalIdPrefix: string): Array<{ actions: string[]; resource: unknown }> {
