@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage
 
 from shared.config import config
 from shared.runtime.guarded_input import GuardScopedChatBedrockConverse
+from shared.runtime.prompt_cache import with_prompt_cache
 from shared.state import BaseAgentState
 
 
@@ -47,6 +48,7 @@ def get_model(
     # (backend/lib/constructs/model-guardrail.ts) is configured outputEnabled=false; only input is assessed.
     # Empty id/version (local dev, no deploy config yet) leaves get_model() unchanged from before this phase.
     model_cls = ChatBedrockConverse
+    guarded = False
     if config.guardrail_id and config.guardrail_version:
         kwargs["guardrails"] = {
             "guardrail_identifier": config.guardrail_id,
@@ -57,6 +59,12 @@ def get_model(
         # guardContent | B51a scopes masking to user-typed text, not retrieved evidence
         model_cls = GuardScopedChatBedrockConverse
         kwargs["user_text_required"] = user_text
+        guarded = True
+    if not guarded:
+        # ADR: cachePoint (F08) via a dynamic wrap, not a static subclass | keeps this branch's
+        # class selection monkeypatchable (test_model_credentials.py patches utils.ChatBedrockConverse
+        # directly); GuardScopedChatBedrockConverse already mixes in caching itself (guarded_input.py).
+        model_cls = with_prompt_cache(model_cls)
     return model_cls(**kwargs)
 
 
