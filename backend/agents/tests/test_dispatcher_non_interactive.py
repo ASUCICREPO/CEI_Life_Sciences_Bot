@@ -53,7 +53,7 @@ def test_dispatcher_analysis_step_receives_parent_memory(monkeypatch) -> None:
     graph = _CapturingGraph()
     monkeypatch.setattr(analysis.run, "compile_graph", lambda *a, **k: graph)
     asyncio.run(InProcessDispatcher()._run_analysis(
-        "p", "science", "s1:step:a", "a", None, None, ["likes GLP-1 market data"],
+        "p", "science", "u1", "s1:step:a", "a", None, None, ["likes GLP-1 market data"],
     ))
     assert graph.state["long_term_context"] == ["likes GLP-1 market data"]
     assert graph.state["confirmed_scope"] is True

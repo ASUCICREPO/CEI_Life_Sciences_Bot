@@ -28,6 +28,7 @@ from shared.schemas.response_blocks import (
 from shared.runtime.guarded_input import Guarded, content_blocks, user_turn
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
+from shared.tools.attachments_kb import retrieve_attachments
 from shared.tools.base import DataSourceResult
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
 from shared.tools.hitl.inline_functions import build_scope_confirmation_surface
@@ -314,6 +315,17 @@ def gather(state: AnalysisState) -> dict[str, Any]:
                 detail=f"{source.value} | query={search_query!r} | ERROR",
             ))
 
+    # B110: deterministic per-chat attachments retrieval, once per turn alongside the fixed source map.
+    attachment_result = retrieve_attachments(
+        query, user_id=state.get("user_id", ""), session_id=state.get("session_id", "")
+    )
+    if attachment_result is not None:
+        results.append(attachment_result)
+    trace_entries.append(TraceEntry(
+        stage="TOOL_CALL",
+        detail=f"attachments | results={len(attachment_result.results) if attachment_result else 0}",
+    ))
+
     return {"retrieved_results": results, "trace": trace_entries}
 
 
@@ -447,9 +459,12 @@ def report(state: AnalysisState) -> dict[str, Any]:
             context_parts.append(str(item))
             evidence_texts.append(str(item))
         for cit in res.citations:
-            # ADR: web citations have no authors/year (B44) | drop them from this line only
+            # ADR: web/attachment citations have no authors/year (B44/B110) | drop them from this line only
             if cit.source_type is SourceType.WEB:
                 context_parts.append(f"[{cit.source_id}] {cit.title} — {cit.url}")
+            elif cit.source_type is SourceType.ATTACHMENTS:
+                # B110: no external URL for an attachment citation -- the filename is the title.
+                context_parts.append(f"[{cit.source_id}] {cit.title}")
             else:
                 context_parts.append(f"[{cit.source_id}] {cit.title} ({cit.year}) — {cit.url}")
             evidence_texts.append(cit.title)

@@ -252,6 +252,69 @@ def test_gather_calls_fixed_source_map_only(monkeypatch) -> None:
     pubmed_tool.invoke.assert_called_once_with(query="oncology trials")
 
 
+def test_gather_appends_attachments_result_and_trace(monkeypatch) -> None:
+    raw = AIMessage(content="")
+    structured_model = Mock()
+    structured_model.invoke.return_value = {"parsed": GatherQueries(source_queries={"pubmed": "oncology trials"}), "raw": raw}
+    model = Mock()
+    model.with_structured_output.return_value = structured_model
+    monkeypatch.setattr("analysis.nodes.get_model", lambda *a, **k: model)
+
+    pubmed_tool = Mock(source_type=SourceType.PUBMED)
+    pubmed_tool.invoke.return_value = _result(SourceType.PUBMED)
+    monkeypatch.setattr("analysis.nodes.ALL_DATA_SOURCE_TOOLS", [pubmed_tool])
+
+    captured = {}
+
+    def fake_retrieve_attachments(query, *, user_id, session_id):
+        captured["user_id"] = user_id
+        captured["session_id"] = session_id
+        return _result(SourceType.ATTACHMENTS)
+
+    monkeypatch.setattr("analysis.nodes.retrieve_attachments", fake_retrieve_attachments)
+
+    state = {
+        "analysis_type": AnalysisType.LEGAL_LANDSCAPE,
+        "query": "legal landscape for Acme",
+        "competitors": [],
+        "market": None,
+        "jurisdiction": "US",
+        "focal_entity": "Acme",
+        "user_id": "u1",
+        "session_id": "s1",
+    }
+    result = gather(state)
+
+    assert captured == {"user_id": "u1", "session_id": "s1"}
+    source_types = {r.source_type for r in result["retrieved_results"]}
+    assert source_types == {SourceType.PUBMED, SourceType.ATTACHMENTS}
+    assert any("attachments | results=1" in t.detail for t in result["trace"])
+
+
+def test_gather_handles_no_attachments(monkeypatch) -> None:
+    raw = AIMessage(content="")
+    structured_model = Mock()
+    structured_model.invoke.return_value = {"parsed": GatherQueries(source_queries={}), "raw": raw}
+    model = Mock()
+    model.with_structured_output.return_value = structured_model
+    monkeypatch.setattr("analysis.nodes.get_model", lambda *a, **k: model)
+    monkeypatch.setattr("analysis.nodes.ALL_DATA_SOURCE_TOOLS", [])
+    monkeypatch.setattr("analysis.nodes.retrieve_attachments", lambda *a, **k: None)
+
+    state = {
+        "analysis_type": AnalysisType.LEGAL_LANDSCAPE,
+        "query": "legal landscape for Acme",
+        "competitors": [],
+        "market": None,
+        "jurisdiction": "US",
+        "focal_entity": "Acme",
+    }
+    result = gather(state)
+
+    assert result["retrieved_results"] == []
+    assert any("attachments | results=0" in t.detail for t in result["trace"])
+
+
 # ── analyze ──────────────────────────────────────────────────────────────────
 
 

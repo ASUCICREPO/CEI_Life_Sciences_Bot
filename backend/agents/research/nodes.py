@@ -26,6 +26,7 @@ from shared.runtime.guarded_input import content_blocks, user_turn, Guarded
 from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
+from shared.tools.attachments_kb import retrieve_attachments
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
 from shared.tools.base import DataSourceResult, GatewayUnavailableError
 # ADR: reuse the already-tested _run() rather than duplicate gateway-call/trim logic | B44
@@ -261,6 +262,19 @@ def clarify(state: ResearchState) -> dict[str, Any]:
     }
 
 
+def _retrieve_attachments_step(state: ResearchState, results: list, trace_entries: list) -> dict[str, Any]:
+    """B110: deterministic per-chat attachments retrieval, appended once per `retrieve()` call."""
+    attachment_result = retrieve_attachments(
+        state.get("query", ""), user_id=state.get("user_id", ""), session_id=state.get("session_id", "")
+    )
+    merged_results = [*results, attachment_result] if attachment_result else list(results)
+    merged_trace = [*trace_entries, TraceEntry(
+        stage="TOOL_CALL",
+        detail=f"attachments | results={len(attachment_result.results) if attachment_result else 0}",
+    )]
+    return {"retrieved_results": merged_results, "trace": merged_trace}
+
+
 def retrieve(state: ResearchState) -> dict[str, Any]:
     plan = state.get("triage_plan")
     tool_map = {t.source_type: t for t in ALL_DATA_SOURCE_TOOLS}
@@ -269,7 +283,7 @@ def retrieve(state: ResearchState) -> dict[str, Any]:
         pubmed = tool_map.get(SourceType.PUBMED)
         if not query or pubmed is None:
             trace = TraceEntry(stage="RETRIEVE", detail="Skipped — no sources selected")
-            return {"retrieved_results": [], "trace": [trace]}
+            return _retrieve_attachments_step(state, [], [trace])
 
         fallback_query = _fallback_pubmed_query(query)
         try:
@@ -283,7 +297,7 @@ def retrieve(state: ResearchState) -> dict[str, Any]:
                 ),
             )
             logger.info({"event": "retrieve_pubmed_fallback", "count": len(result.results)})
-            return {"retrieved_results": [result], "trace": [trace]}
+            return _retrieve_attachments_step(state, [result], [trace])
         except GatewayUnavailableError:
             raise
         except Exception:
@@ -292,7 +306,7 @@ def retrieve(state: ResearchState) -> dict[str, Any]:
                 stage="TOOL_CALL",
                 detail=f"Fallback behavior: PubMed invoked after triage selected no sources | query={fallback_query!r} | ERROR",
             )
-            return {"retrieved_results": [], "trace": [trace]}
+            return _retrieve_attachments_step(state, [], [trace])
 
     results = []
     trace_entries: list[TraceEntry] = []
@@ -348,7 +362,7 @@ def retrieve(state: ResearchState) -> dict[str, Any]:
                 detail=f"{source.value} | query={search_query!r} | ERROR",
             ))
 
-    return {"retrieved_results": results, "trace": trace_entries}
+    return _retrieve_attachments_step(state, results, trace_entries)
 
 
 def synthesize(state: ResearchState) -> dict[str, Any]:
@@ -366,9 +380,12 @@ def synthesize(state: ResearchState) -> dict[str, Any]:
             context_parts.append(str(item))
             evidence_texts.append(str(item))
         for cit in res.citations:
-            # ADR: web citations have no authors/year (B44) | drop them from this line only
+            # ADR: web/attachment citations have no authors/year (B44/B110) | drop them from this line only
             if cit.source_type is SourceType.WEB:
                 context_parts.append(f"[{cit.source_id}] {cit.title} — {cit.url}")
+            elif cit.source_type is SourceType.ATTACHMENTS:
+                # B110: no external URL for an attachment citation -- the filename is the title.
+                context_parts.append(f"[{cit.source_id}] {cit.title}")
             else:
                 context_parts.append(
                     f"[{cit.source_id}] {cit.title} ({cit.year}) — {cit.url}"
@@ -511,6 +528,9 @@ def cite(state: ResearchState) -> dict[str, Any]:
             # ADR: web citations render url/title only (B44) -- no authors/year metadata exists
             if cit.source_type is SourceType.WEB:
                 bibliography_lines.append(f"[{sid}] {cit.title}. {cit.url}")
+            elif cit.source_type is SourceType.ATTACHMENTS:
+                # B110: no URL to render -- the filename (title) is the whole reference.
+                bibliography_lines.append(f"[{sid}] {cit.title}")
             else:
                 authors = ", ".join(cit.authors[:3]) + (" et al." if len(cit.authors) > 3 else "")
                 bibliography_lines.append(

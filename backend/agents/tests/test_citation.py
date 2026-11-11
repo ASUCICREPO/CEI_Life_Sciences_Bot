@@ -45,3 +45,11 @@ def test_non_web_citation_with_authors_and_year_is_unaffected():
     assert citation.authors == ["A. Researcher"]
     assert citation.year == 2026
     assert citation.snippet is None
+
+
+def test_attachments_citation_needs_no_authors_or_year():
+    """B110: attachment chunks carry no bibliographic metadata, same relaxation as web (B44)."""
+    citation = Citation(**_base(source_type=SourceType.ATTACHMENTS, source_id="attachment:f1:0", url="", title="notes.pdf"))
+    assert citation.authors is None
+    assert citation.year is None
+    assert citation.source_type is SourceType.ATTACHMENTS

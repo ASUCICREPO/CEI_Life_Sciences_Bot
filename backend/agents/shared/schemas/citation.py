@@ -21,6 +21,13 @@ class SourceType(StrEnum):
     PATENTSVIEW = "patentsview"
     # B44: AgentCore Web Search built-in connector -- no author/year metadata, snippet-only citation.
     WEB = "web"
+    # B110: per-chat attachment chunks from the Managed Knowledge Base -- no author/year metadata,
+    # filename-only citation, no external URL.
+    ATTACHMENTS = "attachments"
+
+
+# B44/B110: neither the web search connector nor attachment chunks carry author/year metadata.
+_NO_AUTHORS_YEAR = frozenset({SourceType.WEB, SourceType.ATTACHMENTS})
 
 
 class Citation(BaseModel):
@@ -41,7 +48,7 @@ class Citation(BaseModel):
 
     @model_validator(mode="after")
     def _require_authors_and_year_unless_web(self) -> Citation:
-        if self.source_type is not SourceType.WEB:
+        if self.source_type not in _NO_AUTHORS_YEAR:
             if self.authors is None or self.year is None:
-                raise ValueError("authors and year are required for all source types except web (B44)")
+                raise ValueError("authors and year are required for all source types except web/attachments (B44/B110)")
         return self
