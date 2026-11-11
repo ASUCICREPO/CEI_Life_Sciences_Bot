@@ -45,7 +45,7 @@ describe('Research streaming infrastructure', () => {
       BillingMode: 'PAY_PER_REQUEST',
     });
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'nodejs24.x', Handler: 'index.handler', Timeout: 840,
+      Runtime: 'nodejs24.x', Handler: 'session-runner/index.handler', Timeout: 840,
       Environment: { Variables: Match.objectLike({ CEI_ROUTER_FUNCTION: Match.anyValue(), CEI_CHAT_HISTORY_TABLE: Match.anyValue() }) },
     });
     const functions = Object.entries(template.findResources('AWS::Lambda::Function')) as [string, any][];
@@ -65,7 +65,9 @@ describe('Research streaming infrastructure', () => {
     expect(actionsFor(env.CEI_CHAT_HISTORY_TABLE.Ref)).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:TransactWriteItems'].sort());
     expect(actionsFor(env.CEI_ACTIVE_RUNS_TABLE.Ref)).toEqual(['dynamodb:PutItem', 'dynamodb:TransactWriteItems'].sort());
     expect(actionsFor(routerId)).toEqual(['lambda:InvokeFunction']);
-    expect(statements).toHaveLength(4);
+    // F19/B109: the run-start account gate reads UserMetadataTable (one read-only GetItem).
+    expect(actionsFor(env.CEI_USER_METADATA_TABLE.Ref)).toEqual(['dynamodb:GetItem']);
+    expect(statements).toHaveLength(5);
     expect(JSON.stringify(statements)).not.toContain('"*"');
   });
   it('grants the Research role access to the internal refresh route', () => {
