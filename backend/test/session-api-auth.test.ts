@@ -75,6 +75,7 @@ describe.each([
       'POST /chat/stream', 'POST /client-diagnostics', 'POST /sessions',
       'GET /jobs', 'GET /jobs/{jobId}', 'POST /jobs/{jobId}/cancel', 'POST /ui-actions',
       'GET /models', 'GET /settings', 'PUT /settings',
+      'POST /attachments/presign',
     ].sort());
   });
 

@@ -334,7 +334,7 @@ describe('BackendStack', () => {
 
     it('enables PITR, retains, and sets no TTL on the tables', () => {
       const { all } = tables();
-      expect(all).toHaveLength(7);
+      expect(all).toHaveLength(8);
       for (const t of all) {
         expect(t.Properties.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
         expect(t.Properties.BillingMode).toBe('PAY_PER_REQUEST');

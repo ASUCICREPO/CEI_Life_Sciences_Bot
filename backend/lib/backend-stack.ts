@@ -14,6 +14,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import { DeployConfig, DEFAULT_LIMITS, DEFAULT_TOOL_POLICY_MODE } from './config/deploy-config';
 import { PythonDepsLayer } from './constructs/python-deps-layer';
 import { AgentRuntimes } from './constructs/agent-runtimes';
@@ -450,6 +451,38 @@ export class BackendStack extends cdk.Stack {
     });
 
     // ---------------------------------------------------------------
+    // Attachment metadata store + KB bucket (file upload/RAG)
+    // ---------------------------------------------------------------
+
+    const attachmentsTable = new dynamodb.Table(this, 'AttachmentsMetadataStore', {
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'attachment_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      deletionProtection: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    // GSI to query attachments by session
+    attachmentsTable.addGlobalSecondaryIndex({
+      indexName: 'by_session',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // ADR: separate KB bucket for extracted text chunks | Rationale: Bedrock KB indexes text files only;
+    // keeping chunks separate from the raw uploads bucket avoids confusion and allows different lifecycle rules
+    const kbBucket = new s3.Bucket(this, 'KBChunksBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      serverAccessLogsBucket: logsBucket,
+      serverAccessLogsPrefix: 'kb-chunks-access-logs/',
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
+    // ---------------------------------------------------------------
     // Session Lambdas (Python 3.14) sharing one dependency layer
     // ---------------------------------------------------------------
 
@@ -567,6 +600,122 @@ export class BackendStack extends cdk.Stack {
     chatHistoryTable.grant(sessionHistory.role, 'dynamodb:Query');
     // F6 B59: GET .../turns/{messageId}/trace reads the trace head (GetItem) and its chunks (BatchGetItem)
     chatHistoryTable.grant(sessionHistory.role, 'dynamodb:GetItem', 'dynamodb:BatchGetItem');
+
+    // ---------------------------------------------------------------
+    // Attachment presign + processor Lambdas (file upload/RAG)
+    // ---------------------------------------------------------------
+
+    const attachmentPresign = createSessionFunction(
+      'AttachmentPresign',
+      'attachment-presign',
+      'handler.handler',
+      {
+        ATTACHMENTS_BUCKET: attachmentsBucket.bucketName,
+        ATTACHMENTS_TABLE: attachmentsTable.tableName,
+        ALLOWED_ORIGINS: allowedOrigins.join(','),
+      },
+      [],
+    );
+    // Presign Lambda needs: PutObject presign on attachments bucket, PutItem on attachments table
+    attachmentPresign.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:PutObject'],
+        resources: [`${attachmentsBucket.bucketArn}/uploads/*`],
+      }),
+    );
+    attachmentPresign.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:PutItem'],
+        resources: [attachmentsTable.tableArn],
+      }),
+    );
+    NagSuppressions.addResourceSuppressions(
+      attachmentPresign.role,
+      [{
+        id: 'AwsSolutions-IAM5',
+        reason: 'ADR: Wildcard in S3 path for uploads prefix | Rationale: presign Lambda generates URLs for user-specific paths under uploads/; the wildcard is constrained to that prefix only | Alternative: per-user policies rejected — not practical for multi-tenant',
+      }],
+      true,
+    );
+
+    // Processor Lambda — triggered by S3 events
+    const processorLogGroup = new logs.LogGroup(this, 'AttachmentProcessorLogs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    const processorRole = new iam.Role(this, 'AttachmentProcessorRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+    });
+    processorLogGroup.grantWrite(processorRole);
+    suppressXrayWildcard(processorRole);
+
+    // Explicit permissions avoid IAM5 wildcards from .grant*() calls
+    processorRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:GetObject'],
+        resources: [`${attachmentsBucket.bucketArn}/uploads/*`],
+      }),
+    );
+    processorRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:PutObject'],
+        resources: [`${kbBucket.bucketArn}/chunks/*`],
+      }),
+    );
+    processorRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:UpdateItem'],
+        resources: [attachmentsTable.tableArn],
+      }),
+    );
+    NagSuppressions.addResourceSuppressions(
+      processorRole,
+      [{
+        id: 'AwsSolutions-IAM5',
+        reason: 'ADR: Wildcard in S3 paths for uploads and chunks prefixes | Rationale: processor reads from uploads/* and writes to chunks/*; paths are constrained to those prefixes | Alternative: per-file policies rejected — impractical',
+      }],
+      true,
+    );
+
+    const attachmentProcessor = new lambda.Function(this, 'AttachmentProcessorFn', {
+      tracing: lambda.Tracing.ACTIVE,
+      runtime: lambda.Runtime.PYTHON_3_14,
+      handler: 'handler.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', 'attachment-processor'), {
+        exclude: ['tests', '__pycache__', '*.pyc'],
+      }),
+      role: processorRole,
+      logGroup: processorLogGroup,
+      timeout: Duration.minutes(5),
+      memorySize: 1024,
+      environment: {
+        ATTACHMENTS_TABLE: attachmentsTable.tableName,
+        KB_BUCKET: kbBucket.bucketName,
+      },
+      layers: [pythonDeps.layer],
+    });
+
+    // S3 notification triggers processor on uploads
+    attachmentsBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.LambdaDestination(attachmentProcessor),
+      { prefix: 'uploads/' },
+    );
+
+    // ADR: suppress the CDK-owned BucketNotificationsHandler custom resource | Rationale: CDK creates this
+    // singleton Lambda with AWSLambdaBasicExecutionRole to manage S3 event notifications; not under this stack's control
+    const notificationHandler = this.node.children.find((child) =>
+      child.node.id.startsWith('BucketNotificationsHandler'),
+    );
+    if (notificationHandler) {
+      NagSuppressions.addResourceSuppressions(
+        notificationHandler,
+        [
+          { id: 'AwsSolutions-IAM4', reason: "ADR: CDK-owned BucketNotificationsHandler role | Rationale: aws-cdk-lib attaches AWSLambdaBasicExecutionRole internally | Alternative: none — not under this stack's control", appliesTo: ['Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'] },
+        ],
+        true,
+      );
+    }
 
     // ---------------------------------------------------------------
     // AgentCore runtimes (plan 3b4d4f64 decision 9): Cognito JWT inbound authorizer + Authorization header
@@ -704,6 +853,11 @@ export class BackendStack extends cdk.Stack {
     const turnResource = turnsResource.addResource('{messageId}', { defaultCorsPreflightOptions: corsOptions });
     const traceResource = turnResource.addResource('trace', { defaultCorsPreflightOptions: corsOptions });
     traceResource.addMethod('GET', historyIntegration, methodOptions);
+
+    // Attachments presign route
+    const attachmentsResource = api.root.addResource('attachments', { defaultCorsPreflightOptions: corsOptions });
+    const presignResource = attachmentsResource.addResource('presign', { defaultCorsPreflightOptions: corsOptions });
+    presignResource.addMethod('POST', new apigw.LambdaIntegration(attachmentPresign.fn), methodOptions);
 
     // Gateway-generated errors (no Lambda ran) use the same envelope as the Lambdas. The static CORS origin is the
     // site; a localhost dev origin therefore sees these particular errors as CORS failures.
@@ -955,11 +1109,12 @@ export class BackendStack extends cdk.Stack {
         ClientDiagnostics: clientDiagnostics.fn, Exports: exportsHandler.fn, LifeSciencesOperations: gateway.operationsFunction,
         NcbiReadOnly: gateway.ncbiFunction, Jobs: backgroundJobs.jobsFunction, JobWatchdog: backgroundJobs.watchdogFunction,
         PreToken: gateway.preTokenFunction, TokenRefresh: gateway.tokenRefreshFunction, ModelSettings: modelSettings.function,
+        AttachmentPresign: attachmentPresign.fn, AttachmentProcessor: attachmentProcessor,
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) => [`Source${name}`, fn])),
       },
       tables: { ChatMetadata: chatMetadataTable, ChatHistory: chatHistoryTable, ActiveRuns: activeRunsTable,
         Exports: exportsTable, NcbiRateLimiter: gateway.ncbiRateTable, JobIdStore: backgroundJobs.table,
-        UserMetadata: modelSettings.table },
+        UserMetadata: modelSettings.table, Attachments: attachmentsTable },
       signupLogs: preSignUpLogGroup,
       gatewayLogs: gateway.gatewayLogGroup,
       clientLogs: clientDiagnostics.fn.logGroup,
@@ -976,6 +1131,8 @@ export class BackendStack extends cdk.Stack {
         UiActions: { logGroup: uiActionsLogs, terms: ['resume_failed'] },
         Jobs: { logGroup: backgroundJobs.jobsFunction.logGroup, terms: ['handled_api_failure', 'unhandled error', 'runtime_stop_failed'] },
         TokenRefresh: { logGroup: gateway.tokenRefreshFunction.logGroup, terms: ['token_endpoint_error', 'token_refresh_scope_mismatch', 'run_scopes_not_allowed', 'unhandled error'] },
+        AttachmentPresign: { logGroup: attachmentPresign.fn.logGroup, terms: ['presign failed', 'metadata write failed'] },
+        AttachmentProcessor: { logGroup: processorLogGroup, terms: ['Failed', 'extraction failed'] },
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) =>
           [`Source${name}`, { logGroup: fn.logGroup, terms: ['upstream_error', 'exception', 'api_key_lookup_failed', ...(name === 'cmscoverage' ? ['cms_ncd_detail_error'] : [])] }])),
       },

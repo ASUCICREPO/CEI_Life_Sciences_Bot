@@ -8,9 +8,11 @@ describe('operational monitoring', () => {
   const stack = new BackendStack(new cdk.App(), 'MonitoringTest', {
     env: { account: '123456789012', region: 'us-east-1' },
     frontendAssetPath: path.join(__dirname, 'fixtures', 'spa'),
-    config: { region: 'us-east-1', defaultModelId: 'model', routerModelId: 'model', blockedModelIds: [],
+    config: {
+      region: 'us-east-1', defaultModelId: 'model', routerModelId: 'model', blockedModelIds: [],
       allowedEmailDomains: ['example.com'], adminEmail: 'admin@example.com', limits: DEFAULT_LIMITS,
-      webSearchEnabled: true, accountDeletionEnabled: false, allowLocalhostCallback: false },
+      webSearchEnabled: true, accountDeletionEnabled: false, allowLocalhostCallback: false
+    },
   });
   const template = Template.fromStack(stack);
 
@@ -37,7 +39,7 @@ describe('operational monitoring', () => {
   });
 
   it('alarms on every application Lambda error and throttle', () => {
-    const functions = Object.entries(template.findResources('AWS::Lambda::Function')).filter(([id]) => !id.startsWith('Custom'));
+    const functions = Object.entries(template.findResources('AWS::Lambda::Function')).filter(([id]) => !id.startsWith('Custom') && !id.startsWith('BucketNotificationsHandler'));
     const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm')) as any[];
     for (const [id] of functions) {
       for (const metric of ['Errors', 'Throttles']) {
