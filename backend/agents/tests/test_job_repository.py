@@ -168,3 +168,16 @@ def test_scopes_are_stored_privately_and_validated(repo):
     assert "scopes" not in public_job(job)
     with pytest.raises(ValueError):
         create(repo, scopes=("a", "a"))
+
+
+def test_delete_removes_only_the_one_job(repo):
+    job = create(repo)
+    other = create(repo, job_id=new_job_id(2))
+    repo.delete("alice", job["job_id"])
+    assert repo.get("alice", job["job_id"]) is None
+    assert repo.get("alice", other["job_id"]) is not None
+
+
+def test_delete_is_idempotent_and_ignores_an_invalid_id(repo):
+    repo.delete("alice", "job_not_real")  # invalid shape: silently ignored
+    repo.delete("alice", new_job_id(99))  # never existed: no error

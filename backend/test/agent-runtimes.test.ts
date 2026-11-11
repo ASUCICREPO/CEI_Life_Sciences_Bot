@@ -30,7 +30,7 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
       frontendAssetPath: FIXTURE_ASSET_PATH,
       config: { region: 'us-east-1', defaultModelId: 'example.model-v2', routerModelId: 'router',
         blockedModelIds: [], allowedEmailDomains: ['example.com'], adminEmail: 'admin@example.com',
-        limits: DEFAULT_LIMITS, webSearchEnabled: false, allowLocalhostCallback: false },
+        limits: DEFAULT_LIMITS, webSearchEnabled: false, accountDeletionEnabled: false, allowLocalhostCallback: false },
     });
     const configuredRuntimes = Object.values(Template.fromStack(configured).findResources('AWS::BedrockAgentCore::Runtime')) as any[];
     expect(configuredRuntimes).toHaveLength(4);

@@ -16,6 +16,7 @@ function testConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
     adminEmail: 'admin@example.com',
     limits: DEFAULT_LIMITS,
     webSearchEnabled: true,
+    accountDeletionEnabled: false,
     allowLocalhostCallback: false,
     ...overrides,
   };

@@ -20,6 +20,7 @@ from http_errors import (
     user_id_from_claims,
 )
 from shared.config import config
+from shared.persistence.account_gate import AccountGateRepository
 from shared.persistence.chat_metadata import ChatMode
 from shared.persistence.user_metadata import UserMetadataRecord, UserMetadataRepository
 from shared.runtime import model_discovery
@@ -32,6 +33,7 @@ MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 
 _repo: UserMetadataRepository | None = None
 _bedrock_client: Any | None = None
+_gate: AccountGateRepository | None = None
 
 
 def _repository() -> UserMetadataRepository:
@@ -39,6 +41,13 @@ def _repository() -> UserMetadataRepository:
     if _repo is None:
         _repo = UserMetadataRepository()
     return _repo
+
+
+def _account_gate() -> AccountGateRepository:
+    global _gate
+    if _gate is None:
+        _gate = AccountGateRepository()
+    return _gate
 
 
 def _bedrock() -> Any:
@@ -93,6 +102,9 @@ def _get_settings(event: dict[str, Any], user_id: str) -> dict[str, Any]:
 
 
 def _put_settings(event: dict[str, Any], user_id: str) -> dict[str, Any]:
+    # B109/F19: a settings write is blocked once the account-deleting gate is set.
+    if _account_gate().is_deleting(user_id):
+        raise ApiError(403, "forbidden", "This account is being deleted.")
     body = parse_json_body(event)
     _reject_unknown(body, {"default_model_id", "default_mode"})
     model_id = _validate_model_id(body["default_model_id"]) if body.get("default_model_id") is not None else None

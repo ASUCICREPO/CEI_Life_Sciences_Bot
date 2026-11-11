@@ -495,3 +495,17 @@ def test_delete_session_removes_all_partition_items_only(session):
 def test_delete_session_requires_partition(session):
     with pytest.raises(ValueError):
         ChatHistoryRepository(session).delete_session("")
+
+
+def test_chat_metadata_delete_removes_only_the_one_row(session):
+    repo = ChatMetadataRepository(session)
+    repo.create(_meta(user_id="u1", session_id="s1"))
+    repo.create(_meta(user_id="u1", session_id="s2"))
+    repo.delete("u1", "s1")
+    assert repo.get("u1", "s1") is None
+    assert repo.get("u1", "s2") is not None
+
+
+def test_chat_metadata_delete_is_idempotent(session):
+    repo = ChatMetadataRepository(session)
+    repo.delete("u1", "never-existed")  # no error

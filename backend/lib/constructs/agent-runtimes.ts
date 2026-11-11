@@ -159,6 +159,9 @@ export class AgentRuntimes extends Construct {
    * them with the caller's own bearer token, because the runtimes accept only SPA user tokens.
    */
   public readonly stopUrls: Record<string, string> = {};
+  /** F19/B109: the one shared AgentCore Memory resource's id/ARN, for the delete-worker's cascade. */
+  public readonly memoryId: string;
+  public readonly memoryArn: string;
 
   constructor(scope: Construct, id: string, props: AgentRuntimesProps) {
     super(scope, id);
@@ -198,6 +201,8 @@ export class AgentRuntimes extends Construct {
       ],
     });
     researchMemory.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+    this.memoryId = researchMemory.attrMemoryId;
+    this.memoryArn = researchMemory.attrMemoryArn;
     const environmentVariables: Record<string, string> = {
       CEI_AWS_REGION: stack.region,
       ...(props.defaultModelId ? { CEI_DEFAULT_MODEL_ID: props.defaultModelId } : {}),
