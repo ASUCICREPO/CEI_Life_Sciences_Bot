@@ -72,7 +72,19 @@ export class AccountDeletion extends Construct {
     });
     const workerRole = new iam.Role(this, 'WorkerRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
     workerLogs.grantWrite(workerRole);
+    // ADR: explicit functionName, ARN built with Stack.formatArn (not `this.workerFunction.functionArn`) |
+    // Rationale: the worker's own CEI_DELETE_WORKER_ARN env var (self-reschedule target) would otherwise
+    // make AccountDeletionWorkerFn's Properties reference its own Fn::GetAtt, an unresolvable CloudFormation
+    // dependency cycle (confirmed by cdk-nag/template validation: "Circular dependency with
+    // [AccountDeletionWorkerFn -> AccountDeletionWorkerFn]") | Alternative: Lazy.string rejected -- CDK
+    // still resolves it to the same self-referencing Fn::GetAtt at synth time
+    const workerFunctionName = 'cei-account-delete-worker';
+    const workerArn = stack.formatArn({
+      service: 'lambda', resource: 'function', resourceName: workerFunctionName,
+      arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+    });
     this.workerFunction = new lambda.Function(this, 'WorkerFn', {
+      functionName: workerFunctionName,
       tracing: lambda.Tracing.ACTIVE,
       runtime: lambda.Runtime.PYTHON_3_14,
       handler: 'handler.handle',
@@ -112,13 +124,16 @@ export class AccountDeletion extends Construct {
       }),
     });
     this.workerFunction.grantInvoke(schedulerRole);
+    NagSuppressions.addResourceSuppressions(schedulerRole, [{
+      id: 'AwsSolutions-IAM5',
+      reason: "ADR: Function.grantInvoke's own :* version/alias suffix | Rationale: grantInvoke always grants on both the function's bare ARN and <arn>:* so an alias/version invoke also works; this is CDK's own standard shape for Lambda invoke grants, not a custom wildcard | Alternative: a hand-rolled policy without the :* suffix rejected -- would diverge from the grant() helper for no security benefit",
+    }], true);
 
     // Self-reschedule (early sweep guard, or nearing the 14-minute timeout): the worker needs the same
     // CreateSchedule/PassRole the account-delete Lambda has, scoped to the one group/role below.
     scheduleGroup.grants.writeSchedules(workerRole);
     schedulerRole.grantPassRole(workerRole);
-    // The DELETE_WORKER_ARN env var is set after self-reference is possible (functionArn exists already).
-    this.workerFunction.addEnvironment('CEI_DELETE_WORKER_ARN', this.workerFunction.functionArn);
+    this.workerFunction.addEnvironment('CEI_DELETE_WORKER_ARN', workerArn);
     this.workerFunction.addEnvironment('CEI_SCHEDULER_ROLE_ARN', schedulerRole.roleArn);
 
     // ---------------------------------------------------------------
@@ -195,7 +210,7 @@ export class AccountDeletion extends Construct {
         USER_POOL_ID: props.userPool.userPoolId,
         SCHEDULE_GROUP_NAME: scheduleGroup.scheduleGroupName,
         SCHEDULER_ROLE_ARN: schedulerRole.roleArn,
-        DELETE_WORKER_ARN: this.workerFunction.functionArn,
+        DELETE_WORKER_ARN: workerArn,
         ALLOWED_ORIGINS: props.allowedOrigins.join(','),
       },
     });

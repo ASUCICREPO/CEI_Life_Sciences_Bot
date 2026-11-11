@@ -139,7 +139,9 @@ describe('F13 POST /ui-actions', () => {
       .flatMap((s) => ([] as string[]).concat(s.Action)).sort();
     expect(byTable('ChatMetadataStore')).toEqual(['dynamodb:GetItem']);
     expect(byTable('ActiveRunsStore')).toEqual(['dynamodb:DeleteItem', 'dynamodb:GetItem']);
+    // F19/B109: the run-start gate check adds one more read-only GetItem, on UserMetadataTable.
+    expect(byTable('UserMetadataTable')).toEqual(['dynamodb:GetItem']);
     expect(data.flatMap((s) => ([] as string[]).concat(s.Action)).sort())
-      .toEqual(['dynamodb:DeleteItem', 'dynamodb:GetItem', 'dynamodb:GetItem']);
+      .toEqual(['dynamodb:DeleteItem', 'dynamodb:GetItem', 'dynamodb:GetItem', 'dynamodb:GetItem']);
   });
 });
