@@ -73,9 +73,10 @@ mocks; they do not substitute for AWS tests.
 - Exercise two-user report listing/download isolation, forged IDs and cursors,
   no link issuance during listing, link expiry, no S3 bucket scans, encrypted
   storage, and Intelligent-Tiering configuration.
-- Verify object and metadata cleanup across chat and account deletion, including
-  ambiguous write outcomes, retries, concurrent writers, backup/recovery policy,
-  and already-issued download links after object deletion.
+- Verify object and metadata cleanup across account deletion (there is no chat
+  delete, B104), including ambiguous write outcomes, retries, concurrent
+  writers, backup/recovery policy, and already-issued download links after
+  object deletion.
 - Validate Gateway scope filtering, direct-invocation denial for relevant
   untrusted principals, rate-limiter behavior under concurrent callers, and
   NCBI errors without leaking input or credentials.

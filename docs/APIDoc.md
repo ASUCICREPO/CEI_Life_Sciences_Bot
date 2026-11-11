@@ -96,7 +96,7 @@ Every public route requires the Cognito authorizer. The Status column shows what
 | GET | `/sessions` | BUFFERED | List the caller's sessions (paginated) | Built |
 | GET | `/sessions/{sessionId}` | BUFFERED | Get one session's metadata | Built |
 | PATCH | `/sessions/{sessionId}` | BUFFERED | Update session title and/or mode (no `model_id`; the model is locked at create) | Built |
-| DELETE | `/sessions/{sessionId}` | BUFFERED | Delete a session (starts the delete cascade, `202 Accepted`) | Planned (F19, deferred) |
+| DELETE | `/sessions/{sessionId}` | — | Removed from scope: a user can not delete one chat (B104) | Removed (B104) |
 | GET | `/sessions/{sessionId}/history` | BUFFERED | Cursor-paginated turn history (no trace) | Built |
 | GET | `/sessions/{sessionId}/turns/{messageId}/trace` | BUFFERED | Load one turn's trace log (lazy-loaded on thinking-block expand) | Built |
 | GET | `/sessions/{sessionId}/exports` | BUFFERED | List the exports of one session | Built |
@@ -114,7 +114,7 @@ Every public route requires the Cognito authorizer. The Status column shows what
 | DELETE | `/settings/api-keys/{sourceId}` | BUFFERED | Remove a stored API key | Planned |
 | GET | `/exports/{exportId}/download` | BUFFERED | Get a pre-signed download URL for a completed export | Built |
 | POST | `/client-diagnostics` | BUFFERED | Record a bounded browser failure counter (no user content) | Built |
-| POST | `/account/delete` | BUFFERED | Delete the account and all of its data (`202 Accepted`) | Planned (F19, deferred) |
+| POST | `/account/delete` | BUFFERED | Disable the Cognito user, block new runs, and delete the account and all of its data 9 hours later (`202 Accepted`); behind a flag, off by default (B109) | Planned (F19, deferred) |
 
 The internal route `POST /internal/token-refresh` (`backend/lib/constructs/tool-gateway.ts`) uses `AWS_IAM` auth. It is not a client route. Only the Research runtime role can call it, to refresh the tool-scoped token of a run (B67).
 
@@ -128,11 +128,11 @@ Full request/response bodies for every route, the exact HITL action shape, and e
 
 One Lambda (`backend/lambdas/models-settings-handler/handler.py`) serves these 3 routes.
 
-- `GET /models` returns `{"models": [{"model_id", "label"}]}`. The list comes from Bedrock discovery (`ListFoundationModels`, `ListInferenceProfiles`, `GetInferenceProfile`). The blocklist is already applied: the built-in D3 patterns plus `CEI_BLOCKED_MODELS`.
+- `GET /models` returns `{"models": [{"model_id", "label"}]}`. The list comes from Bedrock discovery (`ListFoundationModels`, `ListInferenceProfiles`, `GetInferenceProfile`), filtered to models with text input/output, response streaming, `ON_DEMAND`/`INFERENCE_PROFILE` inference, not `LEGACY`, and a family in a fixed provider allowlist that supports Converse tool use (Anthropic Claude, Amazon Nova, Meta Llama 3.1+, Mistral Large/Pixtral Large, Cohere Command R, AI21 Jamba, DeepSeek, Writer Palmyra X, Qwen, OpenAI gpt-oss). The blocklist is applied after that filter: the built-in D3 patterns plus `CEI_BLOCKED_MODELS` (B105).
 - `GET /settings` returns `default_model_id`, `default_mode`, and `configured_sources`. A user with no record gets `null` values. `configured_sources` is always `[]` until F18.
 - `PUT /settings` accepts only `default_model_id` and `default_mode`. Any other field gets `400`. A `default_model_id` must be in the `GET /models` list, or the route returns `400`. There is no silent fallback.
 
-The settings are stored in the UserMetadataTable (`user_id` + `record`). `POST /sessions` does the same model check on its optional `model_id`. Inference permission stays Anthropic-only, so a listed non-Anthropic model can fail at run time.
+The settings are stored in the UserMetadataTable (`user_id` + `record`). `POST /sessions` does the same model check on its optional `model_id`. Inference IAM covers every foundation model and this account's inference profiles, not only Anthropic models (B105), so a listed model is expected to run. Prompt caching (`cachePoint`) still only helps on models that support it (Claude 3.5 Haiku, Claude 3.7 Sonnet, Claude 4+, Amazon Nova); other listed models get no caching benefit.
 
 When `POST /sessions` is called with no `model_id`, `session-metadata-handler` reads the caller's `default_model_id` from the UserMetadataTable (`dynamodb:GetItem`, read-only) and re-checks it against the live blocklist/discovery. If it is still available, the new session uses it; if the saved value is now blocklisted, no longer discovered, no profile exists, or the table read fails, the session falls back to the global default (`CEI_DEFAULT_MODEL_ID`) instead of failing the create. `default_mode` is not yet applied the same way: `mode` is still a required field on `POST /sessions`.
 
@@ -149,6 +149,6 @@ The body is one typed CEI UI action (`request_id`, `session_id`, `surface_id`, `
 
 - The exact error shape returned to the agent (and then to the user) when a Cedar Policy deny happens mid-run.
 
-Already decided since this page was first drafted: the Router-to-runtime tool token travels in the custom header `X-Cei-Gateway-Token` (`backend/lambdas/session-runner/index.js`), and `Authorization` keeps the user's own token; default/maximum pagination `limit` is 20/100; `/chat/stream` reconnect/resume uses `resume_from_seq` on the same route; chat/account delete responses are asynchronous, `202 Accepted`, with a Deletion Worker cascade; a client can request an ad hoc export of an existing answer (`POST /sessions/{id}/turns/{turn}/export`, planned, not built); and the async threshold is 10 minutes, decided once before streaming starts, with no mid-run handoff.
+Already decided since this page was first drafted: the Router-to-runtime tool token travels in the custom header `X-Cei-Gateway-Token` (`backend/lambdas/session-runner/index.js`), and `Authorization` keeps the user's own token; default/maximum pagination `limit` is 20/100; `/chat/stream` reconnect/resume uses `resume_from_seq` on the same route; there is no chat delete, only account delete (B104); account delete disables the Cognito user and blocks new runs at once, returns `202 Accepted`, and runs the Deletion Worker cascade 9 hours later (B109); a client can request an ad hoc export of an existing answer (`POST /sessions/{id}/turns/{turn}/export`, planned, not built); and the async threshold is 10 minutes, decided once before streaming starts, with no mid-run handoff.
 
 See `.agents/specs/api.md` for the full TBD list.

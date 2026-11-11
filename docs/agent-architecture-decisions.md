@@ -239,7 +239,7 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 
 ## D12: Session Persistence — Indefinite
 
-**Pagination TBD resolved by B59 (see `.agents/decision-log.md`).** B59 fixes the pagination strategy this record left open: cursor pages of turns (for example the last 20, older turns loading on scroll-up via the DynamoDB `LastEvaluatedKey`), with the trace of a turn loading only when its thinking block is expanded, rendered in a virtualized list. B58 also fixes what "indefinite" means: retained until the user deletes the chat or the account.
+**Pagination TBD resolved by B59 (see `.agents/decision-log.md`).** B59 fixes the pagination strategy this record left open: cursor pages of turns (for example the last 20, older turns loading on scroll-up via the DynamoDB `LastEvaluatedKey`), with the trace of a turn loading only when its thinking block is expanded, rendered in a virtualized list. B58 also fixes what "indefinite" means: retained until the user deletes the account. There is no per-chat delete (B104 supersedes the chat-delete part of B58).
 
 **Decision:** Sessions persist indefinitely until the user deletes them. No TTL. Chat History Store in DynamoDB. Lazy loading required on the frontend to prevent browser crashes on large histories (pagination strategy TBD).
 

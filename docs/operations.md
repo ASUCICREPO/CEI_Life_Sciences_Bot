@@ -79,7 +79,8 @@ job workflow are not yet proven on a live deployment.
   validated by a deployed user journey. Trace coverage and sensitive-data
   redaction also require the security review.
 - The report storage and deletion helpers are not by themselves proof that
-  export creation or chat/account deletion is connected end to end.
+  export creation or account deletion is connected end to end. There is no
+  chat delete; only account delete is in scope (B104).
 
 Avoid placing prompts, tokens, source records or user identifiers in alarm
 descriptions or shared incident notes. Use the request ID and controlled access

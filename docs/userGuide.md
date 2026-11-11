@@ -66,7 +66,7 @@ To select a model for a chat:
 3. Select a model. Or keep **Default** to use your saved default model (Settings page), or the deployment default model if you have not set one.
 4. Send your first message.
 
-After the chat starts, the model is locked. The control shows "The model is fixed when the chat starts." To use a different model, start a new chat. Some models in the list can fail at run time, because the deployment can run Anthropic models only.
+After the chat starts, the model is locked. The control shows "The model is fixed when the chat starts." To use a different model, start a new chat. You can pick any model in the list, not only Anthropic models. Prompt caching (a cost and speed feature) only works on some models (Claude 3.5 Haiku, Claude 3.7 Sonnet, Claude 4 and later, and Amazon Nova); other models still work, just without that feature.
 
 ![Mode and model picker](./media/step-3-mode-model.png)
 
@@ -175,9 +175,9 @@ Users can set their default model and mode, and can optionally add their own API
 
 ---
 
-## Planned journey: Delete a chat or the account (not built, deferred)
+## Planned journey: Delete the account (not built, deferred)
 
-A user can delete a single chat (its history, trace, attachments, Knowledge Base chunks, and checkpoints) or delete their entire account (everything, including long-term memories and stored API keys). Deleting hides the item immediately in the dashboard; the underlying data is removed shortly after.
+A user can delete their entire account: everything, including chat history, trace, attachments, Knowledge Base chunks, checkpoints, long-term memories, and stored API keys. There is no way to delete a single chat; a chat stays until the whole account is deleted. Deleting the account signs the user out everywhere and blocks any new chat right away; the dashboard shows the account as gone at once, and the underlying data is fully removed within about 9 hours.
 
 ![Delete](./media/step-10-delete.png)
 
@@ -194,7 +194,7 @@ A user can delete a single chat (its history, trace, attachments, Knowledge Base
 **A:** No. All inference runs through Amazon Bedrock; you choose from the models the deployment allows.
 
 ### Q: How long is my chat history kept?
-**A:** Indefinitely, until you delete the chat or your account.
+**A:** Indefinitely, until you delete your account. You can not delete a single chat; deleting the account removes all of them.
 
 ---
 
