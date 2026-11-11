@@ -49,11 +49,20 @@ def test_begin_turn_receives_validated_document_type(calls, doc_type) -> None:
     assert type(calls[0]["document_type"]) is str
 
 
-@pytest.mark.parametrize("raw", ["bogus", "", None])
+@pytest.mark.parametrize("raw", ["bogus", "not-a-type"])
 def test_invalid_document_type_still_raises_before_begin_turn(calls, raw) -> None:
-    payload = {"prompt": "Write it"}
-    if raw is not None:
-        payload["document_type"] = raw
+    payload = {"prompt": "Write it", "document_type": raw}
     with pytest.raises(ValueError, match="document_type must be one of"):
         asyncio.run(drafting_main.invoke(payload, _Context()))
     assert calls == []
+
+
+@pytest.mark.parametrize("raw", ["", None])
+def test_missing_or_empty_document_type_defaults_to_whitepaper(calls, raw) -> None:
+    payload = {"prompt": "Write it"}
+    if raw is not None:
+        payload["document_type"] = raw
+    response = asyncio.run(drafting_main.invoke(payload, _Context()))
+    assert response["text"] == "Draft."
+    assert len(calls) == 1
+    assert calls[0]["document_type"] == DocumentType.WHITEPAPER.value

@@ -176,13 +176,17 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
 
-    doc_type_raw = payload.get("document_type", "")
-    try:
-        doc_type = DocumentType(doc_type_raw)
-    except ValueError:
-        raise ValueError(
-            f"document_type must be one of: {', '.join(dt.value for dt in DocumentType)}"
-        )
+    doc_type_raw = payload.get("document_type") or ""
+    if not doc_type_raw:
+        # ADR: free-text Drafting has no document_type | default to WHITEPAPER, the most general DocumentType.
+        doc_type = DocumentType.WHITEPAPER
+    else:
+        try:
+            doc_type = DocumentType(doc_type_raw)
+        except ValueError:
+            raise ValueError(
+                f"document_type must be one of: {', '.join(dt.value for dt in DocumentType)}"
+            )
 
     mode: str = payload.get("mode", "science")
 

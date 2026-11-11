@@ -35,6 +35,11 @@ const EXPIRED_MESSAGE = 'This request has expired. Start again.';
 const isRouteChoice = (action) => action.interaction_id === ROUTE_CHOICE_INTERACTION_ID
   && action.component_id === ROUTE_CHOICE_COMPONENT_ID && action.action_id === ROUTE_CHOICE_ACTION_ID;
 
+// ADR: free-text drafting carries no document_type | drafting_main.py now defaults to "whitepaper" itself.
+function agentRunBodyFor(pending) {
+  return { prompt: pending.message, mode: pending.mode };
+}
+
 function actionResponse(action, status, message = null) {
   const { request_id, session_id, surface_id, revision, interaction_id, component_id, action_id, value } = action;
   return { request_id, session_id, surface_id, revision, interaction_id, component_id, action_id, value, status, message };
@@ -225,9 +230,7 @@ function productionDependencies() {
     async invokeAgentRun(route, agent, pending, parsed) {
       const url = new URL(route.runtime_url);
       if (url.protocol !== 'https:' || !/^bedrock-agentcore\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/.test(url.hostname) || url.port || url.username || url.password || !/^\/runtimes\/[^/]+\/invocations$/.test(url.pathname) || url.search !== '?qualifier=DEFAULT') throw new Error('invalid runtime URL');
-      // ADR: default document_type for a free-text drafting route | Rationale: drafting_main.py requires a
-      // valid DocumentType and the stored pending choice carries none; mirrors session-runner's own default.
-      const body = agent === 'drafting' ? { prompt: pending.message, mode: pending.mode, document_type: 'whitepaper' } : { prompt: pending.message, mode: pending.mode };
+      const body = agentRunBodyFor(pending);
       const response = await fetch(url, {
         method: 'POST', redirect: 'error',
         headers: { Authorization: `Bearer ${parsed.bearerToken}`, 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': parsed.action.session_id,
@@ -254,3 +257,4 @@ exports.ROUTE_CHOICE_INTERACTION_ID = ROUTE_CHOICE_INTERACTION_ID;
 exports.ROUTE_CHOICE_COMPONENT_ID = ROUTE_CHOICE_COMPONENT_ID;
 exports.ROUTE_CHOICE_ACTION_ID = ROUTE_CHOICE_ACTION_ID;
 exports.mapRouterError = mapRouterError;
+exports.agentRunBodyFor = agentRunBodyFor;

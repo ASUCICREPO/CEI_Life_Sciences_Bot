@@ -133,13 +133,8 @@ async function* fromArray(items) { for (const item of items) yield item; }
 
 /** Per-agent request body for the AgentCore `op: run` default; Research is never built here (it always streams). */
 function requestBodyFor(agent, parsed) {
-  const base = { prompt: parsed.request.message, mode: parsed.request.mode };
-  if (agent === 'drafting') {
-    // ADR: default document_type for a free-text drafting route | Rationale: drafting_main.py requires a
-    // valid DocumentType and free text carries none; "whitepaper" is the most general of the five types.
-    return { ...base, document_type: 'whitepaper' };
-  }
-  return base;
+  // ADR: free-text drafting carries no document_type | drafting_main.py now defaults to "whitepaper" itself.
+  return { prompt: parsed.request.message, mode: parsed.request.mode };
 }
 
 /** Parse SSE frames from an async iterable of bytes, including split UTF-8 and CRLF. */
