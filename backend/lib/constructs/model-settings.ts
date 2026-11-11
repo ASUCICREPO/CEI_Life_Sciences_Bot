@@ -80,8 +80,8 @@ export class ModelSettings extends Construct {
     // ADR: resource "*" for Bedrock model discovery | Rationale: ListFoundationModels/ListInferenceProfiles are
     // account+Region-wide list operations with no resource-level ARN to scope to; GetInferenceProfile resolves
     // an inference profile named only in the list response, not known at synth time | Alternative: per-model
-    // ARNs rejected — these are read-only discovery calls, not model invocation (which stays Anthropic-only,
-    // agent-runtimes.ts)
+    // ARNs rejected — these are read-only discovery calls, not model invocation (which now permits any
+    // model that passes the discovery filter and blocklist, agent-runtimes.ts)
     role.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['bedrock:ListFoundationModels', 'bedrock:ListInferenceProfiles', 'bedrock:GetInferenceProfile'],
       resources: ['*'],

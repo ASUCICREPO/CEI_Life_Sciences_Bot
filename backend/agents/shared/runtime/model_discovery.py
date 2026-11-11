@@ -5,9 +5,15 @@ custom inference profile to the single underlying foundation model it targets, a
 result in-process for a short TTL. A profile that targets more than one foundation model, or
 whose models cannot be read, is excluded rather than guessed at (fail closed): an opaque profile
 name alone cannot be safely classified against the string-pattern blocklist.
+
+Foundation models are further restricted to ones these tool-using (Converse tool use) text chat
+agents can actually run: text in/out, streaming, ON_DEMAND or INFERENCE_PROFILE inference, not
+LEGACY, and on the provider allowlist below. This excludes embedding, image, video and speech
+models even though they are not blocklisted.
 """
 from __future__ import annotations
 
+import fnmatch
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -16,6 +22,57 @@ from shared.runtime.model_policy import is_blocked
 
 _DEFAULT_TTL_SECONDS = 300.0
 _cache: dict[str, tuple[float, list["DiscoveredModel"]]] = {}
+_PROFILE_PREFIXES = ("us.", "eu.", "apac.", "global.")
+
+# ADR: restrict discovery to models the agents can Converse with tool use | picker and
+# write-time validation must only ever surface models these tool-using agents can run.
+# Source: AWS Bedrock "Supported models and model features" (Converse API tool use column),
+# checked 2026-11-10. Patterns match the base foundation-model id (fnmatch).
+_TOOL_CAPABLE_MODEL_ID_PATTERNS = (
+    "anthropic.claude-*",
+    "amazon.nova-*",  # nova canvas/reel/sonic are excluded by the TEXT-modality check below
+    "meta.llama3-1-*",
+    "meta.llama3-2-11b*",
+    "meta.llama3-2-90b*",
+    "meta.llama3-3-*",
+    "meta.llama4-*",
+    "mistral.mistral-large-*",
+    "mistral.pixtral-large-*",
+    "cohere.command-r*",
+    "ai21.jamba-*",
+    "deepseek.*",
+    "writer.palmyra-x*",
+    "qwen.*",
+    "openai.gpt-oss-*",
+)
+
+
+def _is_tool_capable(summary: dict[str, Any], model_id: str) -> bool:
+    """A foundation-model summary describes a model these tool-using agents can run."""
+    output_modalities = summary.get("outputModalities")
+    input_modalities = summary.get("inputModalities")
+    if not isinstance(output_modalities, list) or "TEXT" not in output_modalities:
+        return False
+    if not isinstance(input_modalities, list) or "TEXT" not in input_modalities:
+        return False
+    if summary.get("responseStreamingSupported") is not True:
+        return False
+    inference_types = summary.get("inferenceTypesSupported")
+    if not isinstance(inference_types, list) or not any(
+        t in inference_types for t in ("ON_DEMAND", "INFERENCE_PROFILE")
+    ):
+        return False
+    lifecycle = summary.get("modelLifecycle")
+    if isinstance(lifecycle, dict) and lifecycle.get("status") == "LEGACY":
+        return False
+    # ADR: strip a region-profile prefix before allowlist matching | mirrors model_policy's base-id
+    # matching; real ListFoundationModels ids never carry one, but this keeps both consistent.
+    base_id = model_id
+    for prefix in _PROFILE_PREFIXES:
+        if base_id.startswith(prefix):
+            base_id = base_id[len(prefix):]
+            break
+    return any(fnmatch.fnmatchcase(base_id, pattern) for pattern in _TOOL_CAPABLE_MODEL_ID_PATTERNS)
 
 
 @dataclass(frozen=True)
@@ -32,7 +89,7 @@ def _foundation_model_labels(client: Any) -> dict[str, str]:
         if not isinstance(summary, dict):
             continue
         model_id = summary.get("modelId")
-        if isinstance(model_id, str) and model_id:
+        if isinstance(model_id, str) and model_id and _is_tool_capable(summary, model_id):
             labels[model_id] = summary.get("modelName") or model_id
     return labels
 

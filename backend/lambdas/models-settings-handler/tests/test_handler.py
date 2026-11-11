@@ -25,7 +25,17 @@ BLOCKED = "anthropic.claude-fable-5-v1"
 def _bedrock_stub(foundation_ids):
     client = Mock()
     client.list_foundation_models.return_value = {
-        "modelSummaries": [{"modelId": mid, "modelName": mid} for mid in foundation_ids]
+        "modelSummaries": [
+            {
+                "modelId": mid,
+                "modelName": mid,
+                "outputModalities": ["TEXT"],
+                "inputModalities": ["TEXT"],
+                "responseStreamingSupported": True,
+                "inferenceTypesSupported": ["ON_DEMAND"],
+            }
+            for mid in foundation_ids
+        ]
     }
     client.list_inference_profiles.return_value = {"inferenceProfileSummaries": []}
     return client
