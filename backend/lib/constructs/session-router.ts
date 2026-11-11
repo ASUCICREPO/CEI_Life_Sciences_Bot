@@ -69,12 +69,12 @@ export class SessionRouter extends Construct {
           `arn:${stack.partition}:bedrock:*::foundation-model/${props.routerModelId}`,
         ],
       }));
+      const escapedModelId = props.routerModelId.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
       NagSuppressions.addResourceSuppressions(props.role, [{
         id: 'AwsSolutions-IAM5',
-        // ADR: literal "<AWS::Partition>" placeholder, not `${stack.partition}` | Rationale: cdk-nag renders
-        // CFN pseudo parameters this way in its own findings; interpolating the real (tokenized) value here
-        // would never match what the rule reports.
-        appliesTo: [`Resource::arn:<AWS::Partition>:bedrock:*::foundation-model/${props.routerModelId}`],
+        // ADR: regex over the partition, same as tool-gateway.ts | Rationale: cdk-nag reports
+        // "<AWS::Partition>" by default but a literal partition under the cdk.json feature flags the CLI applies.
+        appliesTo: [{ regex: `/^Resource::arn:(<AWS::Partition>|aws[a-z-]*):bedrock:\\*::foundation-model\\/${escapedModelId}$/` }],
         reason: 'ADR: Region wildcard on the foundation-model ARN | Rationale: foundation-model ARNs are regional '
           + 'but the fixed classifier model may be served from more than one Region; the model id itself, the '
           + 'only part that matters for least privilege, is not a wildcard | Alternative: per-Region ARNs rejected '
