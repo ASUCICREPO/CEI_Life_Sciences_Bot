@@ -261,7 +261,7 @@ def _delete_session(user_id: str, session_id: str, memory_id: str | None) -> Non
     # checkpoint range (shared/persistence/checkpoints.py) all live under this one session_id partition key.
     history.delete_session(session_id)
     if memory_id:
-        from shared.memory.agentcore import delete_checkpoint
+        from shared.persistence.memory_deletion import delete_checkpoint
 
         delete_checkpoint(memory_id, session_id, user_id)
     # Session metadata is removed last within this per-session step: a retried cascade can still find and
@@ -298,7 +298,7 @@ def _run_cascade(user_id: str, context: Any) -> str:
     _delete_active_run_leftovers(user_id)
 
     if memory_id:
-        from shared.memory.agentcore import delete_long_term_namespace
+        from shared.persistence.memory_deletion import delete_long_term_namespace
 
         delete_long_term_namespace(memory_id, user_id)
 

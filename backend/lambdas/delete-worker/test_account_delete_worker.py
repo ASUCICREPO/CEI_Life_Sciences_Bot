@@ -170,7 +170,7 @@ def _seed_session(worker, user_id, session_id, *, with_export=False, with_job=Fa
 
 def _patch_memory(monkeypatch, worker):
     calls = {"checkpoint": [], "namespace": []}
-    import shared.memory.agentcore as agentcore_module
+    import shared.persistence.memory_deletion as agentcore_module
 
     monkeypatch.setattr(agentcore_module, "delete_checkpoint",
                         lambda memory_id, thread_id, actor_id="": calls["checkpoint"].append((memory_id, thread_id, actor_id)))
