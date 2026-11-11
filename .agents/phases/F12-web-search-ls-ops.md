@@ -1,5 +1,5 @@
 # F12 — Web search + LS Ops
-Status: partial (Life Sciences Operations Lambda and Gateway target built; Web Search target, Cedar permit, `InvokeWebSearch` grant, `CEI_WEB_SEARCH_ENABLED`, agent tool, and Research triage wiring built behind `webSearchEnabled`, default false (B103); Analysis/Pipeline web search not built; not verified on AWS) | Depends on: F4 | Decisions: B40, B42, B44, B70, B86 | Specs: ../specs/tools.md, ../specs/architecture.md, ../specs/auth-and-tool-scope.md
+Status: partial (Life Sciences Operations Lambda and Gateway target built; Web Search target, Cedar permit, `InvokeWebSearch` grant, `CEI_WEB_SEARCH_ENABLED`, agent tool, and Research triage wiring built behind `webSearchEnabled`, default false (B103); Analysis also gets Web Search under the same flag (B108); Pipeline Manager does not call web search itself (B108); not verified on AWS) | Depends on: F4 | Decisions: B40, B42, B44, B70, B86, B108 | Specs: ../specs/tools.md, ../specs/architecture.md, ../specs/auth-and-tool-scope.md
 
 ## Goal
 Give every agent two more tools: a built-in AgentCore web search connector for general research, and a deterministic Life Sciences Operations (LS Ops) Lambda for common life-sciences calculations (sequence, protein/primer, chemistry, lab math) that need no model call.
@@ -77,6 +77,9 @@ adds `SourceType.WEB` and an optional `snippet` field, and makes `authors`/`year
 built-in connector registers on this Gateway's `tools/list` (assumed `WebSearch` here, an
 installed-SDK fact, not yet confirmed against a live Gateway) stays an S2 open item per B86.
 
+## Implementation notes (Analysis wiring, B108)
+The Analysis agent gets the same Web Search tool as Research, gated on the same `webSearchEnabled` flag (`web_search_enabled()`). The Pipeline Manager does not call web search itself; a Pipeline step that runs Research or Drafting in-process can still reach web search through that agent's own tools, but the Pipeline Manager's own nodes do not bind the tool.
+
 ## Implementation notes (Research wiring, wave2)
 `research/nodes.py` now offers `"web"` as a triage-selected source (same shape as the 10 data
 sources + NCBI), gated on `web_search_enabled()`: the prompt's source list and "Valid source
@@ -104,8 +107,9 @@ slice would have raised. No change was needed in `shared/tools/web_search.py` it
 - The Cedar permit allows a token with `cei-tools/common` and denies one without it (in `ENFORCE` mode).
 - A Research turn that selects `web` returns `SourceType.WEB` citations, and the stored trace has only `url`/`title`/`snippet`.
 - With `webSearchEnabled: false`, triage never offers `web` and no target exists.
+- An Analysis turn that selects `web` returns `SourceType.WEB` citations the same way a Research turn does, and the Pipeline Manager's own nodes never call the Web Search tool directly.
 
 ## Handoff notes
 - F15 (Tool agents) reuses the `cei-tools/common` scope pattern established here for its own profiles.
-- F14 (Analysis agent) and F17 (Pipeline Manager) bind `lsops_client.py` and the Web Search tool the same way Research/Drafting do once this phase ships.
+- F14 (Analysis agent) binds `lsops_client.py` and the Web Search tool the same way Research/Drafting do once this phase ships (B108). F17 (Pipeline Manager) binds `lsops_client.py` the same way, but does not bind the Web Search tool itself (B108) — its in-process Research/Drafting steps can still reach web search through those agents.
 - F20 (Alarms) should consider a guardrail/cost alarm candidate for Web Search query volume, though B75's fixed alarm list does not currently include one — flagged for F20 to decide, not decided here.

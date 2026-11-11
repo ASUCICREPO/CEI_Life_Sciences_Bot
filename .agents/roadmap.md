@@ -31,7 +31,7 @@ This file is owned by the documentation agent. The phase files S1–S10 (spikes)
 | F16 | Background jobs | Job ID Store, Polling Lambda, watchdog, cancel. | F5, S3 | `data-model.md` §3, `api.md` (Jobs) | partial (Job ID Store, jobs routes, watchdog in CDK; async handoff and S3 proofs pending) |
 | F17 | Pipeline Manager | Full Pipeline Manager implementation, plan approval, `/pipeline` job view. | F13, F16 | `agents.md` §4, `architecture.md` §2.4 | partial (MVP slice, B94/B102; durable jobs, in-process dispatch) |
 | F18 | User API keys | Settings page, Secrets Manager, key use in Gateway Lambdas. | F4 | `data-model.md` §8, `api.md` (`/settings/api-keys`) | partial (key-lookup code only; no grant, routes or UI) |
-| F19 | Data deletion | Delete chat, delete account cascades. | F10, F11 | `data-model.md` (Deletion cascade), `api.md` (Account) | not started (deferred; delete-worker foundation only, unwired) |
+| F19 | Data deletion | Delete account only (B104), by disable + 9 h delayed sweep (B109). No chat delete. | F10, F11 | `data-model.md` (Deletion cascade), `api.md` (Account) | not started (deferred; delete-worker foundation only, unwired) |
 | F20 | Alarms | CloudWatch alarms, SNS email, dashboards. | F5 | `security.md` (Observability), decision log B75 | partial (alarms, SNS topic, dashboard in CDK; live delivery not proven) |
 | F21 | Hardening | Security review, load test, human docs complete. | all | `security.md` (full) | not started (owned by parallel agent) |
 | Later | Deferred | PTC, slides export, paid sources, memory UI. | — | — | deferred, no phase file |

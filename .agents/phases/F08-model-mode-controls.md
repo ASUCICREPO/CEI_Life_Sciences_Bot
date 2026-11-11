@@ -1,6 +1,6 @@
 # F08 — Model + mode controls
 
-Status: partial (blocklist, Guardrail on every `get_model()`, model discovery, `GET /models`, `GET`/`PUT /settings`, UserMetadataTable, model picker, and Settings defaults built; prompt caching not built; saved defaults not applied to new chats; not verified on AWS; see "Implementation status") | Depends on: F6 | Decisions: B18, B51, B51a, B55, B76, D16 (kept, per B61) | Specs: [`../specs/agents.md`](../specs/agents.md) §6 (Cross-Agent Mechanisms), [`../specs/api.md`](../specs/api.md) (`/models`, `/settings`), [`../specs/security.md`](../specs/security.md) (Model calls)
+Status: partial (blocklist, Guardrail on every `get_model()`, model discovery, `GET /models`, `GET`/`PUT /settings`, UserMetadataTable, model picker, Settings defaults, any-Bedrock-model selection with widened inference IAM, and prompt caching built in code; saved defaults not applied to the implicit session-creation path yet; not verified on AWS; see "Implementation status") | Depends on: F6 | Decisions: B18, B51, B51a, B55, B76, B105, B106, D16 (kept, per B61) | Specs: [`../specs/agents.md`](../specs/agents.md) §6 (Cross-Agent Mechanisms), [`../specs/api.md`](../specs/api.md) (`/models`, `/settings`), [`../specs/security.md`](../specs/security.md) (Model calls)
 
 Implementation note (historical, before the 2026-11-10 status below): Research reads the saved chat mode and forwards its resolved
 model through its graph. Until account model discovery and the global blocklist are
@@ -96,13 +96,15 @@ Let a user pick any (non-blocklisted) Bedrock model per chat, set science/busine
 - Routes: the new `models-settings-handler` Lambda (`constructs/model-settings.ts`) serves `GET /models` and `GET`/`PUT /settings`. The new UserMetadataTable holds `default_model_id` and `default_mode`.
 - Sessions: `POST /sessions` validates `model_id` against discovery and the blocklist (fail closed). `PATCH /sessions/{id}` still accepts only `title` and `mode`.
 - Frontend: a model picker for new chats only; it locks after the chat starts. The Settings page edits the defaults.
-- Inference IAM stays Anthropic-only. A discovered non-Anthropic model can show in the list but fail at run time.
-- Not built: prompt caching (`cachePoint`). Gap: the saved `default_model_id`/`default_mode` are stored, but no code applies them to a new chat yet.
+- Inference IAM is widened to all foundation models and this account's inference profiles (B105) — superseding the earlier "Anthropic-only" restriction above. A user can pick any Bedrock model, not only Anthropic models.
+- `GET /models` and the write-time check (B105) show only models with: text input/output, response streaming, `ON_DEMAND` or `INFERENCE_PROFILE` inference, not `LEGACY`, and a family in the fixed provider allowlist that supports Converse tool use (Anthropic Claude, Amazon Nova, Meta Llama 3.1+, Mistral Large/Pixtral Large, Cohere Command R, AI21 Jamba, DeepSeek, Writer Palmyra X, Qwen, OpenAI gpt-oss). The D3 blocklist still applies after that filter.
+- Prompt caching is built in code (`cachePoint` on the static system prompt and tool definitions, in `get_model()`), per B105. It needs live AWS verification — see the list below. `cachePoint` is sent only to models that support it (Claude 3.5 Haiku, Claude 3.7 Sonnet, Claude 4+, Amazon Nova); other models get no cache benefit, a trade-off the user accepted.
+- Gap: the saved `default_model_id`/`default_mode` are stored, but no code applies them to a new chat yet.
 
 ## Implementation status (2026-11-10, wave3/settings-defaults)
 
 - `POST /sessions` (`backend/lambdas/session-metadata-handler/metadata_handler.py` `_create`): when the request omits `model_id`, the handler now reads the caller's profile from `UserMetadataTable` (`dynamodb:GetItem`, read-only grant added in `backend-stack.ts`) and re-validates the saved `default_model_id` with the same fail-closed blocklist/discovery check as an explicit selection. A still-available saved default is used; a now-blocklisted/undiscovered saved value, a missing profile, or a table read failure all fall back to `config.default_model_id` (the global default) rather than failing the create. `mode` is unchanged — it stays a required field on `POST /sessions`, so `default_mode` is not applied there.
-- Gap still open: the *implicit* session-creation path — a first turn arriving through `begin_turn`/`resolve_turn_config` (`backend/agents/shared/runtime/turn_config.py`) for a session row that has no stored `model_id`/`mode` — does not consult `UserMetadataTable` at all; it fills the missing value with `config.default_model_id`/`"science"` directly via `initialize_turn_settings`. That module is owned by another workstream (`backend/agents/shared/runtime/**`); applying the user's saved defaults there needs its own change: look up `UserMetadataRepository(user_id).get()` (already present in `shared/persistence/user_metadata.py`) before calling `initialize_turn_settings`, with the same re-validation and fail-open-to-global-default behavior as `_create` above.
+- Gap, with the fix now decided by the user (2026-11-10): the *implicit* session-creation path — a first turn arriving through `begin_turn`/`resolve_turn_config` (`backend/agents/shared/runtime/turn_config.py`) for a session row that has no stored `model_id`/`mode` — does not consult `UserMetadataTable` at all; it fills the missing value with `config.default_model_id`/`"science"` directly via `initialize_turn_settings`. Decided fix: an older chat with no saved model uses the user's saved default model from `UserMetadataTable`, so each of the 4 runtimes needs its own `dynamodb:GetItem` grant on that table. That module is owned by another workstream (`backend/agents/shared/runtime/**`); applying the user's saved defaults there needs its own change: look up `UserMetadataRepository(user_id).get()` (already present in `shared/persistence/user_metadata.py`) before calling `initialize_turn_settings`, with the same re-validation and fail-open-to-global-default behavior as `_create` above.
 
 ## Needs live AWS verification
 
@@ -112,3 +114,7 @@ Let a user pick any (non-blocklisted) Bedrock model per chat, set science/busine
 - The Guardrail masks synthetic PII in user input, and does not mask tool results or model output.
 - No Guardrail ID or model ID shows in a trace or error payload.
 - A chat that uses a non-default Anthropic model runs end to end.
+- A non-Anthropic model (for example a Nova model and a Llama model) runs a full turn with tools and the Guardrail.
+- `cachePoint` usage shows `cacheReadInputTokens > 0` on a Claude model.
+- No `ValidationException` on a non-caching model (one outside the Claude 3.5 Haiku/3.7 Sonnet/4+/Nova list).
+- An older chat with no saved model uses the user's saved default model.
