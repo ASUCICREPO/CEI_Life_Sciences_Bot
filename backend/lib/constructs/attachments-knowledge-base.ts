@@ -15,7 +15,7 @@ export interface AttachmentsKnowledgeBaseProps {
  * B110 (supersedes B33/B77): Amazon Bedrock Managed Knowledge Base for chat attachments. AWS runs the
  * vector store (`type: MANAGED`) -- there is no S3 Vectors index or OpenSearch collection to provision
  * here. The Attachment Processor Lambda pushes documents through `IngestKnowledgeBaseDocuments` on the
- * CUSTOM data source below (document id = attachment_id, inline metadata user_id/session_id/file_id/
+ * Custom connector data source below (document id = attachment_id, inline metadata user_id/session_id/file_id/
  * filename); this construct holds only the KB, its service role, and the data source -- not the
  * ingestion path or the retrieval call (that is runtime code per B110, not a Gateway target).
  */
@@ -37,11 +37,22 @@ export class AttachmentsKnowledgeBase extends Construct {
         ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:bedrock:${stack.region}:${stack.account}:knowledge-base/*` },
       }),
     });
-    // Direct ingestion (IngestKnowledgeBaseDocuments) reads the source object by S3 URI through this role.
+    // Direct ingestion (IngestKnowledgeBaseDocuments, S3_LOCATION) reads the source object through this role.
+    // Same-account condition per kb-managed-permissions.html.
     role.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ['s3:GetObject'],
         resources: [props.attachmentsBucket.arnForObjects('uploads/*')],
+        conditions: { StringEquals: { 'aws:ResourceAccount': stack.account } },
+      }),
+    );
+    // The managed embedding model is bundled, so no bedrock:InvokeModel grant. The AWS managed-KB sample
+    // (aws-samples/amazon-bedrock-samples, rag/managed-knowledge-bases/07-IaaC) grants the KB metrics namespace only.
+    role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+        conditions: { StringEquals: { 'cloudwatch:namespace': 'AWS/Bedrock/KnowledgeBases' } },
       }),
     );
     NagSuppressions.addResourceSuppressions(
@@ -49,7 +60,7 @@ export class AttachmentsKnowledgeBase extends Construct {
       [
         {
           id: 'AwsSolutions-IAM5',
-          reason: 'ADR: Wildcard in S3 path for uploads prefix | Rationale: the KB service role reads whichever attachment object a direct-ingestion document points to under uploads/; object keys are per-user/session/attachment and created at runtime | Alternative: per-object policies rejected -- not practical for multi-tenant uploads',
+          reason: 'ADR: Wildcard in S3 path for uploads prefix, and cloudwatch:PutMetricData on * | Rationale: the KB service role reads whichever attachment object a direct-ingestion document points to under uploads/ (object keys are per-user/session/attachment and created at runtime); PutMetricData has no resource-level permissions and is limited by the cloudwatch:namespace condition to AWS/Bedrock/KnowledgeBases | Alternative: per-object policies rejected -- not practical for multi-tenant uploads',
         },
       ],
       true,
@@ -57,7 +68,7 @@ export class AttachmentsKnowledgeBase extends Construct {
 
     const knowledgeBase = new bedrock.CfnKnowledgeBase(this, 'KnowledgeBase', {
       // Stack-scoped name: two deployments in one account do not collide.
-      name: `${stack.stackName}-attachments`,
+      name: `${stack.stackName}-attachments-kb`,
       description: 'Managed knowledge base for chat attachment retrieval (B110)',
       roleArn: role.roleArn,
       knowledgeBaseConfiguration: {
@@ -65,18 +76,27 @@ export class AttachmentsKnowledgeBase extends Construct {
         managedKnowledgeBaseConfiguration: { embeddingModelType: 'MANAGED' },
       },
     });
-    // ADR: RETAIN | Rationale: same as the attachments bucket/table -- a stack teardown must not drop indexed user attachment content
-    knowledgeBase.applyRemovalPolicy(RemovalPolicy.RETAIN);
+    // ADR: RETAIN_ON_UPDATE_OR_DELETE | Rationale: a stack teardown or replacement must not drop indexed user attachment
+    // content, but a failed first create must roll back cleanly (plain RETAIN left an orphan KB on 2026-11-11) |
+    // Alternative: RETAIN rejected (orphans on create rollback); DESTROY rejected (loses user data on teardown)
+    knowledgeBase.applyRemovalPolicy(RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE);
 
     const dataSource = new bedrock.CfnDataSource(this, 'DataSource', {
       knowledgeBaseId: knowledgeBase.attrKnowledgeBaseId,
       name: 'AttachmentsCustomDataSource',
-      // ADR: CUSTOM data source | Rationale: B110 ingests through IngestKnowledgeBaseDocuments (direct ingestion)
-      // from the Attachment Processor Lambda, not a KB-managed crawl of a connector (S3/Confluence/SharePoint/etc.)
-      // -- CUSTOM is the data source type with no connector configuration, matching the direct-ingestion contract
-      dataSourceConfiguration: { type: 'CUSTOM' },
+      // ADR: Custom connector on a managed KB | Rationale: B110 ingests through IngestKnowledgeBaseDocuments from the
+      // Attachment Processor; a MANAGED KB accepts only type MANAGED_KNOWLEDGE_BASE_CONNECTOR, with the connector kind
+      // in connectorParameters (kb-managed-ds-custom.html). A top-level type CUSTOM is the self-managed form and
+      // CloudFormation rejects it ("Unsupported data source type for MANAGED knowledge base type") | Alternative: S3
+      // connector rejected -- its scheduled sync can overwrite or remove a document a user just added
+      dataSourceConfiguration: {
+        type: 'MANAGED_KNOWLEDGE_BASE_CONNECTOR',
+        managedKnowledgeBaseConnectorConfiguration: {
+          connectorParameters: { type: 'CUSTOM', version: '1', aclEnabled: false },
+        },
+      },
     });
-    dataSource.applyRemovalPolicy(RemovalPolicy.RETAIN);
+    dataSource.applyRemovalPolicy(RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE);
 
     this.knowledgeBaseId = knowledgeBase.attrKnowledgeBaseId;
     this.knowledgeBaseArn = knowledgeBase.attrKnowledgeBaseArn;

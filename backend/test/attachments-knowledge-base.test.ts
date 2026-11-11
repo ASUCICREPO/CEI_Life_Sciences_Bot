@@ -39,14 +39,19 @@ describe('B110: Managed Knowledge Base for attachments', () => {
       EmbeddingModelType: 'MANAGED',
     });
     expect(kb.Properties.StorageConfiguration).toBeUndefined();
-    expect(kb.DeletionPolicy).toBe('Retain');
+    // Kept on delete and replacement, but removed when a failed first create rolls back (no orphan KB).
+    expect(kb.DeletionPolicy).toBe('RetainExceptOnCreate');
+    expect(kb.UpdateReplacePolicy).toBe('Retain');
   });
 
-  it('creates exactly one CUSTOM data source on that knowledge base', () => {
+  it('creates exactly one Custom connector data source on that knowledge base', () => {
     const sources = template.findResources('AWS::Bedrock::DataSource');
     expect(Object.keys(sources)).toHaveLength(1);
     const source = Object.values(sources)[0] as any;
-    expect(source.Properties.DataSourceConfiguration.Type).toBe('CUSTOM');
+    // A MANAGED KB needs the managed connector type; a top-level CUSTOM fails at deploy time.
+    expect(source.Properties.DataSourceConfiguration.Type).toBe('MANAGED_KNOWLEDGE_BASE_CONNECTOR');
+    expect(source.Properties.DataSourceConfiguration.ManagedKnowledgeBaseConnectorConfiguration.ConnectorParameters)
+      .toEqual({ type: 'CUSTOM', version: '1', aclEnabled: false });
   });
 
   it('removes the KBChunksBucket -- exactly four private buckets remain (site, logs, attachments, exports)', () => {
