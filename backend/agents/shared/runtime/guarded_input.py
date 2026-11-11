@@ -19,6 +19,8 @@ from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 
+from shared.runtime.prompt_cache import PromptCacheMixin
+
 
 class GuardContentRequiredError(RuntimeError):
     """A guarded model call sent no guardContent block and did not opt out."""
@@ -85,10 +87,13 @@ def _has_guard_content(bedrock_messages: list[dict[str, Any]], system: list[dict
     return False
 
 
-class GuardScopedChatBedrockConverse(ChatBedrockConverse):
+class GuardScopedChatBedrockConverse(PromptCacheMixin, ChatBedrockConverse):
     """ADR: subclass checks the converted request, not a manual block count | fail
     closed per B51 so a missing guardContent silently un-guards typed PII instead
     of masking retrieved evidence; opt out per call with get_model(user_text=False).
+    ADR: mixes in PromptCacheMixin (F08) | _generate/_stream below call the guard
+    check first, then super() reaches the mixin's cachePoint injection, so caching
+    never runs before the fail-closed guardContent check sees the real messages.
     """
 
     user_text_required: bool = True
