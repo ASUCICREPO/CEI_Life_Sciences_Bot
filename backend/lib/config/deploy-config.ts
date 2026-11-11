@@ -29,6 +29,8 @@ export interface DeployConfig {
   adminEmail: string;
   limits: DeployLimits;
   webSearchEnabled: boolean;
+  /** F19/B109: account deletion (`POST /account/delete` + the scheduled delete-worker). Default false. */
+  accountDeletionEnabled: boolean;
   /** B90: adds the localhost:5173 callback/logout URLs to the SPA Cognito client for local dev. Default false. */
   allowLocalhostCallback: boolean;
   /** F4/B30: Cedar policy mode on the tool Gateway. Starts LOG_ONLY, flipped to ENFORCE after the audit. Default LOG_ONLY. */
@@ -252,6 +254,16 @@ export function parseDeployConfig(raw: unknown): DeployConfig {
     }
   }
 
+  // F19/B109: account deletion flag -- absent until deploy.sh/a future preflight write sets it, same pattern as webSearchEnabled
+  let accountDeletionEnabled = false;
+  if (raw.accountDeletionEnabled !== undefined) {
+    if (typeof raw.accountDeletionEnabled !== 'boolean') {
+      errors.push('accountDeletionEnabled: must be a boolean');
+    } else {
+      accountDeletionEnabled = raw.accountDeletionEnabled;
+    }
+  }
+
   // B90: local-dev localhost callback/logout URLs, gated behind this flag (proposal, not a settled CORS/dev-origin decision)
   let allowLocalhostCallback = false;
   if (raw.allowLocalhostCallback !== undefined) {
@@ -287,6 +299,7 @@ export function parseDeployConfig(raw: unknown): DeployConfig {
     adminEmail,
     limits,
     webSearchEnabled,
+    accountDeletionEnabled,
     allowLocalhostCallback,
     toolPolicyMode,
     ...(repository ? { repository } : {}),

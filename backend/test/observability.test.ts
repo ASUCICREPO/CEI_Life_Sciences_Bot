@@ -10,7 +10,7 @@ describe('operational monitoring', () => {
     frontendAssetPath: path.join(__dirname, 'fixtures', 'spa'),
     config: { region: 'us-east-1', defaultModelId: 'model', routerModelId: 'model', blockedModelIds: [],
       allowedEmailDomains: ['example.com'], adminEmail: 'admin@example.com', limits: DEFAULT_LIMITS,
-      webSearchEnabled: true, allowLocalhostCallback: false },
+      webSearchEnabled: true, accountDeletionEnabled: false, allowLocalhostCallback: false },
   });
   const template = Template.fromStack(stack);
 

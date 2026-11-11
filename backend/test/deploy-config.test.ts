@@ -76,6 +76,22 @@ describe('parseDeployConfig', () => {
     expect(config.repository).toEqual({ url: 'https://github.com/org/repo', branch: 'main' });
   });
 
+  it('defaults accountDeletionEnabled to false (F19/B109) and accepts an explicit true', () => {
+    expect(parseDeployConfig(validRaw()).accountDeletionEnabled).toBe(false);
+    expect(parseDeployConfig(validRaw({ accountDeletionEnabled: true })).accountDeletionEnabled).toBe(true);
+  });
+
+  it('rejects a non-boolean accountDeletionEnabled', () => {
+    let error: DeployConfigError | undefined;
+    try {
+      parseDeployConfig(validRaw({ accountDeletionEnabled: 'yes' }));
+    } catch (err) {
+      error = err as DeployConfigError;
+    }
+    expect(error).toBeInstanceOf(DeployConfigError);
+    expect(error!.errors.some((e) => e.includes('accountDeletionEnabled'))).toBe(true);
+  });
+
   it('collects every validation error at once', () => {
     let error: DeployConfigError | undefined;
     try {
