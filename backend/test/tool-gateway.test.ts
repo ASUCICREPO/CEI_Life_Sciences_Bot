@@ -5,6 +5,7 @@ import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { BackendStack } from '../lib/backend-stack';
 import { DeployConfig, DEFAULT_LIMITS } from '../lib/config/deploy-config';
 import { assertNoScopeCollisions, cedarPermit, loadToolSchemas } from '../lib/constructs/tool-gateway';
+import { memoSynth } from './helpers/memo-synth';
 
 const FIXTURE_ASSET_PATH = path.join(__dirname, 'fixtures', 'spa');
 const SOURCE_IDS = ['pubmed', 'clinicaltrials', 'biorxiv', 'medrxiv', 'chembl', 'opentargets', 'cmscoverage', 'icd10', 'npi', 'pubchem', 'openfda', 'patentsview'];
@@ -20,20 +21,24 @@ function testConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
     adminEmail: 'admin@example.com',
     limits: DEFAULT_LIMITS,
     webSearchEnabled: false,
+    accountDeletionEnabled: false,
     allowLocalhostCallback: false,
     ...overrides,
   };
 }
 
+// ADR: cache keyed by config | webAclArn is fully determined by config truthiness, so it's not a separate input
 function build(config?: DeployConfig): { stack: BackendStack; template: Template } {
-  const app = new cdk.App();
-  const stack = new BackendStack(app, 'TestStack', {
-    env: { region: 'us-east-1', account: '123456789012' },
-    frontendAssetPath: FIXTURE_ASSET_PATH,
-    config,
-    webAclArn: config ? 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123' : undefined,
+  return memoSynth(JSON.stringify({ config }), () => {
+    const app = new cdk.App();
+    const stack = new BackendStack(app, 'TestStack', {
+      env: { region: 'us-east-1', account: '123456789012' },
+      frontendAssetPath: FIXTURE_ASSET_PATH,
+      config,
+      webAclArn: config ? 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123' : undefined,
+    });
+    return { stack, template: Template.fromStack(stack) };
   });
-  return { stack, template: Template.fromStack(stack) };
 }
 
 function resourcesOf(template: Template, type: string): any[] {
@@ -122,7 +127,7 @@ describe('ToolGateway (F4)', () => {
     });
 
     it('has one Lambda target per source, each serving exactly the generated `search` tool', () => {
-      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget');
+      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').filter((target) => target.Name !== 'lsops' && !target.Name.startsWith('ncbi-'));
       expect(targets.map((t) => t.Name).sort()).toEqual([...SOURCE_IDS].sort());
       const schemas = new Map(loadToolSchemas().map((s) => [s.sourceId, s.tool]));
       for (const target of targets) {
@@ -134,8 +139,8 @@ describe('ToolGateway (F4)', () => {
       }
     });
 
-    it('writes one scoped Cedar permit per source target and no others (B69)', () => {
-      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy');
+    it('writes one scoped Cedar permit per source target (B69)', () => {
+      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').filter((policy) => policy.Name !== 'permit_lsops' && !policy.Name.startsWith('permit_ncbi_'));
       expect(policies.map((p) => p.Name).sort()).toEqual(SOURCE_IDS.map((id) => `permit_${id}`).sort());
       for (const policy of policies) {
         const id = policy.Name.replace('permit_', '');
@@ -146,11 +151,28 @@ describe('ToolGateway (F4)', () => {
       }
     });
 
-    it('builds an unconditional permit for a shared (common) target (B70 mechanism)', () => {
+    it('requires the common scope for LS Ops', () => {
       expect(cedarPermit('lsops', 'arn:gw')).toBe(
         'permit(principal is AgentCore::OAuthUser, action in AgentCore::Action::"lsops", resource == AgentCore::Gateway::"arn:gw");',
       );
       expect(cedarPermit('pubmed', 'arn:gw', 'cei-tools/src.pubmed')).toContain('principal.hasTag("scope") && principal.getTag("scope") like "*cei-tools/src.pubmed*"');
+      const policy = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').find((p) => p.Name === 'permit_lsops');
+      expect(JSON.stringify(policy.Definition.Cedar.Statement)).toContain('cei-tools/common');
+      const target = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').find((t) => t.Name === 'lsops');
+      expect(target.TargetConfiguration.Mcp.Lambda.ToolSchema.InlinePayload).toHaveLength(20);
+    });
+
+    it('scopes NCBI lookups and uses a shared rate table for PubMed', () => {
+      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').filter((t) => t.Name.startsWith('ncbi-'));
+      expect(targets.map((t) => [t.Name, t.TargetConfiguration.Mcp.Lambda.ToolSchema.InlinePayload[0].Name]).sort())
+        .toEqual([['ncbi-sequence', 'efetch'], ['ncbi-taxonomy', 'lineage']]);
+      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').filter((p) => p.Name.startsWith('permit_ncbi_'));
+      expect(policies).toHaveLength(2);
+      for (const policy of policies) expect(JSON.stringify(policy.Definition.Cedar.Statement)).toContain('cei-tools/src.ncbi');
+      const functions = resourcesOf(template, 'AWS::Lambda::Function');
+      const withLimiter = functions.filter((f) => f.Environment?.Variables?.NCBI_RATE_LIMIT_TABLE);
+      expect(withLimiter).toHaveLength(2);
+      expect(withLimiter[0].Environment.Variables.NCBI_RATE_LIMIT_TABLE).toEqual(withLimiter[1].Environment.Variables.NCBI_RATE_LIMIT_TABLE);
     });
 
     it('lets the Gateway role invoke exactly the configured source Lambdas', () => {
@@ -159,10 +181,64 @@ describe('ToolGateway (F4)', () => {
       const statements = resourcesOf(template, 'AWS::IAM::Policy')
         .filter((p) => p.Roles.some((r: any) => r.Ref === gatewayRole))
         .flatMap((p) => p.PolicyDocument.Statement);
-      const invoke = statements.find((s: any) => s.Action === 'lambda:InvokeFunction');
+      const invokes = statements.filter((s: any) => s.Action === 'lambda:InvokeFunction');
       const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget');
-      const expected = targets.map((target) => JSON.stringify(target.TargetConfiguration.Mcp.Lambda.LambdaArn)).sort();
-      expect(invoke.Resource.map((arn: unknown) => JSON.stringify(arn)).sort()).toEqual(expected);
+      const expected = [...new Set(targets.map((target) => JSON.stringify(target.TargetConfiguration.Mcp.Lambda.LambdaArn)))].sort();
+      const resources = invokes.flatMap((invoke: any) => Array.isArray(invoke.Resource) ? invoke.Resource : [invoke.Resource]);
+      expect(resources.map((arn: unknown) => JSON.stringify(arn)).sort()).toEqual(expected);
+    });
+  });
+
+  describe('Web Search connector (B44/B45/B86)', () => {
+    it('is absent when webSearchEnabled is false (the default)', () => {
+      const targets = resourcesOf(template, 'AWS::BedrockAgentCore::GatewayTarget').filter((t) => t.Name === 'web-search');
+      expect(targets).toHaveLength(0);
+      const policies = resourcesOf(template, 'AWS::BedrockAgentCore::Policy').filter((p) => p.Name === 'permit_web_search');
+      expect(policies).toHaveLength(0);
+      const gatewayRole = resourcesOf(template, 'AWS::BedrockAgentCore::Gateway')[0].RoleArn['Fn::GetAtt'][0];
+      const statements = resourcesOf(template, 'AWS::IAM::Policy')
+        .filter((p) => p.Roles.some((r: any) => r.Ref === gatewayRole))
+        .flatMap((p) => p.PolicyDocument.Statement);
+      const actions = statements.flatMap((s: any) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+      expect(actions).not.toContain('bedrock-agentcore:InvokeWebSearch');
+    });
+
+    it('adds an unpinned ConnectorSource target, common-scope permit, and InvokeWebSearch grant when enabled', () => {
+      const { template: enabledTemplate } = build(testConfig({ webSearchEnabled: true }));
+
+      const [target] = resourcesOf(enabledTemplate, 'AWS::BedrockAgentCore::GatewayTarget').filter((t) => t.Name === 'web-search');
+      expect(target).toBeDefined();
+      expect(target.TargetConfiguration.Mcp.Connector.Source).toEqual({ ConnectorId: 'web-search' });
+      expect(target.CredentialProviderConfigurations).toEqual([{ CredentialProviderType: 'GATEWAY_IAM_ROLE' }]);
+
+      const [policy] = resourcesOf(enabledTemplate, 'AWS::BedrockAgentCore::Policy').filter((p) => p.Name === 'permit_web_search');
+      expect(policy).toBeDefined();
+      const statement = JSON.stringify(policy.Definition.Cedar.Statement);
+      expect(statement).toContain('action in AgentCore::Action::\\"web-search\\"');
+      expect(statement).toContain('cei-tools/common');
+
+      const gatewayRole = resourcesOf(enabledTemplate, 'AWS::BedrockAgentCore::Gateway')[0].RoleArn['Fn::GetAtt'][0];
+      const statements = resourcesOf(enabledTemplate, 'AWS::IAM::Policy')
+        .filter((p) => p.Roles.some((r: any) => r.Ref === gatewayRole))
+        .flatMap((p) => p.PolicyDocument.Statement);
+      const actions = statements.flatMap((s: any) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+      expect(actions).toContain('bedrock-agentcore:InvokeWebSearch');
+    });
+
+    it('sets CEI_WEB_SEARCH_ENABLED on the agent runtimes to match the config value', () => {
+      const disabled = resourcesOf(template, 'AWS::BedrockAgentCore::Runtime');
+      for (const runtime of disabled) expect(runtime.EnvironmentVariables.CEI_WEB_SEARCH_ENABLED).toBe('false');
+
+      const { template: enabledTemplate } = build(testConfig({ webSearchEnabled: true }));
+      const enabled = resourcesOf(enabledTemplate, 'AWS::BedrockAgentCore::Runtime');
+      expect(enabled.length).toBeGreaterThan(0);
+      for (const runtime of enabled) expect(runtime.EnvironmentVariables.CEI_WEB_SEARCH_ENABLED).toBe('true');
+    });
+
+    it('passes cdk-nag with Web Search enabled', () => {
+      const { stack } = build(testConfig({ webSearchEnabled: true, toolPolicyMode: 'ENFORCE' }));
+      const errors = Annotations.fromStack(stack).findError('*', Match.stringLikeRegexp('AwsSolutions-.*'));
+      expect(errors).toHaveLength(0);
     });
   });
 
@@ -190,6 +266,13 @@ describe('ToolGateway (F4)', () => {
   });
 
   describe('token refresh (B67)', () => {
+    it('includes NCBI in the specialist Router grant', () => {
+      const routers = resourcesOf(template, 'AWS::Lambda::Function').filter((f) => f.Environment?.Variables?.TOOL_SCOPES);
+      expect(routers).toHaveLength(1);
+      expect(routers[0].Environment.Variables.TOOL_SCOPES.split(',').sort())
+        .toEqual(EXPECTED_SCOPES.map((scope) => `cei-tools/${scope}`).sort());
+    });
+
     it('is POST /internal/token-refresh with AWS_IAM auth', () => {
       const iam = resourcesOf(template, 'AWS::ApiGateway::Method').filter((m) => m.AuthorizationType === 'AWS_IAM');
       expect(iam).toHaveLength(1);

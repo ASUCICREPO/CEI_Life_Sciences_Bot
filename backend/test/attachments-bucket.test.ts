@@ -15,6 +15,7 @@ const CONFIG: DeployConfig = {
   adminEmail: 'admin@example.com',
   limits: DEFAULT_LIMITS,
   webSearchEnabled: true,
+  accountDeletionEnabled: false,
   allowLocalhostCallback: false,
 };
 

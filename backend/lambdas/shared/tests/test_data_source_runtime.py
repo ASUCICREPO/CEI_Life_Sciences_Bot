@@ -354,6 +354,25 @@ def test_pubmed_sends_key_on_both_calls(monkeypatch):
     assert result.citations[0].source_id == "PMID:1"
 
 
+def test_pubmed_reserves_shared_slot_before_each_request(monkeypatch):
+    from shared.tools.data_sources import pubmed
+
+    calls = []
+    monkeypatch.setenv("NCBI_RATE_LIMIT_TABLE", "shared-table")
+    monkeypatch.setattr(pubmed, "_acquire_eutils_slot", lambda: calls.append("reserve"))
+    xml = "<PubmedArticleSet/>"
+
+    def fake_request(method, url, **kwargs):
+        calls.append("request")
+        if "esearch" in url:
+            return _Resp(200, {"esearchresult": {"idlist": ["1"]}})
+        return _Resp(200, text=xml)
+
+    monkeypatch.setattr(retrying_http.requests, "request", fake_request)
+    PubMedTool().fetch(query="aspirin")
+    assert calls == ["reserve", "request", "reserve", "request"]
+
+
 def test_pubmed_without_key_sends_no_key_param(monkeypatch):
     seen: list[dict] = []
 

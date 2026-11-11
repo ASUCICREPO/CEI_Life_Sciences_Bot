@@ -29,6 +29,7 @@ async def run_analysis(
     *,
     analysis_type: str | None = None,
     scope: dict | None = None,
+    long_term_context: list[str] | tuple[str, ...] = (),
 ) -> AnalysisOutcome:
     """Run the Analysis graph to completion with no checkpointer and no HITL pause.
 
@@ -60,6 +61,8 @@ async def run_analysis(
         "report": "",
         "response_document": None,
         "trace": [],
+        # The parent Pipeline run already recalled this; a sub-run never calls memory itself
+        "long_term_context": list(long_term_context),
     }
 
     result = await graph.ainvoke(

@@ -131,6 +131,7 @@ class ConversationRecorder:
         thinking: str | None = None,
         first_prompt: str | None = None,
         message_id: str | None = None,
+        completion_status: str | None = None,
     ) -> int | None:
         """Record the agent's answer; returns its sequence (None on failure). Never raises: the user still gets
         the answer if persistence fails."""
@@ -143,6 +144,7 @@ class ConversationRecorder:
                 self._ai_blocks(text, ui_surface, thinking),
                 citations or [],
                 message_id,
+                completion_status,
             )
         except Exception as exc:  # noqa: BLE001 — logged, never surfaced to the user
             log.error("chat history: failed to record AI turn session=%s error_type=%s", session_id, type(exc).__name__)
@@ -176,6 +178,24 @@ class ConversationRecorder:
         Raises SessionNotFoundError (someone else's session) or OwnershipCheckError (owner lookup failed).
         """
         await asyncio.to_thread(self._assert_owner, user_id, session_id)
+
+    async def session_metadata(self, *, user_id: str, session_id: str) -> ChatMetadataRecord | None:
+        """Read settings for the authorized owner, including newly updated modes."""
+        await asyncio.to_thread(self._assert_owner, user_id, session_id)
+        try:
+            return await asyncio.to_thread(self._metadata.get, user_id, session_id)
+        except Exception as exc:
+            raise OwnershipCheckError("Could not read session settings") from exc
+
+    async def initialize_turn_settings(self, *, user_id: str, session_id: str,
+                                       mode: str | None, model_id: str | None) -> ChatMetadataRecord:
+        try:
+            return await asyncio.to_thread(self._metadata.initialize_turn_settings, user_id, session_id,
+                                           mode=mode, model_id=model_id)
+        except SessionNotFoundError:
+            raise
+        except Exception as exc:
+            raise OwnershipCheckError("Could not initialize session settings") from exc
 
     async def rehydrate(self, *, user_id: str, session_id: str, n_turns: int = 20) -> list[BaseMessage]:
         """The last `n_turns` stored messages as LangChain messages (oldest first). Empty on any failure."""
@@ -244,6 +264,7 @@ class ConversationRecorder:
         blocks: list[ContentBlock],
         citations: list[dict[str, Any]],
         message_id: str | None = None,
+        completion_status: str | None = None,
     ) -> int:
         """Allocate the next sequence number from the metadata counter and write one message item."""
         for _ in range(_SEQUENCE_RETRIES):
@@ -259,6 +280,7 @@ class ConversationRecorder:
                 citations=citations,
                 timestamp=datetime.now(UTC),
                 sequence_number=sequence,
+                completion_status=completion_status,
             )
             try:
                 self._history.append(record)

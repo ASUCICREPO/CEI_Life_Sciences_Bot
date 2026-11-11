@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { BackendStack } from '../lib/backend-stack';
 import { DeployConfig, DEFAULT_LIMITS } from '../lib/config/deploy-config';
+import { memoSynth } from './helpers/memo-synth';
 
 const FIXTURE_ASSET_PATH = path.join(__dirname, 'fixtures', 'spa');
 
@@ -16,20 +17,25 @@ function testConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
     adminEmail: 'admin@example.com',
     limits: DEFAULT_LIMITS,
     webSearchEnabled: true,
+    accountDeletionEnabled: false,
     allowLocalhostCallback: false,
     ...overrides,
   };
 }
 
 function build(config?: DeployConfig): { stack: BackendStack; template: Template } {
-  const app = new cdk.App();
-  const stack = new BackendStack(app, 'TestStack', {
-    env: { region: 'us-east-1', account: '123456789012' },
-    frontendAssetPath: FIXTURE_ASSET_PATH,
-    config,
-    webAclArn: config ? 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123' : undefined,
+  // ADR: memoize by config content | many tests build the identical stack and only read it
+  const key = JSON.stringify({ config: config ?? null });
+  return memoSynth(key, () => {
+    const app = new cdk.App();
+    const stack = new BackendStack(app, 'TestStack', {
+      env: { region: 'us-east-1', account: '123456789012' },
+      frontendAssetPath: FIXTURE_ASSET_PATH,
+      config,
+      webAclArn: config ? 'arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc123' : undefined,
+    });
+    return { stack, template: Template.fromStack(stack) };
   });
-  return { stack, template: Template.fromStack(stack) };
 }
 
 function policyActionsFor(template: Template, roleLogicalIdPrefix: string): Array<{ actions: string[]; resource: unknown }> {
@@ -66,7 +72,7 @@ describe('BackendStack REST API + session store', () => {
     const iamMethods = methods.filter((m) => m.AuthorizationType === 'AWS_IAM');
     expect(iamMethods.map((m) => m.HttpMethod)).toEqual(['POST']);
     const real = methods.filter((m) => m.HttpMethod !== 'OPTIONS' && m.AuthorizationType !== 'AWS_IAM');
-    expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST', 'POST', 'POST']);
+    expect(real.map((m) => m.HttpMethod).sort()).toEqual(['GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'GET', 'PATCH', 'POST', 'POST', 'POST', 'POST', 'POST', 'POST', 'PUT']);
     for (const method of real) {
       expect(method.AuthorizationType).toBe('COGNITO_USER_POOLS');
       expect(method.AuthorizerId).toBeDefined();
@@ -82,10 +88,10 @@ describe('BackendStack REST API + session store', () => {
   it('includes the streaming and trace routes without a DELETE route', () => {
     const methods = Object.values(template.findResources('AWS::ApiGateway::Method')).map((m: any) => m.Properties);
     expect(methods.map((method) => method.HttpMethod)).not.toContain('DELETE');
-    template.resourceCountIs('AWS::ApiGateway::Resource', 13);
+    template.resourceCountIs('AWS::ApiGateway::Resource', 23);
     const resources = template.findResources('AWS::ApiGateway::Resource');
     const paths = Object.values(resources).map((r: any) => r.Properties.PathPart);
-    expect(paths.sort()).toEqual(['attachments', 'chat', 'client-diagnostics', 'history', 'internal', 'presign', 'sessions', 'stream', 'token-refresh', 'trace', 'turns', '{messageId}', '{sessionId}']);
+    expect(paths.sort()).toEqual(['attachments', 'cancel', 'chat', 'client-diagnostics', 'download', 'exports', 'exports', 'history', 'internal', 'jobs', 'models', 'presign', 'sessions', 'settings', 'stream', 'token-refresh', 'trace', 'turns', 'ui-actions', '{exportId}', '{jobId}', '{messageId}', '{sessionId}']);
     const idFor = (part: string) => Object.entries(resources).find(([, resource]: [string, any]) => resource.Properties.PathPart === part)![0];
     const stream = resources[idFor('stream')] as any;
     const trace = resources[idFor('trace')] as any;
@@ -93,6 +99,22 @@ describe('BackendStack REST API + session store', () => {
     expect(trace.Properties.ParentId).toEqual({ Ref: idFor('{messageId}') });
     expect(methods.some((method) => method.HttpMethod === 'POST' && method.ResourceId?.Ref === idFor('stream') && method.Integration.ResponseTransferMode === 'STREAM')).toBe(true);
     expect(methods.some((method) => method.HttpMethod === 'GET' && method.ResourceId?.Ref === idFor('trace') && method.AuthorizationType === 'COGNITO_USER_POOLS')).toBe(true);
+  });
+
+  it('uses owner-partitioned export metadata and authenticated download routes', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      KeySchema: [
+        { AttributeName: 'user_id', KeyType: 'HASH' },
+        { AttributeName: 'export_id', KeyType: 'RANGE' },
+      ],
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+    });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Handler: 'handler.handler',
+      Environment: { Variables: Match.objectLike({
+        CEI_EXPORT_METADATA_TABLE: Match.anyValue(), CEI_EXPORT_BUCKET: Match.anyValue(),
+      }) },
+    });
   });
 
   it('applies the 20 rps account-wide throttle through a UsagePlan and the stage default', () => {
@@ -166,7 +188,7 @@ describe('BackendStack REST API + session store', () => {
 
   it('creates the session tables and active-run table with the specified keys', () => {
     const tables = template.findResources('AWS::DynamoDB::Table');
-    expect(Object.keys(tables)).toHaveLength(4);
+    expect(Object.keys(tables)).toHaveLength(8);
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       KeySchema: [
         { AttributeName: 'user_id', KeyType: 'HASH' },
@@ -185,8 +207,13 @@ describe('BackendStack REST API + session store', () => {
       // ADR: SSEEnabled without SSEType | CDK's AWS_MANAGED emits exactly this; it selects the aws/dynamodb managed key, while omitting it means an AWS-owned key
       expect(table.Properties.SSESpecification).toEqual({ SSEEnabled: true });
       expect(table.Properties.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
-      expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
-      expect(table.DeletionPolicy).toBe('Retain');
+      if (table.Properties.KeySchema[0].AttributeName === 'pk') {
+        expect(table.Properties.TimeToLiveSpecification).toEqual({ AttributeName: 'expires_at', Enabled: true });
+        expect(table.DeletionPolicy).toBe('Delete');
+      } else {
+        expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
+        expect(table.DeletionPolicy).toBe('Retain');
+      }
     }
   });
 
@@ -234,6 +261,18 @@ describe('BackendStack REST API + session store', () => {
     }
   });
 
+  // F08: POST /sessions reads default_model_id/default_mode from UserMetadataTable when none is supplied
+  it('gives the session-metadata handler the UserMetadataTable name and a read-only grant on it', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Handler: 'metadata_handler.handler',
+      Environment: { Variables: Match.objectLike({ CEI_USER_METADATA_TABLE: Match.anyValue() }) },
+    });
+    const statements = policyActionsFor(template, 'SessionMetadataHandlerRole');
+    const onUserMetadata = statements.filter((s) => JSON.stringify(s.resource).includes('UserMetadataTable'));
+    expect(onUserMetadata).toHaveLength(1);
+    expect(onUserMetadata[0].actions).toEqual(['dynamodb:GetItem']);
+  });
+
   it('grants each handler only the table actions it needs', () => {
     const metadataStatements = policyActionsFor(template, 'SessionMetadataHandlerRole');
     const metadataActions = metadataStatements.flatMap((s) => s.actions).filter((a) => a.startsWith('dynamodb:'));
@@ -247,6 +286,15 @@ describe('BackendStack REST API + session store', () => {
       const resource = JSON.stringify(statement.resource);
       if (statement.actions.some((action) => action.startsWith('xray:'))) {
         expect([...statement.actions].sort()).toEqual(['xray:PutTelemetryRecords', 'xray:PutTraceSegments']);
+        expect(statement.resource).toEqual('*');
+        continue;
+      }
+      // F8: Bedrock model discovery (ListFoundationModels/ListInferenceProfiles/GetInferenceProfile) has no
+      // resource-level ARN to scope to (same carve-out as model-settings.ts' construct-level test).
+      if (statement.actions.some((action) => action.startsWith('bedrock:'))) {
+        expect([...statement.actions].sort()).toEqual(
+          ['bedrock:GetInferenceProfile', 'bedrock:ListFoundationModels', 'bedrock:ListInferenceProfiles'],
+        );
         expect(statement.resource).toEqual('*');
         continue;
       }

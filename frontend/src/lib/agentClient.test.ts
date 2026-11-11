@@ -4,6 +4,7 @@ import {
   getOrCreateSessionId,
   invokeAgent,
   isSessionUuid,
+  sendAction,
   setAgentTokenProvider,
   startNewSessionId,
 } from './agentClient';
@@ -104,6 +105,40 @@ describe('agentClient', () => {
     // Agents without a configured URL keep the relative dev-proxy path
     await invokeAgent('research', { prompt: 'hello', mode: 'business' }, 'sess-1');
     expect((fetchMock.mock.calls[1] as unknown as [string])[0]).toBe('/api/agents/research');
+  });
+
+  const ACTION = {
+    request_id: 'r1', session_id: 'sess-1', surface_id: 'analysis-scope', revision: 1,
+    interaction_id: 'i-1', component_id: 'c-1', action_id: 'approve-scope', value: null,
+  };
+
+  it('sends actions to POST /ui-actions without the AgentCore session header when an API is configured', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      region: 'us-east-1', userPoolId: 'us-east-1_abc', userPoolClientId: 'client123',
+      cognitoDomain: 'https://cei-ls-1.auth.us-east-1.amazoncognito.com',
+      apiBaseUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/v1',
+    }), { status: 200 })));
+    await loadRuntimeConfig();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ text: 'ok', status: 'completed' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    setAgentTokenProvider(async () => 'tok-abc');
+    await sendAction('analysis', ACTION, 'sess-1');
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://abc.execute-api.us-east-1.amazonaws.com/v1/ui-actions');
+    expect(JSON.parse(String(init.body))).toEqual(ACTION);
+    const headers = init.headers as Record<string, string>;
+    expect(headers.authorization).toBe('Bearer tok-abc');
+    expect(headers).not.toHaveProperty('X-Amzn-Bedrock-AgentCore-Runtime-Session-Id');
+  });
+
+  it('keeps the agent proxy resume path without an API (local demo)', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ text: 'ok', status: 'completed' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    setAgentTokenProvider(async () => 'tok-abc');
+    await sendAction('analysis', ACTION, 'sess-1');
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/api/agents/analysis');
+    expect(JSON.parse(String(init.body))).toEqual({ op: 'resume', action: ACTION });
   });
 
   it('maps proxy 401 / 429 / 504 to actionable messages', async () => {

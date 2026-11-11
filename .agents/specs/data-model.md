@@ -10,14 +10,14 @@ Existing code this spec extends: `backend/agents/shared/persistence/chat_history
 
 - **Partitioning** — every table is partitioned so one user's data is never in the same partition key value as another user's, using the Cognito `sub` as `user_id` (B12). Phase: F3.
 - **Encryption** — AWS-managed keys (SSE-S3 / AWS-owned KMS default) for DynamoDB, S3, and Secrets Manager. No customer-managed KMS key (B52). cdk-nag suppressions for encryption checks need an ADR-format reason string.
-- **TTL** — no table has an item-level TTL by default. Retention is indefinite until explicit user deletion (B8, B58). The active-run counters (below) are the one exception, and TBD whether they use DynamoDB TTL or explicit decrement.
-- **Deletion cascade** (B58) — see "Deletion cascade" section at the end. Status: planned, F19.
+- **TTL** — no table has an item-level TTL by default. Retention is indefinite until account deletion (B8, B58, B104). There is no per-chat delete (B104). The active-run counters (below) are the one exception, and TBD whether they use DynamoDB TTL or explicit decrement.
+- **Deletion cascade** (B58, B104, B109) — account delete only; see "Deletion cascade" section at the end. Status: planned, F19.
 
 ---
 
 ## 1. Session Metadata Store (`ChatMetadataStore`)
 
-Exists (partial): `shared/persistence/chat_metadata.py` defines `ChatMetadataRecord` and a repository with `create` and `list_by_user` implemented; `get`, `update_title`, `increment_message_count`, `archive` raise `NotImplementedError`. Phase: F3 (create/get/list), F19 (delete cascade participant).
+Exists (partial): `shared/persistence/chat_metadata.py` defines `ChatMetadataRecord` and a repository with `create` and `list_by_user` implemented; `get`, `update_title`, `increment_message_count`, `archive` raise `NotImplementedError`. Phase: F3 (create/get/list), F19 (account-delete cascade participant; no per-chat delete, B104).
 
 | | |
 |---|---|
@@ -32,7 +32,7 @@ Access patterns:
 - List a user's sessions, optionally filtered by status (F3) — implemented via `Query` on PK `user_id`.
 - Get one session by `user_id` + `session_id` (F3) — implemented today as `NotImplementedError`; needs a `get_item`.
 - Update title (F3), increment message count on each turn (F3), archive (F3).
-- Delete session record as part of chat delete cascade (F19, B58).
+- Delete session record as part of the account-delete cascade (F19, B58, B104). There is no per-chat delete.
 
 ---
 
@@ -147,7 +147,7 @@ Attributes (planned): `active_realtime_runs` (integer, max 2 per B22), `active_b
 | Static site bucket | Hosts the built frontend | CloudFront origin, private, OAC | F2 |
 | Attachments bucket | User uploads | Presigned POST with a `content-length-range` condition capping uploads at 55 MB (B32); key scheme proposal: `{user_id}/{session_id}/{file_id}/{filename}`; SQS-triggered processing (existing `AttachmentProcessor` role in `docs/architectureDeepDive.md`) | F10 |
 | KB source / S3 Vectors bucket | Bedrock Knowledge Base source documents and the S3 Vectors index (B33) | Every chunk carries `user_id`, `session_id`, `file_id` metadata; every retrieval filters on this metadata | S5, F10 |
-| Export outputs bucket | Holds generated PDF/DOCX/MD/CSV/LaTeX/TXT files (B41) before a presigned download, produced either by an agent during a run or by a user-triggered export request (B74) | Exists (partial) as local files today (`shared/tools/export.py` writes to `output_dir` on local disk); production needs an S3 bucket with short-lived presigned GET URLs. Download URL TTL is decided: 15 minutes (B78). Proposal (not decided): bucket name and key scheme. | F7 |
+| Export outputs bucket | Holds generated PDF/DOCX/MD/CSV/LaTeX/TXT files (B41) produced either by an agent during a run or by a user-triggered request (B74) | B101: S3 Intelligent-Tiering with no archive tier or automatic expiry. Export metadata is keyed by user and export ID, with a session-prefixed ID allowing a chat query without scanning S3. A 15-minute presigned GET is issued only on a user download click (B78/B101). Delete chat/account removes its report objects and records. Bucket name remains deployment-generated. | F7 |
 
 ---
 
@@ -177,13 +177,13 @@ Not a table of its own. Wherever tool-call output from the Web Search Gateway co
 
 ---
 
-## Deletion cascade (B58/B73)
+## Deletion cascade (B58/B73/B104/B109)
 
-Decided (B73): `DELETE /sessions/{sessionId}` and `POST /account/delete` mark the item(s) "deleting" and return `202 Accepted` at once; the UI hides the item immediately. A Deletion Worker Lambda then performs the cascade below. Whether the worker runs synchronously per request or is fanned out (step function / SQS) for large accounts is still a proposal, not decided.
+There is no chat delete (B104): `DELETE /sessions/{sessionId}` is removed. Only `POST /account/delete` exists, and it is account-wide.
 
-**Chat delete** removes, for one `session_id`: Chat History Store items (turns + trace + SSE-replay items, including chunked trace items), Attachment Metadata Store rows for that session plus their S3 objects, KB chunks filtered by that `session_id` (S3 Vectors + Bedrock KB), and the AgentCore Memory short-term checkpoint(s) for that `thread_id`. It does not touch long-term memory (`user_preferences`/`semantic_facts`) or API keys — those are user-scoped, not chat-scoped.
+Decided (B109): `POST /account/delete` is behind a flag, off by default. It disables the Cognito user (`AdminDisableUser`), revokes every session (`AdminUserGlobalSignOut`), and writes an account "deleting" gate that every run-starting route checks first, so no new run can start. It returns `202 Accepted` at once; the UI hides the account's data immediately. A running AgentCore session ends on its own at the 8-hour maximum. A scheduled worker then runs the cascade below, 9 hours after the request (8-hour run maximum plus 1-hour access-token life) — by then, a late write from a timed-out SDK retry has already finished, so no epoch-conditional write is needed. Account data can stay for up to about 9 hours after the request. Whether the worker runs synchronously or is fanned out (step function / SQS) for large accounts is still a proposal, not decided.
 
-**Account delete** removes everything above for every session the user has, plus: the Session Metadata Store rows, the User Metadata Table item, the Active-run counters item, every Secrets Manager secret under `cei/user-keys/{user_id}/*`, and the user's AgentCore Memory long-term namespace (both strategies). Phase: F19.
+**Account delete** removes, for every session the user has: Chat History Store items (turns + trace + SSE-replay items, including chunked trace items), Attachment Metadata Store rows plus their S3 objects, KB chunks filtered by `session_id` (S3 Vectors + Bedrock KB), and the AgentCore Memory short-term checkpoint(s) for each `thread_id`; plus: the Session Metadata Store rows, the User Metadata Table item, the Active-run counters item, every Secrets Manager secret under `cei/user-keys/{user_id}/*`, and the user's AgentCore Memory long-term namespace (both strategies). Phase: F19.
 
 ---
 
@@ -199,8 +199,8 @@ Decided (B73): `DELETE /sessions/{sessionId}` and `POST /account/delete` mark th
 - TBD: Chat History Store GSI for direct user-wide trace queries (avoided by cascading through Session Metadata Store instead).
 - TBD: exact SK scheme interleaving turns, trace events, and SSE-replay events (B68) in Chat History Store.
 - TBD: Active-run counters table name, and leaked-counter recovery path.
-- TBD: Export outputs bucket name and key scheme (download URL TTL is decided: 15 min, B78).
+- Export bucket name is deployment-generated; B101 fixes the indexed metadata and Intelligent-Tiering behavior.
 - TBD: User Metadata Table email duplication vs. live Cognito read.
 - TBD: synchronous vs. fanned-out Deletion Worker execution for large accounts (B73).
 
-Resolved by B67–B86: token-refresh active-run check (B67), SSE event replay via sequence numbers instead of an in-memory buffer (B68), trace chunk size 350 KB (B78), Secrets Manager secret naming `cei/user-keys/{user_id}/{source_id}` (B78), export download URL TTL 15 min (B78), no per-user model restriction attribute (B76), delete API 202 + Deletion Worker cascade (B73), AgentCore Memory short-term event expiry behavior on expiry ("expired, start again", exact number still to verify — B82).
+Resolved by B67–B109: token-refresh active-run check (B67), SSE event replay via sequence numbers instead of an in-memory buffer (B68), trace chunk size 350 KB (B78), Secrets Manager secret naming `cei/user-keys/{user_id}/{source_id}` (B78), export download URL TTL 15 min (B78), no per-user model restriction attribute (B76), no per-chat delete (B104), account delete 202 + disable/gate + a worker cascade 9 hours later (B73, B109), AgentCore Memory short-term event expiry behavior on expiry ("expired, start again", exact number still to verify — B82).

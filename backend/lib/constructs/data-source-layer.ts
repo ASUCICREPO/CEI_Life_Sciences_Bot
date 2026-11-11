@@ -15,6 +15,7 @@ const STAGED_FILES: ReadonlyArray<[string, string]> = [
   ['agents/shared/schemas/citation.py', 'shared/schemas/citation.py'],
   ['agents/shared/tools/base.py', 'shared/tools/base.py'],
   ['agents/shared/tools/retrying_http.py', 'shared/tools/retrying_http.py'],
+  ['lambdas/ncbi/limiter.py', 'ncbi_limiter.py'],
   ['lambdas/shared/data_source_runtime.py', 'data_source_runtime.py'],
 ];
 const DATA_SOURCES_DIR = 'agents/shared/tools/data_sources';

@@ -156,6 +156,9 @@ class BaseChatMetadataRepository(ABC):
     @abstractmethod
     def archive(self, user_id: str, session_id: str) -> None: ...
 
+    @abstractmethod
+    def delete(self, user_id: str, session_id: str) -> None: ...
+
 
 class ChatMetadataRepository(BaseChatMetadataRepository):
 
@@ -193,9 +196,45 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
         return existing
 
     def get(self, user_id: str, session_id: str) -> ChatMetadataRecord | None:
-        response = self._table.get_item(Key={"user_id": user_id, "session_id": session_id})
+        # Per-chat mode changes must take effect on the next turn.
+        response = self._table.get_item(Key={"user_id": user_id, "session_id": session_id}, ConsistentRead=True)
         item = response.get("Item")
         return ChatMetadataRecord(**from_dynamo(item)) if item else None
+
+    def initialize_turn_settings(self, user_id: str, session_id: str, *,
+                                 mode: str | None, model_id: str | None) -> ChatMetadataRecord:
+        """Fill missing legacy settings without overwriting concurrent user changes.
+
+        A conditional failure returns the latest consistent record so the caller
+        can revalidate the winner. A deleted row is never recreated.
+        """
+        if mode is None and model_id is None:
+            raise ValueError("no settings to initialize")
+        names = {"#uid": "user_id"}
+        values: dict[str, Any] = {":null": None}
+        sets, checks = [], ["attribute_exists(#uid)"]
+        for field, value in (("mode", mode), ("model_id", model_id)):
+            if value is not None:
+                names[f"#{field}"] = field
+                values[f":{field}"] = value
+                sets.append(f"#{field} = :{field}")
+                checks.append(f"(attribute_not_exists(#{field}) OR #{field} = :null)")
+        try:
+            result = self._table.update_item(
+                Key={"user_id": user_id, "session_id": session_id},
+                UpdateExpression="SET " + ", ".join(sets),
+                ConditionExpression=" AND ".join(checks),
+                ExpressionAttributeNames=names, ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+            return ChatMetadataRecord(**from_dynamo(result["Attributes"]))
+        except ClientError as exc:
+            if not _is_conditional_failure(exc):
+                raise
+            current = self.get(user_id, session_id)
+            if current is None:
+                raise SessionNotFoundError(session_id) from None
+            return current
 
     def list_by_user(
         self,
@@ -370,3 +409,8 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
 
     def archive(self, user_id: str, session_id: str) -> None:
         self._update(user_id, session_id, {"status": ChatStatus.ARCHIVED.value})
+
+    def delete(self, user_id: str, session_id: str) -> None:
+        """Remove one session's metadata row (F19 account-delete cascade, B58/B104). Idempotent: deleting
+        an already-deleted or never-existing row is not an error, so a retried cascade is safe."""
+        self._table.delete_item(Key={"user_id": user_id, "session_id": session_id})

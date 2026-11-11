@@ -198,6 +198,18 @@ def check_resume(
     return None
 
 
+EXPIRED_MESSAGE = "This request has expired. Start again."
+
+
+def expired_envelope(action: ActionRequest) -> dict[str, Any]:
+    """B82: the paused run's checkpoint no longer exists, so it can never resume."""
+    return {
+        "action_response": action_response(action, "rejected", EXPIRED_MESSAGE),
+        "status": EnvelopeStatus.REJECTED.value,
+        "code": "expired",
+    }
+
+
 def awaiting_envelope(surface: Mapping[str, Any], text: str) -> dict[str, Any]:
     return {
         "result": text,

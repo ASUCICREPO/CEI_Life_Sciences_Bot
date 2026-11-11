@@ -3,6 +3,12 @@ from __future__ import annotations
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
+# D3: models that must never be invoked by the application, regardless of CEI_BLOCKED_MODELS. Matched against the
+# id with any cross-Region inference-profile prefix ("us.", "eu.", "apac.", "global.") removed
+# (shared/runtime/model_policy.is_blocked). A module-level constant (not a class attribute) so Lambdas that ship
+# only this file (the python-deps layer) can import it without constructing the pydantic-settings singleton.
+D3_BLOCKED_MODEL_PATTERNS: tuple[str, ...] = ("anthropic.claude-fable-5*", "anthropic.claude-mythos-*")
+
 
 class AgentConfig(BaseSettings):
     model_config = {"env_prefix": "CEI_"}
@@ -38,6 +44,13 @@ class AgentConfig(BaseSettings):
     # Chat-title model: small + cheap; must never match the D3 blocklist (enforced in shared/runtime/titles.py)
     title_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     title_timeout_seconds: float = 8.0
+    # B18: deploy.sh/CDK-supplied extra blocklist patterns (comma-separated fnmatch), merged with the fixed D3
+    # defaults by the model_blocklist property below. Empty is valid: the D3 defaults alone still apply.
+    blocked_models: str = ""
+    # B51/B51a: Bedrock Guardrail id/version applied to every shared/utils.get_model() call. Empty (local dev,
+    # no deploy config yet) => get_model() behaves exactly as before this phase, no Guardrail attached.
+    guardrail_id: str = ""
+    guardrail_version: str = ""
     history_rehydrate_turns: int = 20
     bedrock_read_timeout: int = 900  # ADR: 900s | long drafts exceed botocore 60s default; matches 15-min stream limit
     bedrock_max_attempts: int = 3
@@ -58,6 +71,12 @@ class AgentConfig(BaseSettings):
     @property
     def allowed_origins_list(self) -> list[str]:
         return parse_origins(self.allowed_origins)
+
+    @property
+    def model_blocklist(self) -> list[str]:
+        """The D3 defaults plus any deploy-configured CEI_BLOCKED_MODELS patterns (B18)."""
+        extra = [item.strip() for item in self.blocked_models.split(",") if item.strip()]
+        return [*D3_BLOCKED_MODEL_PATTERNS, *extra]
 
 
 def parse_origins(raw: str | None) -> list[str]:

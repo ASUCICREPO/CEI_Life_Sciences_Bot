@@ -20,11 +20,11 @@ from shared.runtime import (
     parse_op,
     resume_value,
 )
-from shared.tools.hitl.inline_functions import InlineFunctionRegistry, PlanStepInput
+from shared.tools.hitl.inline_functions import PlanStepInput, build_plan_approval_surface
 
 
 def _plan_surface() -> dict:
-    return InlineFunctionRegistry()._request_plan_approval(
+    return build_plan_approval_surface(
         plan_summary="Two steps",
         steps=[PlanStepInput(title="Research", description="Find sources")],
     )
@@ -156,3 +156,17 @@ def test_job_registry_snapshot_progress_and_revision() -> None:
 def test_job_registry_unknown_job_raises() -> None:
     with pytest.raises(KeyError):
         JobRegistry().snapshot("missing")
+
+
+def test_expired_envelope_echoes_correlation_fields() -> None:
+    from shared.runtime.ops import EXPIRED_MESSAGE, expired_envelope
+    from shared.schemas.cei_ui import ActionRequest
+
+    action = ActionRequest(request_id="r", session_id="s1", surface_id="x", revision=2,
+                           interaction_id="i-1", component_id="c-1", action_id="go", value=None)
+    envelope = expired_envelope(action)
+    assert envelope["status"] == "rejected" and envelope["code"] == "expired"
+    response = envelope["action_response"]
+    assert response["message"] == EXPIRED_MESSAGE and response["status"] == "rejected"
+    assert {k: response[k] for k in ("request_id", "session_id", "surface_id", "revision")} == \
+        {"request_id": "r", "session_id": "s1", "surface_id": "x", "revision": 2}

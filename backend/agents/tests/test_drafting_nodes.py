@@ -145,19 +145,6 @@ def test_plan_visuals_builds_specs_from_document_without_llm_call(monkeypatch) -
     assert result["trace"][0].stage == "PLAN_VISUALS"
 
 
-class _FakeChartTool:
-    def __init__(self, _ci) -> None:
-        pass
-
-    def render(self, _spec) -> bytes:
-        return b"fake-png-bytes"
-
-
-def _patch_chart_rendering(monkeypatch) -> None:
-    monkeypatch.setattr("drafting.nodes.ChartTool", _FakeChartTool)
-    monkeypatch.setattr("drafting.nodes.CodeInterpreterTool", lambda **_kw: object())
-
-
 def test_export_documents_text_has_no_base64_when_document_exists(monkeypatch) -> None:
     doc = _sample_document(title="Report")
     monkeypatch.setattr(
@@ -168,7 +155,9 @@ def test_export_documents_text_has_no_base64_when_document_exists(monkeypatch) -
         "drafting.nodes.render_document_markdown",
         lambda d, **kw: f"# {d.title}\n\nRevenue grew.\n\n| Year | USD |\n|---|---|\n| 2023 | 1 |\n",
     )
-    _patch_chart_rendering(monkeypatch)
+    def reject_generation(*args, **kwargs):
+        raise AssertionError("unreviewed drafts must not be rendered")
+    monkeypatch.setattr("shared.tools.export.ExportTool.generate", reject_generation)
 
     state = {
         "export_formats": ["md"],
@@ -183,19 +172,17 @@ def test_export_documents_text_has_no_base64_when_document_exists(monkeypatch) -
             "data": {"x": ["2023", "2024"], "USD": [1.0, 2.0]},
         }],
         "document_type": DocumentType.WHITEPAPER,
+        "reviewed": True,  # Untrusted graph state cannot grant review approval.
     }
 
     result = export_documents(state)
 
     text = result["messages"][-1].content
     assert "data:image/png;base64" not in text
-    assert result["exports"]
-    assert result["exports"][0]["format"] == "md"
+    assert result["exports"] == []
 
 
-def test_export_documents_legacy_path_has_no_base64_in_text(monkeypatch) -> None:
-    _patch_chart_rendering(monkeypatch)
-
+def test_export_documents_legacy_path_has_no_base64_in_text() -> None:
     draft_text = "# Report\n\n## Overview\n\nRevenue grew steadily.\n"
     state = {
         "export_formats": ["md"],

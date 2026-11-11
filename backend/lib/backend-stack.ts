@@ -18,11 +18,26 @@ import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import { DeployConfig, DEFAULT_LIMITS, DEFAULT_TOOL_POLICY_MODE } from './config/deploy-config';
 import { PythonDepsLayer } from './constructs/python-deps-layer';
 import { AgentRuntimes } from './constructs/agent-runtimes';
-import { ToolGateway, fullScope } from './constructs/tool-gateway';
+import { ModelGuardrail } from './constructs/model-guardrail';
+import { ModelSettings } from './constructs/model-settings';
+import { ToolGateway, fullScope, loadToolSchemas, RESERVED_SOURCE_IDS } from './constructs/tool-gateway';
 import { SessionRouter } from './constructs/session-router';
 import { suppressXrayWildcard } from './constructs/tracing';
 import { Observability } from './constructs/observability';
+import { BackgroundJobs } from './constructs/background-jobs';
+import { AccountDeletion } from './constructs/account-deletion';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
+
+// B109/F19: session-runner and ui-actions both require('../shared/account-gate') (backend/lambdas/shared/
+// account-gate.js). A plain `Code.fromAsset(lambdas/<dir>)` zips only that one directory, so `shared/` would
+// be missing at the Lambda's runtime filesystem; this stages the zip root at `lambdas/` instead, with every
+// sibling excluded except the one Lambda's own directory and this one shared file -- the exact same relative
+// layout (`<dir>/index.js` next to `shared/account-gate.js`) that already works for local `require` and tests.
+function nodeLambdaCode(dir: string): lambda.Code {
+  return lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas'), {
+    exclude: ['*', '!' + dir, '!' + dir + '/**', '!shared', '!shared/account-gate.js', dir + '/*.test.js'],
+  });
+}
 
 export interface BackendStackProps extends cdk.StackProps {
   /** Parsed deploy config (`deploy.sh`-generated). Undefined for environment-agnostic `cdk synth`. */
@@ -35,6 +50,8 @@ export interface BackendStackProps extends cdk.StackProps {
 
 export class BackendStack extends cdk.Stack {
   public readonly config?: DeployConfig;
+  /** The exact object shipped as the SPA's /config.json (set once, below, before RuntimeConfigDeployment). */
+  public readonly runtimeConfig!: Record<string, unknown>;
 
   constructor(scope: Construct, id: string, props: BackendStackProps) {
     super(scope, id, props);
@@ -171,6 +188,16 @@ export class BackendStack extends cdk.Stack {
       serverAccessLogsBucket: logsBucket,
       serverAccessLogsPrefix: 'attachments-access-logs/',
       // ADR: RETAIN | Rationale: attachments are user data — a stack teardown must not delete them
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
+    // Export objects are written directly with the Intelligent-Tiering storage class.
+    const exportsBucket = new s3.Bucket(this, 'ExportsBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      serverAccessLogsBucket: logsBucket,
+      serverAccessLogsPrefix: 'exports-access-logs/',
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
@@ -467,11 +494,22 @@ export class BackendStack extends cdk.Stack {
 
     const pythonDeps = new PythonDepsLayer(this, 'PythonDepsLayer');
 
+    const exportsTable = new dynamodb.Table(this, 'ExportMetadataStore', {
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'export_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
     const sessionLambdaEnv = {
       CEI_AWS_REGION: this.region,
       CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName,
       CEI_CHAT_HISTORY_TABLE: chatHistoryTable.tableName,
       ALLOWED_ORIGINS: allowedOrigins.join(','),
+      // F8/B18: session-metadata-handler's _validate_model_id (create/PATCH) needs the same blocklist as /models
+      CEI_BLOCKED_MODELS: (this.config?.blockedModelIds ?? []).join(','),
     };
 
     const createSessionFunction = (id: string, dir: string, handlerName: string,
@@ -511,6 +549,23 @@ export class BackendStack extends cdk.Stack {
       'session-history-handler',
       'history_handler.handler',
     );
+    const exportsHandler = createSessionFunction('ExportsHandler', 'exports-handler', 'handler.handler', {
+      ...sessionLambdaEnv,
+      CEI_EXPORT_METADATA_TABLE: exportsTable.tableName,
+      CEI_EXPORT_BUCKET: exportsBucket.bucketName,
+    });
+    exportsTable.grant(exportsHandler.role, 'dynamodb:GetItem', 'dynamodb:Query');
+    exportsHandler.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObject'], resources: [exportsBucket.arnForObjects('exports/*')],
+    }));
+    NagSuppressions.addResourceSuppressions(exportsHandler.role, [{
+      id: 'AwsSolutions-IAM5',
+      reason: 'ADR: Export object read scope | Rationale: report object keys are generated at runtime under one bucket prefix | Alternative: fixed object ARNs rejected because exports do not exist at deployment',
+    }], true);
+    exportsHandler.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn],
+    }));
+    chatHistoryTable.grant(exportsHandler.role, 'dynamodb:Query');
     const clientDiagnostics = createSessionFunction('ClientDiagnostics', 'client-diagnostics', 'handler.handler',
       { ALLOWED_ORIGINS: allowedOrigins.join(',') }, []);
 
@@ -528,6 +583,16 @@ export class BackendStack extends cdk.Stack {
     );
     // GET/PATCH /sessions/{id} prove ownership against the history partition's stamped owner (owner_of) first
     chatHistoryTable.grant(sessionMetadata.role, 'dynamodb:Query');
+    // F8/B18: POST /sessions validates model_id against server discovery before saving it (fail closed,
+    // MODEL_POLICY.md step 2) — same discovery actions as model-settings.ts, same "no resource ARN" rationale.
+    sessionMetadata.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['bedrock:ListFoundationModels', 'bedrock:ListInferenceProfiles', 'bedrock:GetInferenceProfile'],
+      resources: ['*'],
+    }));
+    NagSuppressions.addResourceSuppressions(sessionMetadata.role, [{
+      id: 'AwsSolutions-IAM5',
+      reason: 'ADR: Bedrock discovery actions have no resource-level ARN | Rationale: ListFoundationModels/ListInferenceProfiles/GetInferenceProfile are account+Region-wide read-only list/describe operations; AWS defines no resource type to scope them to | Alternative: per-model ARNs rejected — not applicable to list operations',
+    }], true);
     // B12: history is keyed by session_id only, so the history handler proves ownership with a metadata GetItem first
     sessionHistory.role.addToPrincipalPolicy(
       new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }),
@@ -658,7 +723,16 @@ export class BackendStack extends cdk.Stack {
     // agentcore.json stays local-development-only (docs/architectureDeepDive.md).
     // ---------------------------------------------------------------
 
+    // F8/B51: input-only PII Guardrail (B51a), applied via the native guardrailConfig on every get_model()
+    // call (shared/utils.py) — not added to BackendStack until now, per model-guardrail.ts's own note.
+    const modelGuardrail = new ModelGuardrail(this, 'ModelGuardrail');
+
     const agentRuntimes = new AgentRuntimes(this, 'AgentRuntimes', {
+      defaultModelId: this.config?.defaultModelId,
+      blockedModelIds: this.config?.blockedModelIds,
+      guardrailId: modelGuardrail.guardrailId,
+      guardrailVersion: modelGuardrail.guardrailVersion,
+      guardrailArn: modelGuardrail.guardrailArn,
       userPool,
       spaClient,
       chatMetadataTable,
@@ -669,6 +743,8 @@ export class BackendStack extends cdk.Stack {
       // Same origin set as the sessions API CORS; the containers answer CORS only if a browser ever reaches them
       // directly (the SPA goes through the agent proxy below)
       allowedOrigins,
+      // B44/B45: same value ToolGateway uses to decide whether to build the Web Search target (below)
+      webSearchEnabled: this.config?.webSearchEnabled,
     });
 
     // ---------------------------------------------------------------
@@ -746,7 +822,8 @@ export class BackendStack extends cdk.Stack {
     };
     const corsOptions: apigw.CorsOptions = {
       allowOrigins: allowedOrigins,
-      allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+      // PUT: F8's GET/PUT /settings (model-settings.ts)
+      allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'OPTIONS'],
       allowHeaders: ['Authorization', 'Content-Type', 'Accept', 'X-Amz-Date', 'X-Amz-Security-Token'],
       maxAge: Duration.hours(1),
     };
@@ -765,6 +842,12 @@ export class BackendStack extends cdk.Stack {
     sessionResource.addMethod('PATCH', metadataIntegration, methodOptions);
     const historyResource = sessionResource.addResource('history', { defaultCorsPreflightOptions: corsOptions });
     historyResource.addMethod('GET', historyIntegration, methodOptions);
+    const sessionExports = sessionResource.addResource('exports', { defaultCorsPreflightOptions: corsOptions });
+    sessionExports.addMethod('GET', new apigw.LambdaIntegration(exportsHandler.fn), methodOptions);
+    const exportsResource = api.root.addResource('exports', { defaultCorsPreflightOptions: corsOptions });
+    const exportResource = exportsResource.addResource('{exportId}', { defaultCorsPreflightOptions: corsOptions });
+    exportResource.addResource('download', { defaultCorsPreflightOptions: corsOptions })
+      .addMethod('GET', new apigw.LambdaIntegration(exportsHandler.fn), methodOptions);
     // F6 B59: lazy per-turn trace, fetched only when the user opens the thinking block
     const turnsResource = sessionResource.addResource('turns', { defaultCorsPreflightOptions: corsOptions });
     const turnResource = turnsResource.addResource('{messageId}', { defaultCorsPreflightOptions: corsOptions });
@@ -794,7 +877,7 @@ export class BackendStack extends cdk.Stack {
         responseHeaders: {
           'Access-Control-Allow-Origin': `'${siteUrl}'`,
           'Access-Control-Allow-Headers': "'Authorization,Content-Type,Accept'",
-          'Access-Control-Allow-Methods': "'GET,POST,PATCH,OPTIONS'",
+          'Access-Control-Allow-Methods': "'GET,POST,PATCH,PUT,OPTIONS'",
           Vary: "'Origin'",
         },
         templates: { 'application/json': envelope(code, message, retriable) },
@@ -842,6 +925,33 @@ export class BackendStack extends cdk.Stack {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: RemovalPolicy.RETAIN,
     });
+    // F16: Job ID Store, /jobs routes and the watchdog
+    const backgroundJobs = new BackgroundJobs(this, 'BackgroundJobs', {
+      api,
+      methodOptions,
+      corsOptions,
+      requestValidator,
+      pythonDepsLayer: pythonDeps.layer,
+      activeRunsTable,
+      allowedOrigins,
+      runtimeStopUrls: agentRuntimes.stopUrls,
+    });
+    agentRuntimes.configureJobStore(backgroundJobs.table, activeRunsTable);
+    // F8: GET /models, GET/PUT /settings — UserMetadataTable's first real use (data-model.md Section 4)
+    const modelSettings = new ModelSettings(this, 'ModelSettings', {
+      api,
+      methodOptions,
+      corsOptions,
+      requestValidator,
+      pythonDepsLayer: pythonDeps.layer,
+      allowedOrigins,
+      blockedModelIds: this.config?.blockedModelIds ?? [],
+    });
+    // F08: POST /sessions reads the caller's saved default_model_id when none is given (read-only, no PutItem)
+    sessionMetadata.fn.addEnvironment('CEI_USER_METADATA_TABLE', modelSettings.table.tableName);
+    modelSettings.table.grant(sessionMetadata.role, 'dynamodb:GetItem');
+    // F8 follow-up: resolve_turn_config's saved-default lookup for a chat with no stored model_id (read-only)
+    agentRuntimes.configureUserMetadataTable(modelSettings.table);
     const gateway = new ToolGateway(this, 'ToolGateway', {
       userPool,
       cognitoDomainUrl,
@@ -852,8 +962,11 @@ export class BackendStack extends cdk.Stack {
       policyMode: this.config?.toolPolicyMode ?? DEFAULT_TOOL_POLICY_MODE,
       activeRunsTable,
       metadataTable: chatMetadataTable,
+      jobTable: backgroundJobs.table,
       spaClientId: spaClient.userPoolClientId,
       refreshCallerRoleArns: [agentRuntimes.runtimes.Research.role.roleArn],
+      // B44/B45: preflight.ts already folds the Region gate into this value (see config.webSearchEnabled doc)
+      webSearchEnabled: this.config?.webSearchEnabled,
     });
     agentRuntimes.configureResearchGateway(gateway.routerClient.userPoolClientId, gateway.gateway.attrGatewayUrl);
     // B67: only the Research runtime may invoke the internal IAM-authenticated
@@ -864,6 +977,13 @@ export class BackendStack extends cdk.Stack {
     }));
 
     const router = new SessionRouter(this, 'SessionRouter', {
+      defaultModelId: this.config?.defaultModelId,
+      blockedModelIds: this.config?.blockedModelIds,
+      // F9/B17: fixed classifier model, independent of the user's own chat model selection.
+      routerModelId: this.config?.routerModelId,
+      guardrailId: modelGuardrail.guardrailId,
+      guardrailVersion: modelGuardrail.guardrailVersion,
+      guardrailArn: modelGuardrail.guardrailArn,
       role: gateway.routerRole,
       pythonDepsLayer: pythonDeps.layer,
       metadataTable: chatMetadataTable,
@@ -873,8 +993,13 @@ export class BackendStack extends cdk.Stack {
       tokenEndpoint: `${cognitoDomainUrl}/oauth2/token`,
       clientId: gateway.routerClient.userPoolClientId,
       secretArn: gateway.routerSecret.secretArn,
-      scopes: gateway.scopeNames.filter((name) => name !== 'src.ncbi').map(fullScope),
-      runtimeUrl: agentRuntimes.invocationUrls.research,
+      scopes: gateway.scopeNames.map(fullScope),
+      runtimeUrls: {
+        research: agentRuntimes.invocationUrls.research,
+        drafting: agentRuntimes.invocationUrls.drafting,
+        analysis: agentRuntimes.invocationUrls.analysis,
+        pipeline_manager: agentRuntimes.invocationUrls.pipeline,
+      },
     });
     const runnerLogs = new logs.LogGroup(this, 'SessionRunnerLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY });
     const runnerRole = new iam.Role(this, 'SessionRunnerRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
@@ -883,30 +1008,113 @@ export class BackendStack extends cdk.Stack {
     runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:TransactWriteItems'], resources: [chatHistoryTable.tableArn] }));
     runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:PutItem', 'dynamodb:TransactWriteItems'], resources: [activeRunsTable.tableArn] }));
     runnerRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [router.function.functionArn] }));
+    // B109/F19: the run-start gate check (GetItem only) stays wired even when accountDeletionEnabled is
+    // false -- it is a read with no effect until a gate row can ever exist, so it is always safe to leave live.
+    modelSettings.table.grant(runnerRole, 'dynamodb:GetItem');
     const runner = new lambda.Function(this, 'SessionRunner', {
       tracing: lambda.Tracing.ACTIVE,
       runtime: lambda.Runtime.NODEJS_24_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas', 'session-runner'), { exclude: ['*.test.js'] }),
+      handler: 'session-runner/index.handler',
+      code: nodeLambdaCode('session-runner'),
       role: runnerRole,
       logGroup: runnerLogs,
       timeout: Duration.minutes(14),
       memorySize: 512,
-      environment: { CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName, CEI_CHAT_HISTORY_TABLE: chatHistoryTable.tableName, CEI_ACTIVE_RUNS_TABLE: activeRunsTable.tableName, CEI_ROUTER_FUNCTION: router.function.functionName, ALLOWED_ORIGINS: allowedOrigins.join(',') },
+      environment: { CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName, CEI_CHAT_HISTORY_TABLE: chatHistoryTable.tableName, CEI_ACTIVE_RUNS_TABLE: activeRunsTable.tableName, CEI_USER_METADATA_TABLE: modelSettings.table.tableName, CEI_ROUTER_FUNCTION: router.function.functionName, ALLOWED_ORIGINS: allowedOrigins.join(',') },
     });
     suppressXrayWildcard(runnerRole);
+
+    // F13: POST /ui-actions — a typed HITL action resumes the session's own runtime with the caller's token (B102).
+    // ADR: STREAM mode | Rationale: a resumed analysis runs for minutes, beyond a buffered integration's 29 s
+    // limit; the Node Lambda writes one JSON body | Alternative: buffered + async self-invoke rejected (the user
+    // token would sit in the async event queue)
+    const uiActionsLogs = new logs.LogGroup(this, 'UiActionsLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY });
+    const uiActionsRole = new iam.Role(this, 'UiActionsRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
+    uiActionsLogs.grantWrite(uiActionsRole);
+    uiActionsRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }));
+    // F9: the route-choice action reads then clears its own pending-choice record (handler.py writes it)
+    // and starts the chosen agent through the Router, same lease/token broker the Runner uses.
+    uiActionsRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem', 'dynamodb:DeleteItem'], resources: [activeRunsTable.tableArn] }));
+    uiActionsRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [router.function.functionArn] }));
+    // B109/F19: same always-live, read-only run-start gate check as the Session Runner above.
+    modelSettings.table.grant(uiActionsRole, 'dynamodb:GetItem');
+    const uiActions = new lambda.Function(this, 'UiActions', {
+      tracing: lambda.Tracing.ACTIVE,
+      runtime: lambda.Runtime.NODEJS_24_X,
+      handler: 'ui-actions/index.handler',
+      code: nodeLambdaCode('ui-actions'),
+      role: uiActionsRole,
+      logGroup: uiActionsLogs,
+      timeout: Duration.minutes(14),
+      memorySize: 256,
+      environment: {
+        CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName,
+        CEI_ACTIVE_RUNS_TABLE: activeRunsTable.tableName,
+        CEI_USER_METADATA_TABLE: modelSettings.table.tableName,
+        CEI_ROUTER_FUNCTION: router.function.functionName,
+        AGENT_URLS: this.toJsonString(agentRuntimes.invocationUrls),
+        ALLOWED_ORIGINS: allowedOrigins.join(','),
+      },
+    });
+    suppressXrayWildcard(uiActionsRole);
+    const uiActionsResource = api.root.addResource('ui-actions', { defaultCorsPreflightOptions: corsOptions });
+    uiActionsResource.addMethod('POST', new apigw.LambdaIntegration(uiActions, { responseTransferMode: apigw.ResponseTransferMode.STREAM, timeout: Duration.minutes(14) }), methodOptions);
+    for (const child of uiActionsResource.node.findAll()) {
+      if (child instanceof apigw.CfnMethod && child.httpMethod === 'OPTIONS') {
+        child.requestValidatorId = requestValidator.requestValidatorId;
+        NagSuppressions.addResourceSuppressions(child, [
+          { id: 'AwsSolutions-APIG4', reason: 'ADR: CORS preflight without authorizer | Rationale: browsers do not send credentials on preflight | Alternative: authenticated preflight rejected because browsers cannot satisfy it' },
+          { id: 'AwsSolutions-COG4', reason: 'ADR: CORS preflight without Cognito | Rationale: browsers do not send credentials on preflight | Alternative: authenticated preflight rejected because browsers cannot satisfy it' },
+        ]);
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // F19/B109: POST /account/delete + the scheduled delete-worker. Off by default; no route, no
+    // Lambdas, no Scheduler resources, and no Cognito/DynamoDB/S3/Secrets/Memory delete grants exist
+    // unless accountDeletionEnabled is true. The gate *check* in every other Lambda above stays live
+    // either way (a harmless read).
+    // ---------------------------------------------------------------
+    let accountDeletion: AccountDeletion | undefined;
+    if (this.config?.accountDeletionEnabled) {
+      const apiKeySourceIds = [...loadToolSchemas().map((s) => s.sourceId), ...RESERVED_SOURCE_IDS];
+      accountDeletion = new AccountDeletion(this, 'AccountDeletion', {
+        api,
+        methodOptions,
+        corsOptions,
+        requestValidator,
+        pythonDepsLayer: pythonDeps.layer,
+        allowedOrigins,
+        userPool,
+        userMetadataTable: modelSettings.table,
+        chatMetadataTable,
+        chatHistoryTable,
+        activeRunsTable,
+        exportsTable,
+        exportsBucket,
+        jobTable: backgroundJobs.table,
+        apiKeySecretPrefix: 'cei/user-keys',
+        apiKeySourceIds,
+        memoryId: agentRuntimes.memoryId,
+        memoryArn: agentRuntimes.memoryArn,
+      });
+    }
+
     new Observability(this, 'Observability', {
       api,
       adminEmail: this.config?.adminEmail,
       functions: {
         PreSignUp: preSignUpFn, SessionMetadata: sessionMetadata.fn, SessionHistory: sessionHistory.fn,
-        AgentProxy: agentProxyFn, SessionRouter: router.function, SessionRunner: runner,
-        ClientDiagnostics: clientDiagnostics.fn,
-        PreToken: gateway.preTokenFunction, TokenRefresh: gateway.tokenRefreshFunction,
+        AgentProxy: agentProxyFn, SessionRouter: router.function, SessionRunner: runner, UiActions: uiActions,
+        ClientDiagnostics: clientDiagnostics.fn, Exports: exportsHandler.fn, LifeSciencesOperations: gateway.operationsFunction,
+        NcbiReadOnly: gateway.ncbiFunction, Jobs: backgroundJobs.jobsFunction, JobWatchdog: backgroundJobs.watchdogFunction,
+        PreToken: gateway.preTokenFunction, TokenRefresh: gateway.tokenRefreshFunction, ModelSettings: modelSettings.function,
         AttachmentPresign: attachmentPresign.fn, AttachmentProcessor: attachmentProcessor,
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) => [`Source${name}`, fn])),
       },
-      tables: { ChatMetadata: chatMetadataTable, ChatHistory: chatHistoryTable, ActiveRuns: activeRunsTable, Attachments: attachmentsTable },
+      tables: { ChatMetadata: chatMetadataTable, ChatHistory: chatHistoryTable, ActiveRuns: activeRunsTable,
+        Exports: exportsTable, NcbiRateLimiter: gateway.ncbiRateTable, JobIdStore: backgroundJobs.table,
+        UserMetadata: modelSettings.table, Attachments: attachmentsTable },
       signupLogs: preSignUpLogGroup,
       gatewayLogs: gateway.gatewayLogGroup,
       clientLogs: clientDiagnostics.fn.logGroup,
@@ -917,6 +1125,11 @@ export class BackendStack extends cdk.Stack {
         AgentProxy: { logGroup: agentProxyLogGroup, terms: ['agent_proxy_failure', 'agent_proxy_invalid_json'] },
         SessionMetadata: { logGroup: sessionMetadata.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         SessionHistory: { logGroup: sessionHistory.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
+        Exports: { logGroup: exportsHandler.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
+        ModelSettings: { logGroup: modelSettings.function.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
+        NcbiReadOnly: { logGroup: gateway.ncbiFunction.logGroup, terms: ['ncbi_request_failed'] },
+        UiActions: { logGroup: uiActionsLogs, terms: ['resume_failed'] },
+        Jobs: { logGroup: backgroundJobs.jobsFunction.logGroup, terms: ['handled_api_failure', 'unhandled error', 'runtime_stop_failed'] },
         TokenRefresh: { logGroup: gateway.tokenRefreshFunction.logGroup, terms: ['token_endpoint_error', 'token_refresh_scope_mismatch', 'run_scopes_not_allowed', 'unhandled error'] },
         AttachmentPresign: { logGroup: attachmentPresign.fn.logGroup, terms: ['presign failed', 'metadata write failed'] },
         AttachmentProcessor: { logGroup: processorLogGroup, terms: ['Failed', 'extraction failed'] },
@@ -953,20 +1166,26 @@ export class BackendStack extends cdk.Stack {
 
     const apiBaseUrl = `${apiOrigin}/${api.deploymentStage.stageName}`;
 
+    // ADR: kept as a named, readable-after-construction object (not inlined into Source.jsonData) |
+    // Rationale: Source.jsonData stages this into a zipped S3 asset that Jest cannot inspect without
+    // unzipping synthesized output; exposing it as `this.runtimeConfig` lets tests assert on the exact
+    // value shipped to the SPA's /config.json (for example accountDeletionEnabled, F19/B109) directly
+    this.runtimeConfig = {
+      region: this.region,
+      userPoolId: userPool.userPoolId,
+      userPoolClientId: spaClient.userPoolClientId,
+      cognitoDomain: cognitoDomainUrl,
+      apiBaseUrl,
+      // The streaming Research path relies on Cedar to enforce source scopes.
+      researchStreamingEnabled: (this.config?.toolPolicyMode ?? DEFAULT_TOOL_POLICY_MODE) === 'ENFORCE',
+      // F19/B109: whether the SPA may call POST /account/delete at all; false when the route does not exist.
+      accountDeletionEnabled: Boolean(this.config?.accountDeletionEnabled),
+      // Agent proxy function URL per agent (the proxy forwards to the AgentCore invocation URL)
+      agentUrls: agentProxyUrls,
+    };
+
     const configDeployment = new s3deploy.BucketDeployment(this, 'RuntimeConfigDeployment', {
-      sources: [
-        s3deploy.Source.jsonData('config.json', {
-          region: this.region,
-          userPoolId: userPool.userPoolId,
-          userPoolClientId: spaClient.userPoolClientId,
-          cognitoDomain: cognitoDomainUrl,
-          apiBaseUrl,
-          // The streaming Research path relies on Cedar to enforce source scopes.
-          researchStreamingEnabled: (this.config?.toolPolicyMode ?? DEFAULT_TOOL_POLICY_MODE) === 'ENFORCE',
-          // Agent proxy function URL per agent (the proxy forwards to the AgentCore invocation URL)
-          agentUrls: agentProxyUrls,
-        }),
-      ],
+      sources: [s3deploy.Source.jsonData('config.json', this.runtimeConfig)],
       destinationBucket: siteBucket,
       // ADR: prune: false | Rationale: this deployment only ships config.json — pruning would delete every SPA asset the previous BucketDeployment just wrote
       prune: false,

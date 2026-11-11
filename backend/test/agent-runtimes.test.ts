@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { BackendStack } from '../lib/backend-stack';
 import { AGENT_RUNTIMES } from '../lib/constructs/agent-runtimes';
+import { DEFAULT_LIMITS } from '../lib/config/deploy-config';
 
 const FIXTURE_ASSET_PATH = path.join(__dirname, 'fixtures', 'spa');
 
@@ -22,6 +23,26 @@ const spaClientId = Object.keys(template.findResources('AWS::Cognito::UserPoolCl
 const tableIds = Object.keys(template.findResources('AWS::DynamoDB::Table'));
 
 describe('AgentCore runtimes: deploy-time Cognito settings', () => {
+  test('passes the configured default model to every runtime', () => {
+    const app = new cdk.App();
+    const configured = new BackendStack(app, 'ConfiguredModelStack', {
+      env: { region: 'us-east-1', account: '123456789012' },
+      frontendAssetPath: FIXTURE_ASSET_PATH,
+      config: { region: 'us-east-1', defaultModelId: 'example.model-v2', routerModelId: 'router',
+        blockedModelIds: [], allowedEmailDomains: ['example.com'], adminEmail: 'admin@example.com',
+        limits: DEFAULT_LIMITS, webSearchEnabled: false, accountDeletionEnabled: false, allowLocalhostCallback: false },
+    });
+    const configuredRuntimes = Object.values(Template.fromStack(configured).findResources('AWS::BedrockAgentCore::Runtime')) as any[];
+    expect(configuredRuntimes).toHaveLength(4);
+    for (const runtime of configuredRuntimes) {
+      expect(runtime.Properties.EnvironmentVariables.CEI_DEFAULT_MODEL_ID).toBe('example.model-v2');
+    }
+    const functions = Object.values(Template.fromStack(configured).findResources('AWS::Lambda::Function')) as any[];
+    const routers = functions.filter((fn) => fn.Properties.Environment?.Variables?.TOOL_SCOPES);
+    expect(routers).toHaveLength(1);
+    expect(routers[0].Properties.Environment.Variables.CEI_DEFAULT_MODEL_ID).toBe('example.model-v2');
+  });
+
   test('all four runtimes exist with the agentcore.json names', () => {
     const names = runtimes.map(([, r]) => (r as any).Properties.AgentRuntimeName).sort();
     expect(names).toEqual(AGENT_RUNTIMES.map((r) => r.runtimeName).sort());
@@ -98,12 +119,97 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
 
   test('Research uses retained AgentCore Memory with the maximum event retention', () => {
     template.hasResource('AWS::BedrockAgentCore::Memory', {
-      Properties: Match.objectLike({ EventExpiryDuration: 365 }), DeletionPolicy: 'Retain',
+      Properties: Match.objectLike({
+        EventExpiryDuration: 365,
+        MemoryStrategies: [
+          { UserPreferenceMemoryStrategy: { Name: 'user_preferences', NamespaceTemplates: ['/users/{actorId}/'] } },
+          { SemanticMemoryStrategy: { Name: 'semantic_facts', NamespaceTemplates: ['/users/{actorId}/'] } },
+        ],
+      }), DeletionPolicy: 'Retain',
     });
     const research = runtimes.find(([, r]) => (r as any).Properties.AgentRuntimeName === 'CEIResearchAgent')![1] as any;
     const memoryId = Object.keys(template.findResources('AWS::BedrockAgentCore::Memory'))[0];
     expect(research.Properties.EnvironmentVariables.CEI_RESEARCH_MEMORY_ID).toEqual({ 'Fn::GetAtt': [memoryId, 'MemoryId'] });
     expect(research.Properties.EnvironmentVariables.CEI_REQUIRE_TOOL_GATEWAY).toBe('true');
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    expect(policies.some((p) => JSON.stringify(p.Properties.Roles).includes('AgentRuntimesResearchRuntime') &&
+      p.Properties.PolicyDocument.Statement.some((s: any) => [s.Action].flat().includes('bedrock-agentcore:RetrieveMemoryRecords') &&
+        JSON.stringify(s.Resource).includes(memoryId)))).toBe(true);
+  });
+
+  test('Drafting, Analysis and Pipeline get a memory id and retrieve-only access (F11)', () => {
+    const memoryId = Object.keys(template.findResources('AWS::BedrockAgentCore::Memory'))[0];
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    const cases: Array<[string, string, string]> = [
+      ['CEIDraftingAgent', 'CEI_DRAFTING_MEMORY_ID', 'AgentRuntimesDraftingRuntime'],
+      ['CEIAnalysisAgent', 'CEI_ANALYSIS_MEMORY_ID', 'AgentRuntimesAnalysisRuntime'],
+      ['CEIPipelineManager', 'CEI_PIPELINE_MEMORY_ID', 'AgentRuntimesPipelineRuntime'],
+    ];
+    for (const [runtimeName, envVar, roleFragment] of cases) {
+      const runtime = runtimes.find(([, r]) => (r as any).Properties.AgentRuntimeName === runtimeName)![1] as any;
+      expect(runtime.Properties.EnvironmentVariables[envVar]).toEqual({ 'Fn::GetAtt': [memoryId, 'MemoryId'] });
+      expect(runtime.Properties.EnvironmentVariables.CEI_REQUIRE_TOOL_GATEWAY).toBeUndefined();
+      expect(policies.some((p) => JSON.stringify(p.Properties.Roles).includes(roleFragment) &&
+        p.Properties.PolicyDocument.Statement.some((s: any) =>
+          [s.Action].flat().includes('bedrock-agentcore:RetrieveMemoryRecords') &&
+          !['bedrock-agentcore:CreateEvent'].some((a) => [s.Action].flat().includes(a)) &&
+          JSON.stringify(s.Resource).includes(memoryId)))).toBe(true);
+    }
+  });
+
+  test('every runtime gets the Guardrail id/version and the blocklist env var (F8)', () => {
+    const guardrailId = Object.keys(template.findResources('AWS::Bedrock::Guardrail'))[0];
+    for (const [, runtime] of runtimes) {
+      const env = (runtime as any).Properties.EnvironmentVariables;
+      expect(env.CEI_GUARDRAIL_ID).toEqual({ 'Fn::GetAtt': [guardrailId, 'GuardrailId'] });
+      expect(env.CEI_GUARDRAIL_VERSION).toBeDefined();
+      expect(env.CEI_BLOCKED_MODELS).toBeDefined();
+    }
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    expect(policies.some((p) => JSON.stringify(p.Properties.Roles).includes('AgentRuntimesResearchRuntime') &&
+      p.Properties.PolicyDocument.Statement.some((s: any) =>
+        [s.Action].flat().includes('bedrock:ApplyGuardrail') && !JSON.stringify(s.Resource).includes('"*"')))).toBe(true);
+  });
+
+  test('every runtime gets the UserMetadataTable name and a GetItem-only grant (F8 saved default)', () => {
+    const userMetadataTableId = tableIds.find((id) => id.includes('UserMetadataTable'));
+    expect(userMetadataTableId).toBeDefined();
+    for (const [, runtime] of runtimes) {
+      expect((runtime as any).Properties.EnvironmentVariables.CEI_USER_METADATA_TABLE).toEqual({ Ref: userMetadataTableId });
+    }
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    const roleFragments = [
+      'AgentRuntimesResearchRuntime', 'AgentRuntimesDraftingRuntime',
+      'AgentRuntimesAnalysisRuntime', 'AgentRuntimesPipelineRuntime',
+    ];
+    for (const roleFragment of roleFragments) {
+      const onUserMetadata = policies
+        .filter((p) => JSON.stringify(p.Properties.Roles).includes(roleFragment))
+        .flatMap((p) => p.Properties.PolicyDocument.Statement)
+        .filter((s: any) => JSON.stringify(s.Resource).includes('UserMetadataTable'));
+      expect(onUserMetadata).toHaveLength(1);
+      expect([onUserMetadata[0].Action].flat()).toEqual(['dynamodb:GetItem']);
+    }
+  });
+
+  test('model-invocation policy allows any foundation model and inference profile, not Anthropic-only (user decision 2026-11-10)', () => {
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    const roleFragments = [
+      'AgentRuntimesResearchRuntime', 'AgentRuntimesDraftingRuntime',
+      'AgentRuntimesAnalysisRuntime', 'AgentRuntimesPipelineRuntime',
+    ];
+    for (const roleFragment of roleFragments) {
+      const invokeStatements = policies
+        .filter((p) => JSON.stringify(p.Properties.Roles).includes(roleFragment))
+        .flatMap((p) => p.Properties.PolicyDocument.Statement)
+        .filter((s: any) => [s.Action].flat().includes('bedrock:InvokeModel'));
+      expect(invokeStatements).toHaveLength(1);
+      const resources = [invokeStatements[0].Resource].flat().map((r: unknown) => JSON.stringify(r));
+      expect(resources.some((r) => r.includes('foundation-model/*'))).toBe(true);
+      expect(resources.some((r) => r.includes(':inference-profile/*'))).toBe(true);
+      expect(resources.some((r) => r.includes('application-inference-profile/*'))).toBe(true);
+      expect(resources.join(' ')).not.toContain('anthropic');
+    }
   });
 
   test('zero unsuppressed cdk-nag errors after adding the runtimes', () => {

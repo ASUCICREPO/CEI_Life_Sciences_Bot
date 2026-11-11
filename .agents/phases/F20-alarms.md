@@ -1,5 +1,5 @@
 # F20 — Alarms
-Status: not started | Depends on: F5 | Decisions: B47, B49, B50, B75 | Specs: ../specs/architecture.md, ../specs/security.md
+Status: partial (SNS topic, alarms and dashboard in CDK `constructs/observability.ts`; Guardrail alarm waits for Guardrails; live delivery check pending) | Depends on: F5 | Decisions: B47, B49, B50, B75 | Specs: ../specs/architecture.md, ../specs/security.md
 
 ## Goal
 Add CloudWatch alarms and one SNS email topic so an operator is notified of API/Lambda errors, security-relevant events, and guardrail intervention spikes — with no agent-health alarm, since F16's watchdog and the dashboard already cover that.

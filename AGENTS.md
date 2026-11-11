@@ -75,7 +75,7 @@ Current helper tools define `ask_user_question`, `present_alternatives`, `reques
 
 ### Planned Data Stores
 
-- **Chat History Store** — indefinite retention (until the user deletes it), lazy cursor-paginated loading for large histories.
+- **Chat History Store** — indefinite retention (until the user deletes the account; there is no per-chat delete, B104), lazy cursor-paginated loading for large histories.
 - **User Metadata Table** — user settings, configured sources, AI provider preferences.
 - **API Key Store** — user-owned API keys stored in Secrets Manager per user.
 - **Knowledge Base (Bedrock KB + S3 Vectors)** — RAG over chat attachments, filtered by `user_id`/`session_id`/`file_id`.

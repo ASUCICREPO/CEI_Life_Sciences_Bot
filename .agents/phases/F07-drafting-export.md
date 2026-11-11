@@ -1,6 +1,6 @@
 # F07 — Drafting + export
 
-Status: not started | Depends on: F6 | Decisions: B41, B61, B71, B74, B78, B81 | Specs: [`../specs/agents.md`](../specs/agents.md) §2 (Drafting Agent), [`../specs/tools.md`](../specs/tools.md) §8 (Export Tools), [`../specs/api.md`](../specs/api.md) (`/exports`), [`../specs/data-model.md`](../specs/data-model.md) §7 (Export outputs bucket)
+Status: partial (Drafting runtime in CDK; export service with review-acknowledgment check; Exports bucket, ExportMetadataStore, list and download routes; outline approval, ad hoc export route and deployed checks pending) | Depends on: F6 | Decisions: B41, B61, B71, B74, B78, B81 | Specs: [`../specs/agents.md`](../specs/agents.md) §2 (Drafting Agent), [`../specs/tools.md`](../specs/tools.md) §8 (Export Tools), [`../specs/api.md`](../specs/api.md) (`/exports`), [`../specs/data-model.md`](../specs/data-model.md) §7 (Export outputs bucket)
 
 ## Goal
 

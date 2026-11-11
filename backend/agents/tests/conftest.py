@@ -3,6 +3,17 @@ from __future__ import annotations
 import pytest
 
 
+def flatten_content(content) -> str:
+    """Join a Converse content-block list (text + guard_content blocks) back into one string.
+
+    Lets existing substring assertions on a model-call's user message keep working
+    after shared.runtime.guarded_input.user_turn()/content_blocks() split it into blocks.
+    """
+    if isinstance(content, str):
+        return content
+    return "".join(block.get("text", "") for block in content if isinstance(block, dict))
+
+
 class _NullRecorder:
     """Stands in for the DynamoDB-backed ConversationRecorder so entrypoint tests never reach AWS."""
 
@@ -10,6 +21,9 @@ class _NullRecorder:
         return None
 
     async def assert_owner(self, **_: object) -> None:
+        return None
+
+    async def session_metadata(self, **_: object) -> None:
         return None
 
     async def finish_turn(self, **_: object) -> None:

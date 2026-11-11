@@ -59,6 +59,9 @@ class ChatHistoryRecord(BaseModel):
     citations: list[dict[str, Any]] = Field(default_factory=list)
     timestamp: datetime
     sequence_number: int
+    # Only explicitly completed agent answers may be exported. Legacy records
+    # without this marker remain readable but are not implicitly exportable.
+    completion_status: Literal["completed", "awaiting_input", "error"] | None = None
     truncated: bool = False  # set when the size guard trimmed this item
 
 
@@ -249,5 +252,27 @@ class ChatHistoryRepository(BaseChatHistoryRepository):
         return items[0].get("user_id") if items else None
 
     def delete_session(self, session_id: str) -> None:
-        # Conversations are kept forever (no TTL); user-initiated deletion is a separate, not-yet-approved feature.
-        raise NotImplementedError
+        """Delete all items in a session partition after the caller verifies ownership.
+
+        Includes negative sequence numbers used by checkpoints and trace chunks.
+        Replay partitions have separate keys and must be removed by the deletion worker.
+        """
+        if not session_id:
+            raise ValueError("session_id is required")
+        start_key = None
+        while True:
+            args: dict[str, Any] = {
+                "KeyConditionExpression": "session_id = :sid",
+                "ExpressionAttributeValues": {":sid": session_id},
+                "ProjectionExpression": "session_id, sequence_number",
+                "ConsistentRead": True,
+            }
+            if start_key is not None:
+                args["ExclusiveStartKey"] = start_key
+            page = self._table.query(**args)
+            with self._table.batch_writer() as batch:
+                for item in page.get("Items", []):
+                    batch.delete_item(Key={"session_id": item["session_id"], "sequence_number": item["sequence_number"]})
+            start_key = page.get("LastEvaluatedKey")
+            if not start_key:
+                return

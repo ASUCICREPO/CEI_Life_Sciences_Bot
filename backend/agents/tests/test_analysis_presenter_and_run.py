@@ -168,7 +168,7 @@ def test_parse_analysis_type_matches_initial_state(raw) -> None:
     assert analysis_main._parse_analysis_type(raw) == state["analysis_type"]
 
 
-def test_analysis_main_resume_stale_without_pending(monkeypatch) -> None:
+def test_analysis_main_resume_without_checkpoint_is_expired(monkeypatch) -> None:
     payload = {
         "op": "resume",
         "action": {
@@ -188,7 +188,9 @@ def test_analysis_main_resume_stale_without_pending(monkeypatch) -> None:
         request_headers = {"Authorization": "Bearer test-token:test-user"}
 
     response = asyncio.run(analysis_main.invoke(payload, _Context2()))
-    assert response["status"] == "stale"
+    # B82: a cold resume with no checkpoint can never continue, so it says so instead of "stale"
+    assert response["status"] == "rejected" and response["code"] == "expired"
+    assert response["action_response"]["message"] == "This request has expired. Start again."
 
 
 def test_analysis_main_resume_completes_run(monkeypatch) -> None:

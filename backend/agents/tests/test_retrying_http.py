@@ -40,6 +40,22 @@ def test_returns_first_success_without_sleeping(calls):
     assert seen == [("GET", "https://api.example.org/x", {"params": {"q": "a"}, "timeout": 5})]
 
 
+def test_reserves_each_retry_and_stops_when_reservation_fails(calls):
+    queue, seen = calls
+    queue.extend([FakeResponse(503), FakeResponse(200)])
+    reservations = []
+
+    def reserve():
+        reservations.append(True)
+        if len(reservations) == 2:
+            raise RuntimeError("reservation unavailable")
+
+    with pytest.raises(RuntimeError, match="reservation unavailable"):
+        retrying_http.get("https://api.example.org/x", before_request=reserve, sleep=lambda _: None)
+    assert len(reservations) == 2
+    assert len(seen) == 1
+
+
 def test_retries_5xx_then_succeeds_with_exponential_backoff(calls):
     queue, seen = calls
     queue.extend([FakeResponse(503), FakeResponse(502), FakeResponse(200)])

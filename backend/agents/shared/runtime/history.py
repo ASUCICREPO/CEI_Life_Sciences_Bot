@@ -139,6 +139,7 @@ async def end_turn(
             citations=citations_from(retrieved_results),
             first_prompt=prompt,
             message_id=message_id,
+            completion_status=envelope.get("status") if envelope.get("status") in ("completed", "awaiting_input", "error") else None,
         )
     except Exception as exc:  # noqa: BLE001
         log.error("chat history: could not record answer session=%s error_type=%s", session_id, type(exc).__name__)

@@ -14,7 +14,7 @@ import { Construct } from 'constructs';
 const AGENTS_DIR = path.join(__dirname, '..', '..', 'agents');
 
 /** Source trees and entrypoints shipped in the CodeZip (everything else under backend/agents stays local). */
-const SOURCE_DIRS = ['research', 'drafting', 'analysis', 'pipeline_manager', 'shared'];
+const SOURCE_DIRS = ['research', 'drafting', 'analysis', 'pipeline_manager', 'tool_agent', 'shared'];
 const ENTRYPOINT_FILES = ['main.py', 'drafting_main.py', 'analysis_main.py', 'pipeline_main.py'];
 
 // ADR: never ship local-only files | Rationale: .env holds developer credentials/settings; .venv is a Windows/host
@@ -32,6 +32,15 @@ export const AGENT_RUNTIMES = [
   { id: 'Pipeline', runtimeName: 'CEIPipelineManager', entrypoint: 'pipeline_main.py' },
 ] as const;
 
+// F11: each runtime reads its own memory id env var; opt-in recall flags (CEI_<AGENT>_LONG_TERM_ENABLED)
+// default off and are not set here, matching Research's existing off-by-default convention.
+const MEMORY_ID_ENV: Record<(typeof AGENT_RUNTIMES)[number]['id'], string> = {
+  Research: 'CEI_RESEARCH_MEMORY_ID',
+  Drafting: 'CEI_DRAFTING_MEMORY_ID',
+  Analysis: 'CEI_ANALYSIS_MEMORY_ID',
+  Pipeline: 'CEI_PIPELINE_MEMORY_ID',
+};
+
 // ADR: AgentCore Runtime is arm64 (Graviton) + PYTHON_3_12 (agentcore.json) | Rationale: CodeZip deps must be
 // manylinux aarch64 wheels for that interpreter, so they are resolved for the target, not the build host.
 // manylinux_2_28 (glibc 2.28): numpy 2.5 ships no manylinux2014 aarch64 wheels; the runtime image's glibc is newer
@@ -41,19 +50,21 @@ const UV_INSTALL_ARGS = [
   '--only-binary', ':all:',
 ];
 
-function copySources(outputDir: string): void {
-  for (const dir of SOURCE_DIRS) {
+function copySources(outputDir: string, extraDirs: string[] = [], extraFiles: string[] = []): void {
+  for (const dir of [...SOURCE_DIRS, ...extraDirs]) {
     fs.cpSync(path.join(AGENTS_DIR, dir), path.join(outputDir, dir), {
       recursive: true,
       filter: (src) => !/(__pycache__|\.pyc$|\.pytest_cache|[\\/]tests([\\/]|$))/.test(src),
     });
   }
-  for (const file of ENTRYPOINT_FILES) {
+  for (const file of [...ENTRYPOINT_FILES, ...extraFiles]) {
     fs.copyFileSync(path.join(AGENTS_DIR, file), path.join(outputDir, file));
   }
 }
 
-class LocalUvBundling implements cdk.ILocalBundling {
+export class LocalUvBundling implements cdk.ILocalBundling {
+  constructor(private readonly extraDirs: string[] = [], private readonly extraFiles: string[] = []) {}
+
   tryBundle(outputDir: string): boolean {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cei-agent-reqs-'));
     const requirements = path.join(tmp, 'requirements.txt');
@@ -70,7 +81,7 @@ class LocalUvBundling implements cdk.ILocalBundling {
       { cwd: AGENTS_DIR, stdio: ['ignore', 2, 2] },
     );
     if (installed.status !== 0) return false;
-    copySources(outputDir);
+    copySources(outputDir, this.extraDirs, this.extraFiles);
     return true;
   }
 }
@@ -82,18 +93,35 @@ export function agentCoreDataPlaneOrigin(stack: cdk.Stack): string {
 
 // ADR: build the invocation URL with intrinsics | Rationale: the runtime ARN is a deploy-time token, so
 // encodeURIComponent cannot run on it; ':' and '/' are the only reserved characters an AgentCore runtime ARN holds
-function invocationUrl(stack: cdk.Stack, runtimeArn: string): string {
+function runtimeUrl(stack: cdk.Stack, runtimeArn: string, operation: 'invocations' | 'stopruntimesession'): string {
   const colonsEncoded = cdk.Fn.join('%3A', cdk.Fn.split(':', runtimeArn));
   const encodedArn = cdk.Fn.join('%2F', cdk.Fn.split('/', colonsEncoded));
   return cdk.Fn.join('', [
     agentCoreDataPlaneOrigin(stack),
     '/runtimes/',
     encodedArn,
-    '/invocations?qualifier=DEFAULT',
+    `/${operation}?qualifier=DEFAULT`,
   ]);
 }
 
+function invocationUrl(stack: cdk.Stack, runtimeArn: string): string {
+  return runtimeUrl(stack, runtimeArn, 'invocations');
+}
+
+/** Job agent_type values (shared/persistence/jobs.py AGENT_TYPES) for each runtime. */
+export const JOB_AGENT_TYPES = {
+  Research: 'research', Drafting: 'drafting', Analysis: 'analysis', Pipeline: 'pipeline_manager',
+} as const;
+
 export interface AgentRuntimesProps {
+  /** Validated deployment default; absent only during environment-agnostic synth. */
+  readonly defaultModelId?: string;
+  /** B18: deploy.sh/CDK-supplied extra blocklist patterns, merged with the fixed D3 defaults (shared/config.py). */
+  readonly blockedModelIds?: string[];
+  /** F8/B51: input-only PII Guardrail (model-guardrail.ts); undefined => get_model() attaches no Guardrail. */
+  readonly guardrailId?: string;
+  readonly guardrailVersion?: string;
+  readonly guardrailArn?: string;
   readonly userPool: cognito.IUserPool;
   readonly spaClient: cognito.IUserPoolClient;
   readonly chatMetadataTable: dynamodb.ITable;
@@ -107,6 +135,8 @@ export interface AgentRuntimesProps {
    * container as CEI_ALLOWED_ORIGINS, where shared/runtime/app_factory.py answers the CORS preflight.
    */
   readonly allowedOrigins: string[];
+  /** B44/B45: mirrors ToolGateway's prop of the same name -- true only when the Region gate and the deploy config both allow Web Search (reaches the container as CEI_WEB_SEARCH_ENABLED). */
+  readonly webSearchEnabled?: boolean;
 }
 
 /**
@@ -124,6 +154,14 @@ export class AgentRuntimes extends Construct {
    * handed to the agent proxy Lambda (AGENT_URLS), which the SPA calls via /config.json `agentUrls`.
    */
   public readonly invocationUrls: Record<Lowercase<(typeof AGENT_RUNTIMES)[number]['id']>, string>;
+  /**
+   * StopRuntimeSession URLs keyed by job agent_type, for user-initiated job cancellation. The jobs Lambda calls
+   * them with the caller's own bearer token, because the runtimes accept only SPA user tokens.
+   */
+  public readonly stopUrls: Record<string, string> = {};
+  /** F19/B109: the one shared AgentCore Memory resource's id/ARN, for the delete-worker's cascade. */
+  public readonly memoryId: string;
+  public readonly memoryArn: string;
 
   constructor(scope: Construct, id: string, props: AgentRuntimesProps) {
     super(scope, id);
@@ -156,11 +194,21 @@ export class AgentRuntimes extends Construct {
     // EventExpiryDuration at 365 days; retain checkpoints across stack removal.
     const researchMemory = new agentcore.CfnMemory(this, 'ResearchMemory', {
       name: 'CEIResearchMemory', eventExpiryDuration: 365,
-      description: 'Research short-term checkpoints scoped by user and session',
+      description: 'Checkpoints and per-user specialist memory',
+      memoryStrategies: [
+        { userPreferenceMemoryStrategy: { name: 'user_preferences', namespaceTemplates: ['/users/{actorId}/'] } },
+        { semanticMemoryStrategy: { name: 'semantic_facts', namespaceTemplates: ['/users/{actorId}/'] } },
+      ],
     });
     researchMemory.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+    this.memoryId = researchMemory.attrMemoryId;
+    this.memoryArn = researchMemory.attrMemoryArn;
     const environmentVariables: Record<string, string> = {
       CEI_AWS_REGION: stack.region,
+      ...(props.defaultModelId ? { CEI_DEFAULT_MODEL_ID: props.defaultModelId } : {}),
+      CEI_BLOCKED_MODELS: (props.blockedModelIds ?? []).join(','),
+      ...(props.guardrailId ? { CEI_GUARDRAIL_ID: props.guardrailId } : {}),
+      ...(props.guardrailVersion ? { CEI_GUARDRAIL_VERSION: props.guardrailVersion } : {}),
       CEI_COGNITO_USER_POOL_ID: props.userPool.userPoolId,
       CEI_COGNITO_REGION: stack.region,
       CEI_COGNITO_APP_CLIENT_IDS: appClientIds,
@@ -182,6 +230,8 @@ export class AgentRuntimes extends Construct {
       // ADR: comma-joined string | Rationale: parsed by config.allowed_origins_list; same origin set as the
       // sessions API (API Gateway preflight + Lambda ALLOWED_ORIGINS) so all CORS layers agree
       CEI_ALLOWED_ORIGINS: cdk.Fn.join(',', props.allowedOrigins),
+      // B44/B86: shared/tools/data_sources.all_langchain_tools() only adds the web search tool when this is "true"
+      CEI_WEB_SEARCH_ENABLED: props.webSearchEnabled ? 'true' : 'false',
     };
 
     const runtimes = {} as Record<(typeof AGENT_RUNTIMES)[number]['id'], agentcore.Runtime>;
@@ -202,33 +252,50 @@ export class AgentRuntimes extends Construct {
         // Layer 2 needs the raw bearer token in-process (identity.py verifies it against the JWKS again)
         requestHeaderConfiguration: { allowlistedHeaders: ['Authorization'] },
         environmentVariables: def.id === 'Research'
-          ? { ...environmentVariables, CEI_RESEARCH_MEMORY_ID: researchMemory.attrMemoryId, CEI_REQUIRE_TOOL_GATEWAY: 'true' }
-          : environmentVariables,
+          ? {
+              ...environmentVariables,
+              [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId,
+              CEI_REQUIRE_TOOL_GATEWAY: 'true',
+            }
+          : { ...environmentVariables, [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId },
       });
-      if (def.id === 'Research') {
-        runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
-          actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent'],
-          resources: [researchMemory.attrMemoryArn],
-        }));
-      }
+      // F11: all four runtimes can retrieve from the one shared Memory resource; only
+      // Research writes conversation events into it (B37 strategies, opt-in recall per agent).
+      runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: def.id === 'Research'
+          ? ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent',
+            'bedrock-agentcore:RetrieveMemoryRecords']
+          : ['bedrock-agentcore:RetrieveMemoryRecords'],
+        resources: [researchMemory.attrMemoryArn],
+      }));
       this.grantData(runtime, props);
       props.codeInterpreter.grantUse(runtime);
       runtime.role.addToPrincipalPolicy(
         new iam.PolicyStatement({
           actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+          // B18/user decision (2026-11-10): users may pick any Bedrock model, not just Anthropic's; the
+          // D3 blocklist + discovery filter (shared/config.py, model_discovery.py) is the actual control.
           resources: [
-            `arn:${stack.partition}:bedrock:${stack.region}:${stack.account}:inference-profile/us.anthropic.*`,
-            `arn:${stack.partition}:bedrock:*::foundation-model/anthropic.*`,
+            `arn:${stack.partition}:bedrock:*::foundation-model/*`,
+            `arn:${stack.partition}:bedrock:*:${stack.account}:inference-profile/*`,
+            `arn:${stack.partition}:bedrock:*:${stack.account}:application-inference-profile/*`,
           ],
         }),
       );
+      // F8/B51: the native guardrailConfig on every get_model() call (shared/utils.py) needs this on the
+      // model-invoking role; scoped to the one Guardrail ARN, not a wildcard.
+      if (props.guardrailArn) {
+        runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+          actions: ['bedrock:ApplyGuardrail'], resources: [props.guardrailArn],
+        }));
+      }
       NagSuppressions.addResourceSuppressions(
         runtime,
         [
           {
             id: 'AwsSolutions-IAM5',
             reason:
-              'ADR: wildcard ARNs on the AgentCore runtime role | Rationale: (1) Bedrock: the agent and title models are cross-region inference profiles (us.anthropic.*) that route to foundation models in several Regions, so the model ARNs carry a Region wildcard limited to Anthropic models; (2) the CDK-owned Runtime construct grants its own CloudWatch Logs/X-Ray/workload-identity permissions with wildcard resources; (3) S3: object keys in the attachments bucket are per-session and created at runtime, so the object ARN is <bucket>/* scoped to that single bucket | Alternative: per-model ARNs rejected — the model id is a runtime setting and the routing Region set is AWS-managed',
+              'ADR: wildcard ARNs on the AgentCore runtime role | Rationale: (1) Bedrock: the model id is a user choice of any non-blocklisted model (B18, user decision 2026-11-10), spanning every foundation model plus every account inference profile and application inference profile, not a fixed deploy-time set — the D3 blocklist and the discovery filter (shared/config.py, shared/runtime/model_discovery.py) are the real control, not the IAM resource; (2) the CDK-owned Runtime construct grants its own CloudWatch Logs/X-Ray/workload-identity permissions with wildcard resources; (3) S3: object keys in the attachments bucket are per-session and created at runtime, so the object ARN is <bucket>/* scoped to that single bucket | Alternative: per-model ARNs rejected — the model id is a user-facing runtime choice, not a fixed deploy-time set',
           },
         ],
         true,
@@ -239,6 +306,7 @@ export class AgentRuntimes extends Construct {
       });
       runtimes[def.id] = runtime;
       invocationUrls[def.id.toLowerCase() as Lowercase<typeof def.id>] = invocationUrl(stack, runtime.agentRuntimeArn);
+      this.stopUrls[JOB_AGENT_TYPES[def.id]] = runtimeUrl(stack, runtime.agentRuntimeArn, 'stopruntimesession');
     }
     this.runtimes = runtimes;
     this.invocationUrls = invocationUrls;
@@ -250,6 +318,37 @@ export class AgentRuntimes extends Construct {
     resource.addPropertyOverride('EnvironmentVariables.CEI_GATEWAY_CLIENT_ID', clientId);
     resource.addPropertyOverride('EnvironmentVariables.CEI_TOOL_GATEWAY_URL', gatewayUrl);
     resource.addPropertyOverride('RequestHeaderConfiguration.RequestHeaderAllowlist', ['Authorization', 'X-Cei-Gateway-Token']);
+  }
+
+  /**
+   * F16: the Pipeline runtime records its background jobs in the Job ID Store and holds the user's single
+   * background slot in the Active-run table (B22). Exactly the actions shared/runtime/durable_jobs.py calls.
+   */
+  public configureJobStore(jobTable: dynamodb.ITable, activeRunsTable: dynamodb.ITable): void {
+    const runtime = this.runtimes.Pipeline;
+    const resource = runtime.node.defaultChild as agentcore.CfnRuntime;
+    resource.addPropertyOverride('EnvironmentVariables.CEI_JOB_TABLE', jobTable.tableName);
+    resource.addPropertyOverride('EnvironmentVariables.CEI_ACTIVE_RUNS_TABLE', activeRunsTable.tableName);
+    runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'], resources: [jobTable.tableArn],
+    }));
+    runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'], resources: [activeRunsTable.tableArn],
+    }));
+  }
+
+  /**
+   * F8 follow-up: shared/runtime/turn_config.py's owner-scoped saved-default lookup, used only for a chat
+   * with no stored model_id. Read-only GetItem on the same table ModelSettings/session-metadata-handler use;
+   * called after ModelSettings exists (backend-stack.ts), same post-construction pattern as configureJobStore.
+   */
+  public configureUserMetadataTable(table: dynamodb.ITable): void {
+    for (const def of AGENT_RUNTIMES) {
+      const runtime = this.runtimes[def.id];
+      const resource = runtime.node.defaultChild as agentcore.CfnRuntime;
+      resource.addPropertyOverride('EnvironmentVariables.CEI_USER_METADATA_TABLE', table.tableName);
+      table.grant(runtime.role, 'dynamodb:GetItem');
+    }
   }
 
   /** Exactly the DynamoDB actions ConversationRecorder / ChatHistoryStore / checkpoint writer call. */

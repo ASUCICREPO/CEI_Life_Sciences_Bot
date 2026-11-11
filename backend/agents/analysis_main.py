@@ -22,17 +22,15 @@ from shared.runtime import (
     RuntimeOp,
     action_response,
     awaiting_envelope,
-    check_resume,
     completed_envelope,
     extract_interrupt_surface,
-    parse_action,
     parse_mode,
     parse_op,
     parse_prompt,
     resume_value,
 )
 from shared.runtime.history import begin_turn, end_turn, record_resume
-from shared.runtime.checkpointing import restore_for_resume
+from shared.runtime.hitl_turn import resolve_resume_action
 from shared.runtime.app_factory import create_app
 from shared.streaming.trace_redaction import redacts_trace_input
 from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
@@ -113,11 +111,24 @@ def _parse_analysis_type(raw: Any) -> AnalysisType | None:
         return None
 
 
-def _initial_state(prompt: str, mode: str, user_id: str, session_id: str, analysis_type: str | None) -> Dict[str, Any]:
+async def _analysis_long_term_context(user_id: str, prompt: str) -> list[str]:
+    """Load only this actor's memory when the opt-in read path is enabled (F11)."""
+    from shared.memory.turns import load_long_term_context
+
+    return await load_long_term_context(
+        user_id, prompt, enabled_env="CEI_ANALYSIS_LONG_TERM_ENABLED", memory_id_env="CEI_ANALYSIS_MEMORY_ID",
+    )
+
+
+def _initial_state(
+    prompt: str, mode: str, user_id: str, session_id: str, analysis_type: str | None,
+    long_term_context: list[str] = (),
+) -> Dict[str, Any]:
     parsed_type = _parse_analysis_type(analysis_type)
     return {
         "messages": [HumanMessage(content=prompt)],
         "mode": mode,
+        "long_term_context": list(long_term_context),
         "user_id": user_id,
         "session_id": session_id,
         "query": prompt,
@@ -182,21 +193,13 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     config = {"configurable": {"thread_id": session_id}}
 
     if op is RuntimeOp.RESUME:
-        action = parse_action(payload)
         scenario = _thread_scenarios.get(session_id, "")
-        if _replay.enabled:
-            replayed = _replay.on_resume(scenario, session_id=session_id, action=action, job_id=None)
-            if replayed is not None:
-                return replayed
-
-        if session_id not in _thread_ids and _pending.get(session_id) is None and action.session_id == session_id:
-            # cold resume (runtime restart / eviction): bring back the interrupted graph + its pending surface
-            await restore_for_resume(
-                user_id=user_id, session_id=session_id, saver=_checkpointer, graph=graph, pending=_pending
-            )
-        stale = check_resume(_pending, session_id, action)
-        if stale is not None:
-            return stale
+        action, terminal = await resolve_resume_action(
+            payload, session_id=session_id, user_id=user_id, checkpointer=_checkpointer, graph=graph,
+            pending=_pending, is_cold=session_id not in _thread_ids, replay=_replay, replay_key=scenario,
+        )
+        if terminal is not None:
+            return terminal
 
         await record_resume(user_id=user_id, session_id=session_id, action=action)
         _touch_thread(session_id)
@@ -236,6 +239,9 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         if replayed is not None:
             return replayed
 
+    # New run only: a resume (handled above) must not re-recall long-term memory.
+    memories = await _analysis_long_term_context(user_id, prompt)
+
     # Cold thread (runtime restart / LRU eviction): rebuild short-term memory from ChatHistoryStore
     history = await begin_turn(
         user_id=user_id,
@@ -250,7 +256,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     _touch_thread(session_id)
     log.info(f"Analysis agent invoked: session={session_id}, mode={mode}, analysis_type={analysis_type}")
 
-    state = _initial_state(prompt, mode, user_id, session_id, analysis_type)
+    state = _initial_state(prompt, mode, user_id, session_id, analysis_type, memories)
     # D16: history is dynamic content — it rides in messages, after the cached system prompt/tools
     state["messages"] = [*history, *state["messages"]]
     result = await graph.ainvoke(state, config=config)

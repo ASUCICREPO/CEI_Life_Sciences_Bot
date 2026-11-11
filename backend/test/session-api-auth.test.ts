@@ -17,6 +17,7 @@ function testConfig(): DeployConfig {
     adminEmail: 'admin@example.com',
     limits: DEFAULT_LIMITS,
     webSearchEnabled: true,
+    accountDeletionEnabled: false,
     allowLocalhostCallback: false,
   };
 }
@@ -69,9 +70,12 @@ describe.each([
       return `${props.HttpMethod} ${route(props.ResourceId.Ref)}`;
     }).sort();
     expect(routes).toEqual([
-      'GET /sessions', 'GET /sessions/{sessionId}', 'GET /sessions/{sessionId}/history',
+      'GET /exports/{exportId}/download', 'GET /sessions', 'GET /sessions/{sessionId}', 'GET /sessions/{sessionId}/exports', 'GET /sessions/{sessionId}/history',
       'GET /sessions/{sessionId}/turns/{messageId}/trace', 'PATCH /sessions/{sessionId}',
-      'POST /attachments/presign', 'POST /chat/stream', 'POST /client-diagnostics', 'POST /sessions',
+      'POST /chat/stream', 'POST /client-diagnostics', 'POST /sessions',
+      'GET /jobs', 'GET /jobs/{jobId}', 'POST /jobs/{jobId}/cancel', 'POST /ui-actions',
+      'GET /models', 'GET /settings', 'PUT /settings',
+      'POST /attachments/presign',
     ].sort());
   });
 

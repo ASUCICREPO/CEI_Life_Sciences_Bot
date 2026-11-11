@@ -111,6 +111,18 @@ def test_get_returns_record_scoped_to_user(session):
     assert repo.get("u1", "missing") is None
 
 
+def test_initializes_legacy_settings_without_overwriting_concurrent_mode(session):
+    repo = ChatMetadataRepository(session)
+    repo.create(_meta(mode=None, model_id=None))
+    repo.update("u1", "s1", mode=ChatMode.SCIENCE)
+    winner = repo.initialize_turn_settings("u1", "s1", mode="business", model_id="model-a")
+    assert winner.mode == ChatMode.SCIENCE and winner.model_id is None
+    updated = repo.initialize_turn_settings("u1", "s1", mode=None, model_id="model-a")
+    assert updated.mode == ChatMode.SCIENCE and updated.model_id == "model-a"
+    with pytest.raises(SessionNotFoundError):
+        repo.initialize_turn_settings("other", "s1", mode="business", model_id="model-a")
+
+
 def test_new_record_round_trips_document_and_analysis_type(session):
     repo = ChatMetadataRepository(session)
     repo.create(_meta(agent_type="drafting", document_type="protocol", analysis_type="competitor"))
@@ -469,6 +481,31 @@ def test_recorder_foreign_owner_refused_before_any_write(session):
     assert ChatMetadataRepository(session).get("u1", "s1").message_count == 1
 
 
-def test_delete_session_still_not_implemented(session):
-    with pytest.raises(NotImplementedError):
-        ChatHistoryRepository(session).delete_session("s1")
+def test_delete_session_removes_all_partition_items_only(session):
+    table = session.resource("dynamodb").Table(config.chat_history_table)
+    for sid, seq in [("s1", -1002), ("s1", -1), ("s1", 0), ("s1", 1), ("s2", 0)]:
+        table.put_item(Item={"session_id": sid, "sequence_number": seq, "user_id": "u1"})
+
+    repository = ChatHistoryRepository(session)
+    repository.delete_session("s1")
+    repository.delete_session("s1")  # retry is safe
+    assert table.scan()["Items"] == [{"session_id": "s2", "sequence_number": 0, "user_id": "u1"}]
+
+
+def test_delete_session_requires_partition(session):
+    with pytest.raises(ValueError):
+        ChatHistoryRepository(session).delete_session("")
+
+
+def test_chat_metadata_delete_removes_only_the_one_row(session):
+    repo = ChatMetadataRepository(session)
+    repo.create(_meta(user_id="u1", session_id="s1"))
+    repo.create(_meta(user_id="u1", session_id="s2"))
+    repo.delete("u1", "s1")
+    assert repo.get("u1", "s1") is None
+    assert repo.get("u1", "s2") is not None
+
+
+def test_chat_metadata_delete_is_idempotent(session):
+    repo = ChatMetadataRepository(session)
+    repo.delete("u1", "never-existed")  # no error

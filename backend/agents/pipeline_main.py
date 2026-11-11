@@ -7,7 +7,6 @@ configure_telemetry()
 import asyncio
 import logging
 import os
-import uuid
 from collections import OrderedDict
 from typing import Any, Dict, List
 
@@ -18,34 +17,34 @@ from langgraph.types import Command
 from shared.presenters.pipeline import build_pipeline_status_surface, build_pipeline_surface
 from shared.response_text import final_ai_text
 from shared.runtime import (
-    JOB_REGISTRY,
     JobStatus,
     PendingInterrupts,
     ReplayHub,
     RuntimeOp,
     action_response,
     awaiting_envelope,
-    check_resume,
     completed_envelope,
     extract_interrupt_surface,
-    parse_action,
     parse_mode,
     parse_op,
     parse_prompt,
     resume_value,
 )
 from shared.runtime.history import begin_turn, end_turn, record_resume
-from shared.runtime.checkpointing import restore_for_resume
+from shared.runtime.hitl_turn import resolve_resume_action
 from shared.runtime.app_factory import create_app
 from shared.streaming.trace_redaction import redacts_trace_input
 from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
+from shared.runtime.durable_jobs import ConcurrencyLimitError, job_store
 
 app = create_app()  # CORS for direct browser calls when CEI_ALLOWED_ORIGINS is set
 log = app.logger
 logging.basicConfig(level=logging.INFO)
 
 # ADR: status surfaces come from this module | B98 adds steps[]/ui to job_status
-JOB_REGISTRY.status_ui_builder = build_pipeline_status_surface
+# Durable Job ID Store when CEI_JOB_TABLE is set (F16); the in-memory registry for local runs (B94).
+JOB_REGISTRY = job_store(status_ui_builder=build_pipeline_status_surface)
+HEARTBEAT_SECONDS = 60
 
 _CHECKPOINT_LIMIT = 128
 _checkpointer = InMemorySaver()
@@ -105,6 +104,19 @@ def _compile_graph():
     return compile_graph(checkpointer=_checkpointer)
 
 
+async def _pipeline_long_term_context(user_id: str, prompt: str) -> list[str]:
+    """Load only this actor's memory when the opt-in read path is enabled (F11).
+
+    Called once, on a new run only; a resumed background job reuses the value
+    already captured in the checkpointed graph state.
+    """
+    from shared.memory.turns import load_long_term_context
+
+    return await load_long_term_context(
+        user_id, prompt, enabled_env="CEI_PIPELINE_LONG_TERM_ENABLED", memory_id_env="CEI_PIPELINE_MEMORY_ID",
+    )
+
+
 def _plan_steps_for_registry(plan_obj: Any) -> list[tuple[str, str, str]]:
     return [(step.step_id, step.agent, step.description) for step in plan_obj.steps]
 
@@ -132,6 +144,22 @@ def _final_job_status(steps: list) -> JobStatus:
     return JobStatus.PARTIAL
 
 
+async def _heartbeat(job_id: str, job_task: asyncio.Task) -> None:
+    """Keep the watchdog away and stop the run when the user cancels it (B25 cooperative cancel)."""
+    while True:
+        await asyncio.sleep(HEARTBEAT_SECONDS)
+        if job_task.done():
+            return
+        try:
+            stop = await asyncio.to_thread(JOB_REGISTRY.heartbeat, job_id)
+        except Exception as exc:  # a missed beat is retried; the watchdog allows several
+            log.warning("Pipeline heartbeat failed: job=%s error_type=%s", job_id, type(exc).__name__)
+            continue
+        if stop:
+            job_task.cancel()
+            return
+
+
 async def _run_job(job_id: str, session_id: str, user_id: str, action_resume_value: dict, task_id: int) -> None:
     try:
         graph = _compile_graph()
@@ -154,6 +182,12 @@ async def _run_job(job_id: str, session_id: str, user_id: str, action_resume_val
         if prompt:
             _replay.record_job_status(prompt, JOB_REGISTRY.snapshot(job_id))
         log.info(f"Pipeline job complete: job={job_id} session={session_id}")
+    except asyncio.CancelledError:
+        # The user cancelled the job; the jobs API already recorded the outcome, so this write may be a no-op.
+        log.info("Pipeline job cancelled: job=%s session=%s", job_id, session_id)
+        JOB_REGISTRY.finish(job_id, JobStatus.CANCELLED, ui=None, text="Pipeline run cancelled.")
+        await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id,
+                       envelope={"text": "Pipeline run cancelled."})
     except Exception as exc:  # ADR: a crashed background job must still resolve the job record | never hang /pipeline
         log.error("Pipeline job failed: job=%s session=%s error_type=%s", job_id, session_id, type(exc).__name__)
         JOB_REGISTRY.finish(job_id, JobStatus.FAILED, ui=None, text="Pipeline run failed.")
@@ -161,6 +195,9 @@ async def _run_job(job_id: str, session_id: str, user_id: str, action_resume_val
     finally:
         app.complete_async_task(task_id)
         _background_tasks.pop(job_id, None)
+        heartbeat = _background_tasks.pop(f"{job_id}:heartbeat", None)
+        if heartbeat is not None and heartbeat is not asyncio.current_task():
+            heartbeat.cancel()
 
 
 @app.entrypoint
@@ -190,30 +227,36 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         return snapshot
 
     if op is RuntimeOp.RESUME:
-        action = parse_action(payload)
         prompt = _thread_prompts.get(session_id, "")
-
-        if _replay.enabled:
-            replayed = _replay.on_resume(prompt, session_id=session_id, action=action, job_id=None)
-            if replayed is not None:
-                return replayed
-
-        if session_id not in _thread_ids and _pending.get(session_id) is None and action.session_id == session_id:
-            # cold resume (runtime restart / eviction): bring back the interrupted graph + its pending surface
-            await restore_for_resume(
-                user_id=user_id, session_id=session_id, saver=_checkpointer, graph=_compile_graph(), pending=_pending
-            )
-        terminal = check_resume(_pending, session_id, action)
+        action, terminal = await resolve_resume_action(
+            payload, session_id=session_id, user_id=user_id, checkpointer=_checkpointer, graph=_compile_graph(),
+            pending=_pending, is_cold=session_id not in _thread_ids, replay=_replay, replay_key=prompt,
+        )
         if terminal is not None:
             return terminal
-        await record_resume(user_id=user_id, session_id=session_id, action=action)
-        _pending.clear(session_id)
 
         graph = _compile_graph()
-        _touch_thread(session_id)
         config = {"configurable": {"thread_id": session_id}}
+        job_record = None
+        if action.action_id == "approve-plan":
+            snapshot = await graph.aget_state(config)
+            plan_obj = snapshot.values.get("plan") if snapshot else None
+            if plan_obj is None:
+                return {"status": "error", "message": "No pending plan for this session."}
+            try:
+                # Before the approval is consumed: at the B22 limit the plan stays pending for a later retry.
+                job_record = JOB_REGISTRY.create(session_id=session_id, agent_type="pipeline_manager",
+                                                 steps=_plan_steps_for_registry(plan_obj), user_id=user_id)
+            except ConcurrencyLimitError:
+                return {"status": "error", "code": "concurrency_limit",
+                        "message": "A background job is already running. Wait for it to finish or cancel it.",
+                        "action_response": action_response(action, "rejected")}
 
-        if action.action_id != "approve-plan":
+        await record_resume(user_id=user_id, session_id=session_id, action=action)
+        _pending.clear(session_id)
+        _touch_thread(session_id)
+
+        if job_record is None:
             # reject-plan (or any other target action on this surface) ends the run.
             await graph.ainvoke(Command(resume=resume_value(action)), config=config)
             text = "Plan rejected."
@@ -223,24 +266,14 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
                 _replay.record_resume(prompt, envelope)
             return envelope
 
-        snapshot = await graph.aget_state(config)
-        plan_obj = snapshot.values.get("plan") if snapshot else None
-        if plan_obj is None:
-            return {"status": "error", "message": "No pending plan for this session."}
-
-        job_id = f"job-{uuid.uuid4().hex[:12]}"
-        JOB_REGISTRY.create(
-            session_id=session_id,
-            agent_type="pipeline_manager",
-            steps=_plan_steps_for_registry(plan_obj),
-            job_id=job_id,
-            user_id=user_id,
-        )
+        job_id = job_record.job_id
         JOB_REGISTRY.set_status(job_id, JobStatus.RUNNING)
 
         task_id = app.add_async_task("pipeline", {"job_id": job_id, "session_id": session_id})
         task = asyncio.create_task(_run_job(job_id, session_id, user_id, resume_value(action), task_id))
         _background_tasks[job_id] = task
+        if JOB_REGISTRY.durable:
+            _background_tasks[f"{job_id}:heartbeat"] = asyncio.create_task(_heartbeat(job_id, task))
 
         text = "Plan approved — running the pipeline."
         envelope = {
@@ -266,6 +299,9 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
             return replayed
 
     graph = _compile_graph()
+    # New run only: a resume (handled above) reuses the checkpointed state instead of re-recalling.
+    memories = await _pipeline_long_term_context(user_id, prompt)
+
     # Cold thread (runtime restart / LRU eviction): rebuild short-term memory from ChatHistoryStore
     history = await begin_turn(
         user_id=user_id,
@@ -281,6 +317,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         # D16: history is dynamic content — it rides in messages, after the cached system prompt/tools
         "messages": [*history, HumanMessage(content=prompt)],
         "mode": mode,
+        "long_term_context": memories,
         "user_id": user_id,
         "session_id": session_id,
         "plan": None,

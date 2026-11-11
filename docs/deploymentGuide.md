@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Status: **Partly built.** `deploy.sh` exists and works today (F1, B87, B91). It sets up a CodeBuild project that runs `cdk deploy --all` for two stacks: `BackendStack` (Code Interpreter, Cognito, the pre-sign-up domain check, and the S3 + CloudFront + WAF-fronted dashboard, F2/B88–B90) and `EdgeWafStack` (the `us-east-1` WAF web ACL, B88). The rest of the product stack (the REST API Gateway, Session Runner/Router Lambdas, DynamoDB tables, and so on) is **planned, not built**. This guide marks each part "Exists" or "Planned". Full detail: `.agents/specs/architecture.md`, `.agents/decision-log.md` (B45–B48, B87–B91), `.agents/phases/F01-deploy-foundation.md`, `.agents/phases/F02-hosting-auth.md`.
+Status: **Development work in progress.** The repository defines a REST API, session Lambdas, DynamoDB stores, AgentCore runtimes and Gateway, and monitoring in addition to the frontend hosting resources. A resource defined in CDK is not evidence that it is deployed or that its user journey works. Confirm the stack's deployed commit and CloudFormation resources before operating it. See [Operations](./operations.md) for monitoring and validation gaps, and `.agents/decision-log.md` for the approved architecture.
 
 ---
 
@@ -8,7 +8,7 @@ Status: **Partly built.** `deploy.sh` exists and works today (F1, B87, B91). It 
 
 - **Single environment.** (Exists) No separate dev/staging/prod stacks. Developers use the local AgentCore CLI for agent development before anything is deployed.
 - **Region is configurable.** (Exists) `deploy.sh` writes the Region into `backend/cei.deploy.json`. `backend/bin/backend.ts` reads it and passes it to the stack's `env`. There is no fixed Region.
-- **All AgentCore resources go into CDK.** (Planned) Today only the Code Interpreter is in CDK. Runtimes, Gateway and targets, Memory, and the Policy engine are not yet defined. `agentcore.json` stays local-development-only.
+- **AgentCore resources in CDK.** The stack defines the Code Interpreter, specialist runtimes, Gateway and Policy engine, and Research memory. Additional runtime features remain incomplete. `agentcore.json` stays local-development-only.
 
 ---
 
@@ -126,7 +126,7 @@ The pre-flight script (`backend/scripts/preflight.ts`) runs only inside CodeBuil
 
 The frontend build must run before `cdk bootstrap` and `cdk deploy`: `backend/bin/backend.ts` resolves `frontendAssetPath` to `../frontend/dist` and stops with a clear error ("build the frontend first: cd frontend && npm ci && npm run build") if that directory does not exist, because `BackendStack`'s `BucketDeployment` needs a real asset directory at synth time, and `cdk bootstrap` also triggers a synth. (This is exactly the failure the user hit running `deploy.sh` from AWS CloudShell before B91: the old flow ran `cdk bootstrap` locally, before `frontend/dist` existed.)
 
-`cdk deploy --all` now deploys both `BackendStack` (Code Interpreter, Cognito, the S3/CloudFront-fronted dashboard, F2) and `EdgeWafStack` (the `us-east-1` WAF web ACL, B88). Planned for later phases: the REST API Gateway, Session Runner/Router Lambdas, AgentCore Gateway and Policy, AgentCore Runtimes, DynamoDB tables, additional S3 buckets, SQS, Secrets Manager (product API keys), and CloudWatch alarms/SNS. See [Provisioned Resources](./provisioned-resources.md) for the exact current list.
+The CodeBuild deployment targets `BackendStack` and `EdgeWafStack` (the latter is always in `us-east-1`). Product capability and deployed status must be checked separately; a successful stack operation does not prove specialist workflows, identity transport, deletion, or async recovery. File uploads and managed RAG are deferred in the current iteration.
 
 ---
 
@@ -134,10 +134,10 @@ The frontend build must run before `cdk bootstrap` and `cdk deploy`: `backend/bi
 
 The production frontend is the `founder-ai-dashboard` Vite SPA in `frontend/` (replacing the archived Next.js test harness, now in `archive/frontend-next/` — see [Architecture Deep Dive](./architectureDeepDive.md), B1/B66), served from **S3 + CloudFront + WAF**. There is no Vercel or Amplify deployment target for production; those options are removed from this project's plan.
 
-Steps (done automatically by `buildspec.yml`, or manually for local testing):
+Steps performed by `buildspec.yml` in CodeBuild:
 
-1. `cd frontend && npm ci && npm run build` — produces the static build in `frontend/dist`.
-2. `cd backend && npx cdk deploy --all` — `BackendStack`'s `SiteAssetsDeployment` uploads `frontend/dist` to the private site bucket, then `RuntimeConfigDeployment` writes `/config.json` (region, Cognito user pool ID, SPA client ID, Cognito domain) with `Cache-Control: no-cache` so the SPA always fetches the current runtime config. Each deployment invalidates the CloudFront distribution for the paths it touched.
+1. Build the frontend into `frontend/dist`.
+2. Deploy the CDK stacks from the build environment. `SiteAssetsDeployment` uploads `frontend/dist` to the private site bucket, then `RuntimeConfigDeployment` writes `/config.json` (region, Cognito user pool ID, SPA client ID, Cognito domain) with `Cache-Control: no-cache`. Each deployment invalidates the CloudFront distribution for the paths it touched.
 3. The SPA fetches `/config.json` before it renders (see `frontend/src/main.tsx`), so the same static build works against any deployment.
 
 CloudFront serves the SPA fallback for client-side routing: a 403 or 404 from S3 (for example on a deep link like `/history`) returns `/index.html` with HTTP 200 instead of an error page.
@@ -146,28 +146,21 @@ CloudFront serves the SPA fallback for client-side routing: a 403 or 404 from S3
 
 ## Post-deployment verification
 
-After `./deploy.sh` succeeds, verify (see `.agents/phases/F02-hosting-auth.md` task 10, not yet run against a real deployment as of this writing):
+After `./deploy.sh` succeeds, verify (see `.agents/phases/F02-hosting-auth.md` task 10; the user ran this check on a real deployment and it passed on 2026-10-05):
 
 1. Open a deep link (for example `<SiteUrl>/history`) — the SPA loads (the CloudFront fallback works).
 2. Sign up with a disallowed email domain — Cognito rejects it (the pre-sign-up Lambda trigger).
 3. Sign up with an allowed email domain — receive the verification email, verify, log in, and land on the dashboard shell with no report pages in navigation.
 4. Reload the page — you stay logged in (a silent redirect through the Cognito session cookie); click "Sign out" — you return to Cognito managed login.
-5. Rate-rule smoke test: send a burst of requests (for example 1500 in a short window) from one IP to the CloudFront domain — the WAF rate-based rule should return 403.
+5. Test the WAF rule only in an isolated development environment using the bounded procedure agreed for that environment; check both the response and the relevant WAF metric.
 
-Once the REST API and later phases exist, verification will also include: testing `/chat/stream` end to end and confirming CloudWatch alarms reach the admin email.
+Also test `/chat/stream` end to end and confirm the configured SNS email subscription and alarms work in the development account. Follow the bounded checks and limitations in [Operations](./operations.md); do not use live user data for testing.
 
 ---
 
 ## Cleanup
 
-`cdk destroy --all` removes both CDK-managed stacks — `BackendStack` (Code Interpreter, Cognito, the S3/CloudFront/WAF-fronted dashboard) and `EdgeWafStack` (the `us-east-1` WAF web ACL):
-
-```bash
-cd backend
-cdk destroy --all
-```
-
-> **Warning:** `cdk destroy` removes every deployed product resource except the Cognito user pool — confirm nothing important is only stored there before running it.
+Stack deletion is destructive and is not part of a normal deployment. Before deleting, inspect both deployed CloudFormation templates and each resource's deletion and update-replace policies; some data stores are retained. Follow the approved environment cleanup procedure and verify retained resources afterwards.
 
 **The Cognito user pool is retained.** `deletionProtection: true` and `RemovalPolicy.RETAIN` on `UserPool` mean `cdk destroy` does not delete it — deletion protection blocks CloudFormation from removing it even if you try, and the removal policy also tells CloudFormation to leave it in place on stack deletion. To remove it by hand once you are sure the user data is no longer needed: in the Cognito console (or `aws cognito-idp`), first turn off deletion protection on the user pool (`UpdateUserPool` with `DeletionProtection: INACTIVE`), then delete the user pool. This permanently deletes every user account in it.
 
@@ -178,7 +171,7 @@ cdk destroy --all
 ## Next steps
 
 - [Architecture Deep Dive](./architectureDeepDive.md) — target architecture and current status per component
-- [Provisioned Resources](./provisioned-resources.md) — what is really deployed today
+- [Provisioned Resources](./provisioned-resources.md) — historical resource inventory; compare with the actual deployed stack
 - `.agents/specs/architecture.md` — full target architecture spec
 - `.agents/decision-log.md` — decisions behind the deployment design (B45–B48, B87–B91)
 - `.agents/phases/F01-deploy-foundation.md` — the F1 build phase that delivered `deploy.sh`

@@ -44,6 +44,7 @@ class Dispatcher(Protocol):
         mode: str,
         user_id: str,
         dependency_outputs: dict[str, str],
+        long_term_context: list[str] = (),
     ) -> StepOutcome: ...
 
 
@@ -89,23 +90,29 @@ class InProcessDispatcher:
         mode: str,
         user_id: str,
         dependency_outputs: dict[str, str],
+        long_term_context: list[str] = (),
     ) -> StepOutcome:
         prompt = _build_prompt(step, dependency_outputs)
         sub_session_id = f"{session_id}:step:{step.step_id}"
         try:
             if step.agent == "research":
-                return await self._run_research(prompt, mode, user_id, sub_session_id, step.step_id)
+                return await self._run_research(prompt, mode, user_id, sub_session_id, step.step_id, long_term_context)
             if step.agent == "drafting":
-                return await self._run_drafting(prompt, mode, user_id, sub_session_id, step.step_id, step.document_type)
+                return await self._run_drafting(
+                    prompt, mode, user_id, sub_session_id, step.step_id, step.document_type, long_term_context,
+                )
             if step.agent == "analysis":
-                return await self._run_analysis(prompt, mode, sub_session_id, step.step_id, step.analysis_type, step.scope)
+                return await self._run_analysis(
+                    prompt, mode, sub_session_id, step.step_id, step.analysis_type, step.scope, long_term_context,
+                )
             return StepOutcome(status="failed", error=f"unknown agent {step.agent!r}")
         except Exception as exc:  # ADR: catch-all | one bad step must not crash the pipeline run
             logger.error({"event": "dispatch_step_error", "step_id": step.step_id, "agent": step.agent, "error_type": type(exc).__name__})
             return StepOutcome(status="failed", error=repr(exc))
 
     async def _run_research(
-        self, prompt: str, mode: str, user_id: str, session_id: str, step_id: str
+        self, prompt: str, mode: str, user_id: str, session_id: str, step_id: str,
+        long_term_context: list[str] = (),
     ) -> StepOutcome:
         from research.graph import compile_graph as compile_research_graph
 
@@ -113,6 +120,9 @@ class InProcessDispatcher:
         initial_state = {
             "messages": [HumanMessage(content=prompt)],
             "mode": mode,
+            # ADR: forward the parent's already-loaded context | an in-process sub-run has no
+            # authenticated caller of its own, so it must not call memory itself.
+            "long_term_context": list(long_term_context),
             "user_id": user_id,
             "session_id": session_id,
             "query": prompt,
@@ -121,6 +131,8 @@ class InProcessDispatcher:
             "synthesis": "",
             "response_document": None,
             "trace": [],
+            # ADR: skip B72's clarify pause | no interactive user, no checkpointer to pause against
+            "clarified": True,
         }
         result = await graph.ainvoke(initial_state, config={"configurable": {"thread_id": session_id}})
         text = final_ai_text(result.get("messages", [])) or ""
@@ -133,7 +145,8 @@ class InProcessDispatcher:
         )
 
     async def _run_drafting(
-        self, prompt: str, mode: str, user_id: str, session_id: str, step_id: str, document_type: str | None
+        self, prompt: str, mode: str, user_id: str, session_id: str, step_id: str, document_type: str | None,
+        long_term_context: list[str] = (),
     ) -> StepOutcome:
         from drafting.graph import compile_graph as compile_drafting_graph
         from drafting.state import DocumentType
@@ -143,12 +156,15 @@ class InProcessDispatcher:
         initial_state = {
             "messages": [HumanMessage(content=prompt)],
             "mode": mode,
+            # ADR: forward the parent's already-loaded context | see _run_research
+            "long_term_context": list(long_term_context),
             "user_id": user_id,
             "session_id": session_id,
             "document_type": DocumentType(doc_type_raw),
             "guidelines": [],
             "research_questions": [],
             "research_findings": [],
+            "skip_outline_approval": True,
             "draft": "",
             "draft_document": None,
             "revision_feedback": None,
@@ -176,11 +192,14 @@ class InProcessDispatcher:
         step_id: str,
         analysis_type: str | None,
         scope: dict[str, Any] | None,
+        long_term_context: list[str] = (),
     ) -> StepOutcome:
         from analysis.run import run_analysis
 
         resolved_type = analysis_type if analysis_type in _VALID_ANALYSIS_TYPES else None
-        outcome = await run_analysis(prompt, mode, session_id, analysis_type=resolved_type, scope=scope)
+        outcome = await run_analysis(
+            prompt, mode, session_id, analysis_type=resolved_type, scope=scope, long_term_context=long_term_context,
+        )
         return StepOutcome(
             status="completed",
             text=outcome.text,

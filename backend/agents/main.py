@@ -11,15 +11,32 @@ import json
 from collections import OrderedDict
 from functools import lru_cache
 
+from collections.abc import Mapping as MappingABC
+
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 from starlette.responses import StreamingResponse
 from shared.presenters import build_research_surface
 from shared.response_text import final_ai_text
+from shared.runtime import (
+    PendingInterrupts,
+    RuntimeOp,
+    action_response,
+    awaiting_envelope,
+    extract_interrupt_surface,
+    parse_op,
+    resume_value,
+)
+from shared.runtime.hitl_turn import resolve_resume_action
 from shared.runtime.history import begin_turn, end_turn
 from shared.runtime.app_factory import create_app
 from shared.streaming.trace_redaction import redacts_trace_input
 from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
+from shared.runtime.session_guard import error_response
+from shared.runtime import history as runtime_history
+from shared.runtime.model_policy import ModelPolicyError
+from shared.runtime.turn_config import resolve_turn_config
 from shared.tools.gateway_context import gateway_request_context
 from shared.streaming.research import ResearchEventStream, text_chunks, with_heartbeats
 from typing import List, Dict, Union, Any
@@ -31,6 +48,10 @@ logging.basicConfig(level=logging.INFO)
 _CHECKPOINT_LIMIT = 128
 _checkpointer = InMemorySaver()
 _thread_ids: OrderedDict[str, bool] = OrderedDict()
+# Local (non-persistent) HITL pending-surface cache, mirrors analysis_main/pipeline_main (F13).
+# AgentCoreMemorySaver sessions re-derive the pending surface from the checkpoint on every
+# resume instead (see `_restore_from_memory`), so they never need an entry here.
+_pending = PendingInterrupts()
 
 
 @lru_cache(maxsize=1)
@@ -57,6 +78,16 @@ async def _research_checkpoint_context(user_id: str, session_id: str):
     config = {"configurable": {"thread_id": session_id, "actor_id": user_id}}
     checkpoint = await persistent.aget_tuple(config)
     return persistent, checkpoint is not None, True
+
+
+async def _research_long_term_context(user_id: str, prompt: str) -> list[str]:
+    """Load only this actor's memory when the experimental read path is enabled."""
+    # ADR: moved to shared/memory/turns.py (F11) | same env vars, generic across specialist agents
+    from shared.memory.turns import load_long_term_context
+
+    return await load_long_term_context(
+        user_id, prompt, enabled_env="CEI_RESEARCH_LONG_TERM_ENABLED", memory_id_env="CEI_RESEARCH_MEMORY_ID",
+    )
 
 
 def _runtime_port() -> int:
@@ -105,29 +136,146 @@ def _format_trace(trace_entries: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+async def _restore_from_memory(*, user_id, session_id, saver, graph, pending) -> bool:
+    """B82 expiry check for the AgentCoreMemorySaver path.
+
+    Unlike `restore_for_resume` (used by the local `InMemorySaver` path), the persistent
+    saver already *is* the durable store across processes — there is no separate
+    ChatHistoryStore snapshot to restore. `aget_tuple` tells us whether AgentCore Memory's
+    own short-term event expiry (B82, ~365 days) has already removed the checkpoint.
+    """
+    config = {"configurable": {"thread_id": session_id, "actor_id": user_id}}
+    checkpoint = await saver.aget_tuple(config)
+    if checkpoint is None:
+        return False
+    snapshot = await graph.aget_state(config)
+    interrupts = list(getattr(snapshot, "interrupts", None) or [])
+    if not interrupts:
+        for task in getattr(snapshot, "tasks", None) or []:
+            interrupts.extend(getattr(task, "interrupts", None) or [])
+    surface = extract_interrupt_surface({"__interrupt__": interrupts})
+    if isinstance(surface, MappingABC):
+        pending.register(session_id, surface)
+    return True
+
+
+def _resume_result_envelope(session_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the completed-turn envelope for a resumed research run (mirrors the `op=run` shape)."""
+    text = final_ai_text(result.get("messages", []))
+    retrieved = result.get("retrieved_results", [])
+    if text is None:
+        text = "No response generated."
+        return {
+            "result": text,
+            "text": text,
+            "ui": build_research_surface(
+                text, surface_id="research-final", retrieved_results=retrieved,
+                document=result.get("response_document"),
+            ).model_dump(mode="json"),
+        }
+    trace_text = _format_trace(result.get("trace", []))
+    log.info(f"Research agent complete (resume): session={session_id}, length={len(text)}")
+    return {
+        "result": text + trace_text,
+        "text": text,
+        "ui": build_research_surface(
+            text, surface_id="research-final", retrieved_results=retrieved,
+            document=result.get("response_document"),
+        ).model_dump(mode="json"),
+    }
+
+
+async def _resume(payload, context, session_id: str, user_id: str) -> Dict[str, Any]:
+    """`op: resume` (F13): always a buffered JSON envelope, delivered over the existing
+
+    STREAM-mode `/ui-actions` Lambda (`backend/lambdas/ui-actions/index.js`) for the long-running
+    case — never a second SSE stream, regardless of whether the original run used `stream: true`.
+    This keeps `/ui-actions`'s existing `response.json()` relay unchanged; see the F13 report for
+    why re-opening SSE mid-resume was out of scope here.
+    """
+    from research.graph import compile_graph
+
+    # ADR: skip `_research_checkpoint_context`'s own `aget_tuple` probe | it exists to decide
+    # whether to rehydrate text history for a brand-new persistent session, which a resume
+    # never does; `_restore_from_memory` below makes the one `aget_tuple` call a resume needs.
+    persistent_saver = _persistent_research_checkpointer()
+    persistent = persistent_saver is not None
+    saver = persistent_saver if persistent else _checkpointer
+    graph = compile_graph(checkpointer=saver)
+    pending = PendingInterrupts() if persistent else _pending
+    restore = _restore_from_memory if persistent else None
+    kwargs: Dict[str, Any] = {}
+    if restore is not None:
+        kwargs["restore"] = restore
+
+    action, terminal = await resolve_resume_action(
+        payload, session_id=session_id, user_id=user_id, checkpointer=saver, graph=graph,
+        pending=pending, is_cold=True if persistent else session_id not in _thread_ids, **kwargs,
+    )
+    if terminal is not None:
+        return terminal
+
+    config = {"configurable": {"thread_id": session_id, "actor_id": user_id}}
+    if not persistent:
+        _touch_thread(session_id)
+    with gateway_request_context(context, user_id, session_id):
+        result = await graph.ainvoke(Command(resume=resume_value(action)), config=config)
+
+    surface = extract_interrupt_surface(result)
+    response = action_response(action, "completed")
+    if surface is not None:
+        pending.register(session_id, surface)
+        envelope = awaiting_envelope(surface, "Waiting for your answer.")
+    else:
+        if not persistent:
+            _pending.clear(session_id)
+        envelope = {**_resume_result_envelope(session_id, result), "status": "completed"}
+    envelope["action_response"] = response
+    await end_turn(
+        saver=None if persistent else saver, user_id=user_id, session_id=session_id, envelope=envelope,
+        retrieved_results=result.get("retrieved_results"), trace=result.get("trace"),
+    )
+    return envelope
+
+
 @app.entrypoint
 @guarded_entrypoint  # UUID session id + verified caller + ownership, before any session work
 async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
+    session_id = session.session_id
+    user_id = session.user_id
+    op = parse_op(payload)
+
+    if op is RuntimeOp.JOB_STATUS:
+        raise ValueError("job_status is not supported by the Research runtime")
+
+    if op is RuntimeOp.RESUME:
+        return await _resume(payload, context, session_id, user_id)
+
     prompt = payload.get("prompt", "")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
 
-    session_id = session.session_id
-    user_id = session.user_id
-    mode: str = payload.get("mode", "science")
-
-    if mode not in ("science", "business"):
-        mode = "science"
+    try:
+        turn = await resolve_turn_config(runtime_history.get_recorder(), user_id=user_id, session_id=session_id,
+                                         initial_mode=payload.get("mode"))
+    except ModelPolicyError:
+        if payload.get("stream") is True:
+            return StreamingResponse(_settings_error_stream(), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
+        return error_response(400, "This chat's settings are unavailable.")
+    mode, model_id = turn.mode, turn.model_id
 
     from research.graph import compile_graph
 
     if payload.get("stream") is True:
         return StreamingResponse(
-            _begin_stream_research(context, session, prompt, mode),
+            _begin_stream_research(context, session, prompt, mode, model_id),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
         )
 
+    with gateway_request_context(context, user_id, session_id):
+        memories = await _research_long_term_context(user_id, prompt)
     saver, warm, persistent = await _research_checkpoint_context(user_id, session_id)
     # Legacy in-memory mode restores snapshots; AgentCore Memory owns its own checkpoints.
     history = await begin_turn(
@@ -136,6 +284,7 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         prompt=prompt,
         agent_type="research",
         mode=mode,
+        model_id=model_id,
         warm=warm,
         saver=None if persistent else saver,
     )
@@ -147,6 +296,8 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         # D16: history is dynamic content — it rides in messages, after the cached system prompt/tools
         "messages": [*history, HumanMessage(content=prompt)],
         "mode": mode,
+        "model_id": model_id,
+        "long_term_context": memories,
         "user_id": user_id,
         "session_id": session_id,
         "query": prompt,
@@ -155,6 +306,8 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         "stream": False,
         "grounding_pending": False,
         "triage_plan": None,
+        "clarification_answer": None,
+        "clarified": False,
         "retrieved_results": [],
         "synthesis": "",
         "response_document": None,
@@ -207,23 +360,33 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     return response
 
 
-async def _begin_stream_research(context, session, prompt, mode):
+async def _settings_error_stream():
+    """Report settings races as a bounded SSE error without exposing model IDs."""
+    events = ResearchEventStream()
+    yield events.begin("research-final")
+    yield events.emit("error", code="model_unavailable", message="This chat's settings are unavailable.")
+
+
+async def _begin_stream_research(context, session, prompt, mode, model_id):
     """Create async storage clients on the same loop that consumes the response."""
     from research.graph import compile_graph
 
     try:
         # Verify the forwarded token before making a history mutation.
         with gateway_request_context(context, session.user_id, session.session_id):
+            memories = await _research_long_term_context(session.user_id, prompt)
             saver, warm, persistent = await _research_checkpoint_context(session.user_id, session.session_id)
             history = await begin_turn(user_id=session.user_id, session_id=session.session_id, prompt=prompt,
-                                       agent_type="research", mode=mode, warm=warm,
+                                       agent_type="research", mode=mode, model_id=model_id, warm=warm,
                                        saver=None if persistent else saver)
             if not persistent:
                 _touch_thread(session.session_id)
             graph = compile_graph(checkpointer=saver)
-            initial = {"messages": [*history, HumanMessage(content=prompt)], "mode": mode,
+            initial = {"messages": [*history, HumanMessage(content=prompt)], "mode": mode, "model_id": model_id,
+                       "long_term_context": memories,
                        "user_id": session.user_id, "session_id": session.session_id, "query": prompt,
-                       "triage_plan": None, "retrieved_results": [], "synthesis": "",
+                       "triage_plan": None, "clarification_answer": None, "clarified": False,
+                       "retrieved_results": [], "synthesis": "",
                        "response_document": None, "trace": [], "stream": True,
                        "grounding_pending": False}
             config = {"configurable": {"thread_id": session.session_id, "actor_id": session.user_id}}
@@ -277,7 +440,12 @@ async def _stream_research(graph, initial_state, graph_config, context, session,
                     if isinstance(token_output, int) and token_output > 0:
                         output_tokens += token_output
                 traces_sent = len(entries)
-                if not preview_started and value.get("triage_plan"):
+                # B72: a clarify pause is about to end this stream (see the interrupt check below);
+                # do not start the answer surface before knowing triage will actually retrieve.
+                needs_clarify = bool(value.get("triage_plan")) and not value.get("clarified") and (
+                    not value["triage_plan"].selected_sources or value["triage_plan"].ambiguous
+                )
+                if not preview_started and value.get("triage_plan") and not needs_clarify:
                     from research.nodes import estimate_research_duration_seconds
                     if estimate_research_duration_seconds(value["triage_plan"]) > 600:
                         yield events.emit("error", code="service_unavailable",
@@ -310,10 +478,27 @@ async def _stream_research(graph, initial_state, graph_config, context, session,
                 # Emit status only after real node updates, not synthetic output chunks.
                 if value.get("synthesis"):
                     yield events.emit("progress", status="verifying", step_label="Preparing the answer")
-                elif value.get("triage_plan"):
+                elif value.get("triage_plan") and not needs_clarify:
                     yield events.emit("progress", status="running", step_label="Searching sources")
         if final_state is None:
             raise RuntimeError("research graph returned no state")
+
+        # B72/B56: triage's `clarify` pause ends the stream here with `hitl_request`, not `surface_end`.
+        state_snapshot = await graph.aget_state(graph_config)
+        interrupts = list(getattr(state_snapshot, "interrupts", None) or [])
+        if not interrupts:
+            for task in getattr(state_snapshot, "tasks", None) or []:
+                interrupts.extend(getattr(task, "interrupts", None) or [])
+        pending_surface = extract_interrupt_surface({"__interrupt__": interrupts})
+        if pending_surface is not None:
+            if not persistent:
+                _pending.register(session.session_id, pending_surface)
+            yield events.emit("hitl_request", **pending_surface)
+            await end_turn(
+                saver=None if persistent else saver, user_id=session.user_id, session_id=session.session_id,
+                envelope=awaiting_envelope(pending_surface, "Waiting for your answer."), prompt=prompt,
+            )
+            return
         yield events.emit("usage", input_tokens=input_tokens, output_tokens=output_tokens,
                           total_tokens=input_tokens + output_tokens)
         text = final_ai_text(final_state.get("messages", [])) or "No response generated."

@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { buildStacks } from '../lib/app';
 import { DeployConfig, DEFAULT_LIMITS } from '../lib/config/deploy-config';
+import { memoSynth } from './helpers/memo-synth';
 
 const FIXTURE_ASSET_PATH = path.join(__dirname, 'fixtures', 'spa');
 
@@ -16,9 +17,20 @@ function testConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
     adminEmail: 'admin@example.com',
     limits: DEFAULT_LIMITS,
     webSearchEnabled: true,
+    accountDeletionEnabled: false,
     allowLocalhostCallback: false,
     ...overrides,
   };
+}
+
+// ADR: tests that only read backend/edgeWaf share one build keyed by config | a test that calls
+// app.synth() itself (to resolve cross-region custom resources) keeps its own build
+function built(overrides: Partial<DeployConfig> = {}) {
+  return memoSynth(JSON.stringify(testConfig(overrides)), () => {
+    const app = new cdk.App();
+    const { edgeWaf, backend } = buildStacks(app, testConfig(overrides), FIXTURE_ASSET_PATH);
+    return { app, edgeWaf, backend, backendTemplate: Template.fromStack(backend), edgeWafTemplate: Template.fromStack(edgeWaf!) };
+  });
 }
 
 describe('buildStacks (the same wiring bin/backend.ts uses)', () => {
@@ -37,8 +49,7 @@ describe('buildStacks (the same wiring bin/backend.ts uses)', () => {
   });
 
   it('creates EdgeWafStack in us-east-1 and BackendStack in the deploy Region (not us-east-1)', () => {
-    const app = new cdk.App();
-    const { edgeWaf, backend } = buildStacks(app, testConfig({ region: 'eu-west-1' }), FIXTURE_ASSET_PATH);
+    const { edgeWaf, backend } = built({ region: 'eu-west-1' });
 
     expect(edgeWaf).toBeDefined();
     expect(edgeWaf!.stackName).toBe('EdgeWafStack');
@@ -48,19 +59,16 @@ describe('buildStacks (the same wiring bin/backend.ts uses)', () => {
   });
 
   it('attaches the EdgeWafStack web ACL to the BackendStack CloudFront distribution', () => {
-    const app = new cdk.App();
-    const { backend } = buildStacks(app, testConfig({ region: 'eu-west-1' }), FIXTURE_ASSET_PATH);
-    const template = Template.fromStack(backend);
-    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+    const { backendTemplate } = built({ region: 'eu-west-1' });
+    backendTemplate.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({ WebACLId: Match.anyValue() }),
     });
   });
 
   it('sends the us-east-1 WAF alarm to the shared topic in the application region', () => {
-    const app = new cdk.App();
-    const { edgeWaf, backend } = buildStacks(app, testConfig({ region: 'eu-west-1' }), FIXTURE_ASSET_PATH);
-    Template.fromStack(backend).hasResourceProperties('AWS::SNS::Topic', { TopicName: 'cei-life-sciences-alerts' });
-    const alarms = Object.values(Template.fromStack(edgeWaf!).findResources('AWS::CloudWatch::Alarm')) as any[];
+    const { backendTemplate, edgeWafTemplate } = built({ region: 'eu-west-1' });
+    backendTemplate.hasResourceProperties('AWS::SNS::Topic', { TopicName: 'cei-life-sciences-alerts' });
+    const alarms = Object.values(edgeWafTemplate.findResources('AWS::CloudWatch::Alarm')) as any[];
     expect(alarms).toHaveLength(1);
     const serialized = JSON.stringify(alarms[0].Properties);
     expect(serialized).toContain('AWS/WAFV2');

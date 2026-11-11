@@ -1,6 +1,6 @@
 # F05 — Research agent live
 
-Status: in progress (isolated foundations; production route and live validation pending) | Depends on: F3, F4, S1 | Decisions: B3, B15, B17, B22, B23/B79 (10-minute threshold, decided), B26, B28, B30, B85, B100 | Specs: [`../specs/agents.md`](../specs/agents.md) §1 (Research Agent), §6 (cross-agent mechanisms), §7 (gap table), [`../specs/architecture.md`](../specs/architecture.md) §2.1, [`../specs/api.md`](../specs/api.md) (`/chat/stream`), [`../specs/streaming-protocol.md`](../specs/streaming-protocol.md) (base transport, not yet the full 1.2 UI wiring — that's F6)
+Status: in progress (Research runtime, Session Router, Session Runner and `/chat/stream` built in CDK; Cedar `ENFORCE` and live validation pending) | Depends on: F3, F4, S1 | Decisions: B3, B15, B17, B22, B23/B79 (10-minute threshold, decided), B26, B28, B30, B85, B100 | Specs: [`../specs/agents.md`](../specs/agents.md) §1 (Research Agent), §6 (cross-agent mechanisms), §7 (gap table), [`../specs/architecture.md`](../specs/architecture.md) §2.1, [`../specs/api.md`](../specs/api.md) (`/chat/stream`), [`../specs/streaming-protocol.md`](../specs/streaming-protocol.md) (base transport, not yet the full 1.2 UI wiring — that's F6)
 
 ## Goal
 

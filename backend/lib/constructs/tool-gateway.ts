@@ -15,6 +15,10 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { ToolPolicyMode } from '../config/deploy-config';
 import { DataSourceLayer } from './data-source-layer';
+import { cedarPermit } from './cedar-policy';
+import { LifeSciencesOperations } from './life-sciences-operations';
+
+export { cedarPermit } from './cedar-policy';
 
 const LAMBDAS_DIR = path.join(__dirname, '..', '..', 'lambdas');
 
@@ -46,16 +50,6 @@ export function assertNoScopeCollisions(scopeNames: string[]): void {
   }
 }
 
-/**
- * One Cedar permit per Gateway target (B69). With a scope, the token's space-separated `scope` claim must
- * contain it; without one (a B70 `common` target) every authenticated caller is permitted.
- * Shape proven by S2 (.agents/phases/findings/S2.md).
- */
-export function cedarPermit(targetName: string, gatewayArn: string, scope?: string): string {
-  const condition = scope ? ` when { principal.hasTag("scope") && principal.getTag("scope") like "*${scope}*" }` : '';
-  return `permit(principal is AgentCore::OAuthUser, action in AgentCore::Action::"${targetName}", resource == AgentCore::Gateway::"${gatewayArn}")${condition};`;
-}
-
 export interface ToolGatewayProps {
   userPool: cognito.UserPool;
   /** `https://<prefix>.auth.<region>.amazoncognito.com` — the token endpoint is `<this>/oauth2/token`. */
@@ -71,7 +65,15 @@ export interface ToolGatewayProps {
   refreshCallerRoleArns?: string[];
   activeRunsTable?: dynamodb.ITable;
   metadataTable?: dynamodb.ITable;
+  /** F16 Job ID Store: a background job refresh is authorized by its active job record. */
+  jobTable?: dynamodb.ITable;
   spaClientId?: string;
+  /**
+   * B44/B45: true only when both the deploy config asked for Web Search and the Region gate
+   * (region-capabilities.ts) allowed it — `scripts/preflight.ts --write` bakes both checks into
+   * this one value, so this construct does not re-check the Region.
+   */
+  webSearchEnabled?: boolean;
 }
 
 /**
@@ -86,7 +88,12 @@ export class ToolGateway extends Construct {
   public readonly preTokenFunction: lambda.Function;
   public readonly gatewayLogGroup: logs.ILogGroup;
   public readonly sourceFunctions: Record<string, lambda.Function> = {};
+  public readonly operationsFunction: lambda.DockerImageFunction;
+  public readonly ncbiFunction: lambda.Function;
+  public readonly ncbiRateTable: dynamodb.Table;
   public readonly scopeNames: string[];
+  /** B44/B86: present only when webSearchEnabled is true (region gate + config both allowed it). */
+  public readonly webSearchTarget?: agentcore.CfnGatewayTarget;
 
   constructor(scope: Construct, id: string, props: ToolGatewayProps) {
     super(scope, id);
@@ -133,6 +140,9 @@ export class ToolGateway extends Construct {
     if (props.activeRunsTable && props.metadataTable) {
       refreshRole.addToPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [props.activeRunsTable.tableArn, props.metadataTable.tableArn] }));
     }
+    if (props.jobTable) {
+      refreshRole.addToPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [props.jobTable.tableArn] }));
+    }
 
     this.routerSecret = new secretsmanager.Secret(this, 'RouterM2MSecret', {
       description: 'Router M2M app client secret (F4, B30). Readable only by the Router and token-refresh roles.',
@@ -171,6 +181,14 @@ export class ToolGateway extends Construct {
     // ---------------------------------------------------------------
 
     const dataSourceLayer = new DataSourceLayer(this, 'DataSourceLayer');
+    this.ncbiRateTable = new dynamodb.Table(this, 'NcbiRateLimiter', {
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      timeToLiveAttribute: 'expires_at',
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
     for (const sourceId of sourceIds) {
       this.sourceFunctions[sourceId] = this.pythonFunction(`DataSource-${sourceId}`, `data-source-${sourceId}`, {
         layers: [dataSourceLayer.layer],
@@ -181,9 +199,20 @@ export class ToolGateway extends Construct {
         environment: {
           // The source Lambdas only call tool.fetch() (the real upstream call); no direct-mode switch is involved
           CEI_API_KEY_SECRET_PREFIX: 'cei/user-keys',
+          ...(sourceId === 'pubmed' ? { NCBI_RATE_LIMIT_TABLE: this.ncbiRateTable.tableName } : {}),
         },
       });
     }
+    this.sourceFunctions.pubmed.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:UpdateItem'], resources: [this.ncbiRateTable.tableArn],
+    }));
+    this.ncbiFunction = this.pythonFunction('NcbiReadOnly', 'ncbi', {
+      timeout: Duration.seconds(90), memorySize: 256,
+      environment: { NCBI_RATE_LIMIT_TABLE: this.ncbiRateTable.tableName },
+    });
+    this.ncbiFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:UpdateItem'], resources: [this.ncbiRateTable.tableArn],
+    }));
     // ADR: no Secrets Manager grant on the source Lambdas yet | Rationale: B99 — no user id reaches a Lambda
     // target until F18, so the user-key lookup never runs; F18 adds GetSecretValue on cei/user-keys/* with the
     // user-id mechanism | Alternative: granting now rejected — an unused read on every user's keys
@@ -205,14 +234,19 @@ export class ToolGateway extends Construct {
       }),
     });
     gatewayRole.addToPolicy(
-      new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: Object.values(this.sourceFunctions).map((fn) => fn.functionArn) }),
+      new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [...Object.values(this.sourceFunctions).map((fn) => fn.functionArn), this.ncbiFunction.functionArn] }),
     );
     // S2: GetPolicyEngine / AuthorizeAction / PartiallyAuthorizeActions are required; PartiallyAuthorizeActions filters tools/list
     gatewayRole.addToPolicy(new iam.PolicyStatement({ actions: ['bedrock-agentcore:GetPolicyEngine'], resources: [policyEngine.attrPolicyEngineArn] }));
     // ADR: gateway/* in the gateway role | Rationale: S2 — the role is a required Gateway property, so the Gateway ARN cannot be referenced without a cycle | Alternative: a fixed name in the ARN rejected — the service appends a random suffix
     gatewayRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ['bedrock-agentcore:AuthorizeAction', 'bedrock-agentcore:PartiallyAuthorizeActions'],
+        actions: [
+          'bedrock-agentcore:AuthorizeAction',
+          'bedrock-agentcore:PartiallyAuthorizeActions',
+          // B44: required for the Gateway role to invoke the Web Search built-in connector target
+          ...(props.webSearchEnabled ? ['bedrock-agentcore:InvokeWebSearch'] : []),
+        ],
         resources: [policyEngine.attrPolicyEngineArn, stack.formatArn({ service: 'bedrock-agentcore', resource: 'gateway', resourceName: '*' })],
       }),
     );
@@ -234,6 +268,38 @@ export class ToolGateway extends Construct {
       policyEngineConfiguration: { arn: policyEngine.attrPolicyEngineArn, mode: props.policyMode },
     });
     this.gateway.node.addDependency(gatewayRole);
+
+    // B42/B70: one deterministic target, gated by the shared common scope.
+    this.operationsFunction = new LifeSciencesOperations(this, 'LifeSciencesOperations', {
+      gateway: this.gateway, gatewayRole, policyEngine,
+    }).function;
+
+    const ncbiTools: Array<{ id: string; name: string; description: string;
+      properties: Record<string, { type: string }>; required: string[] }> = [
+      { id: 'taxonomy', name: 'lineage', description: 'Retrieve an NCBI taxonomy lineage by taxon name or ID.',
+        properties: { taxon: { type: 'string' } }, required: ['taxon'] },
+      { id: 'sequence', name: 'efetch', description: 'Retrieve an NCBI nucleotide or protein sequence by accession.',
+        properties: { accession: { type: 'string' }, database: { type: 'string' }, format: { type: 'string' } },
+        required: ['accession', 'database', 'format'] },
+    ];
+    for (const tool of ncbiTools) {
+      const targetName = `ncbi-${tool.id}`;
+      const target = new agentcore.CfnGatewayTarget(this, `NcbiTarget-${tool.id}`, {
+        name: targetName, gatewayIdentifier: this.gateway.attrGatewayIdentifier,
+        credentialProviderConfigurations: [{ credentialProviderType: 'GATEWAY_IAM_ROLE' }],
+        targetConfiguration: { mcp: { lambda: { lambdaArn: this.ncbiFunction.functionArn, toolSchema: { inlinePayload: [
+          { name: tool.name, description: tool.description,
+            inputSchema: { type: 'object', properties: tool.properties, required: tool.required } },
+        ] } } } },
+      });
+      target.node.addDependency(gatewayRole);
+      const policy = new agentcore.CfnPolicy(this, `PermitNcbi-${tool.id}`, {
+        name: `permit_ncbi_${tool.id}`, policyEngineId: policyEngine.attrPolicyEngineId,
+        definition: { cedar: { statement: cedarPermit(targetName, this.gateway.attrGatewayArn, fullScope(sourceScopeName('ncbi'))) } },
+        validationMode: 'IGNORE_ALL_FINDINGS',
+      });
+      policy.node.addDependency(target);
+    }
 
     for (const entry of schemas) {
       const fn = this.sourceFunctions[entry.sourceId];
@@ -267,8 +333,36 @@ export class ToolGateway extends Construct {
       // CreatePolicy validates the action against the target's tool schema
       policy.node.addDependency(target);
     }
-    // B70/B86: `common` targets (LS Ops, Web Search, KB retrieval) get an unconditional cedarPermit(target, arn)
-    // when F10/F12 add them; F4 has none, and CreatePolicy rejects a permit for a target that does not exist.
+    // ---------------------------------------------------------------
+    // B44/B86/B45: Web Search built-in connector target, created only when the Region gate and the
+    // deploy config both allow it (props.webSearchEnabled already encodes both -- see the prop doc).
+    // Decision (replaces the earlier "do not deploy an unpinned default" blocker, see
+    // .agents/decision-log.md): a plain, unpinned CfnGatewayTarget with a ConnectorSource, because
+    // CloudFormation's AWS::BedrockAgentCore::GatewayTarget ConnectorSource schema has no version
+    // field at all -- there is no CFN-expressible way to pin v1.2.0 (B44) short of a lifecycle-managed
+    // custom resource, which is not built here. The AWS-default connector version is accepted.
+    // ---------------------------------------------------------------
+    if (props.webSearchEnabled) {
+      this.webSearchTarget = new agentcore.CfnGatewayTarget(this, 'WebSearchTarget', {
+        name: 'web-search',
+        description: 'AgentCore Web Search built-in connector (B44) -- url/title/snippet only, no bulk storage',
+        gatewayIdentifier: this.gateway.attrGatewayIdentifier,
+        credentialProviderConfigurations: [{ credentialProviderType: 'GATEWAY_IAM_ROLE' }],
+        targetConfiguration: { mcp: { connector: { source: { connectorId: 'web-search' } } } },
+      });
+      this.webSearchTarget.node.addDependency(gatewayRole);
+
+      const webSearchPolicy = new agentcore.CfnPolicy(this, 'PermitWebSearch', {
+        name: 'permit_web_search',
+        policyEngineId: policyEngine.attrPolicyEngineId,
+        description: 'Permit the Web Search connector when the token carries cei-tools/common (B44/B70/B86)',
+        definition: { cedar: { statement: cedarPermit('web-search', this.gateway.attrGatewayArn, fullScope(COMMON_SCOPE_NAME)) } },
+        // ADR: IGNORE_ALL_FINDINGS | Rationale: same S2-proven setting used for every other cei-tools/common permit (lsops) | Alternative: FAIL_ON_ANY_FINDINGS rejected — untested on this permit
+        validationMode: 'IGNORE_ALL_FINDINGS',
+      });
+      webSearchPolicy.node.addDependency(this.webSearchTarget);
+    }
+    // Attachment retrieval is deferred for this iteration.
 
     // Policy decisions (LOG_ONLY "would deny") are only visible in the Gateway's vended APPLICATION_LOGS
     const gatewayLogGroup = new logs.LogGroup(this, 'GatewayLogs', {
@@ -310,6 +404,7 @@ export class ToolGateway extends Construct {
         ALLOWED_CALLER_ROLE_ARNS: (props.refreshCallerRoleArns ?? []).join(','),
         ACTIVE_RUNS_TABLE: props.activeRunsTable?.tableName ?? '',
         METADATA_TABLE: props.metadataTable?.tableName ?? '',
+        JOB_TABLE: props.jobTable?.tableName ?? '',
         USER_POOL_ID: props.userPool.userPoolId,
         SPA_CLIENT_ID: props.spaClientId ?? '',
       },
@@ -389,7 +484,7 @@ export class ToolGateway extends Construct {
       tracing: lambda.Tracing.ACTIVE,
       runtime: lambda.Runtime.PYTHON_3_14,
       handler: 'handler.handler',
-      code: lambda.Code.fromAsset(path.join(LAMBDAS_DIR, dir), { exclude: ['tests', '__pycache__', '*.pyc'] }),
+      code: lambda.Code.fromAsset(path.join(LAMBDAS_DIR, dir), { exclude: ['tests', 'test_*.py', '__pycache__', '*.pyc'] }),
       layers: options.layers,
       role,
       logGroup,

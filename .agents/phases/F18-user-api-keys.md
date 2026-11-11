@@ -1,5 +1,5 @@
 # F18 — User API keys
-Status: not started | Depends on: F4 | Decisions: B18, B20, B76, B78, B99 | Specs: ../specs/data-model.md, ../specs/api.md, ../specs/auth-and-tool-scope.md
+Status: partial (data-source Lambdas have key-lookup code only; no Secrets Manager grant, no settings routes, no key UI) | Depends on: F4 | Decisions: B18, B20, B76, B78, B99 | Specs: ../specs/data-model.md, ../specs/api.md, ../specs/auth-and-tool-scope.md
 
 ## Goal
 Let a user add their own, optional API key for a data source (for example NCBI) to get a higher rate limit, and see which sources they have configured — through a real Settings page and Secrets Manager, not a mock.
