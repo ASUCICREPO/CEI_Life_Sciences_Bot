@@ -35,6 +35,7 @@ from shared.persistence.chat_metadata import (
     SortKey,
     normalize_title,
 )
+from shared.persistence.account_gate import AccountGateRepository
 from shared.persistence.ownership import OwnershipCheckError, is_session_uuid, verify_session_owner
 from shared.persistence.user_metadata import UserMetadataRepository
 from shared.runtime import model_discovery
@@ -61,6 +62,7 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _repo: ChatMetadataRepository | None = None
 _history: ChatHistoryRepository | None = None
 _user_metadata: UserMetadataRepository | None = None
+_gate: AccountGateRepository | None = None
 
 
 def _repository() -> ChatMetadataRepository:
@@ -68,6 +70,13 @@ def _repository() -> ChatMetadataRepository:
     if _repo is None:
         _repo = ChatMetadataRepository()
     return _repo
+
+
+def _account_gate() -> AccountGateRepository:
+    global _gate
+    if _gate is None:
+        _gate = AccountGateRepository()
+    return _gate
 
 
 def _user_metadata_repository() -> UserMetadataRepository:
@@ -170,6 +179,9 @@ def _public(record: ChatMetadataRecord) -> dict[str, Any]:
 
 
 def _create(event: dict[str, Any], user_id: str) -> dict[str, Any]:
+    # B109/F19: a new session is a new run-starting write; the account-deleting gate blocks it.
+    if _account_gate().is_deleting(user_id):
+        raise ApiError(403, "forbidden", "This account is being deleted.")
     body = parse_json_body(event)
     _reject_unknown(body, {"title", "mode", "model_id", "agent_type"})
     if "title" not in body or "mode" not in body:

@@ -64,6 +64,7 @@ def stubs(monkeypatch):
             BillingMode="PAY_PER_REQUEST",
         )
         handler._repo = None
+        handler._gate = None
         handler._bedrock_client = _bedrock_stub([SONNET, HAIKU, BLOCKED])
         yield
 
@@ -100,6 +101,20 @@ def test_put_settings_round_trips():
     assert body == {"default_model_id": HAIKU, "default_mode": "business", "configured_sources": []}
     status, body, _ = call("GET", "/settings")
     assert status == 200 and body["default_model_id"] == HAIKU and body["default_mode"] == "business"
+
+
+def test_put_settings_is_blocked_once_the_account_deleting_gate_is_set():
+    from datetime import UTC, datetime, timedelta
+
+    from shared.persistence.account_gate import AccountGateRepository
+
+    now = datetime.now(UTC)
+    AccountGateRepository().write_gate("user-a", requested_at=now, sweep_at=now + timedelta(hours=9))
+    status, body, _ = call("PUT", "/settings", body={"default_model_id": HAIKU, "default_mode": "business"})
+    assert status == 403 and body["error"]["code"] == "forbidden"
+    # GET /settings is a read, not a run-starting write, and stays unaffected by the gate.
+    status, _, _ = call("GET", "/settings")
+    assert status == 200
 
 
 def test_put_settings_rejects_blocklisted_model():

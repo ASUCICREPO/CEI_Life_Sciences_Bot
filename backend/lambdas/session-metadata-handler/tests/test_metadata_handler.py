@@ -116,6 +116,7 @@ def tables(monkeypatch):
         handler._repo = None
         handler._history = None
         handler._user_metadata = None
+        handler._gate = None
         handler._bedrock_client = _bedrock_stub([DEFAULT_MODEL_ID])
         yield
 
@@ -175,6 +176,25 @@ def test_create_then_list_and_get():
 def test_created_session_ids_are_unique_uuids():
     created = {create(title=f"c{i}")["session_id"] for i in range(5)}
     assert len(created) == 5 and all(uuid.UUID(s).version == 4 for s in created)
+
+
+# -- B109/F19: the account-deleting gate blocks a new session before it blocks anything else -------------------
+
+
+def test_create_is_blocked_once_the_account_deleting_gate_is_set():
+    from datetime import UTC, datetime, timedelta
+
+    from shared.persistence.account_gate import AccountGateRepository
+
+    now = datetime.now(UTC)
+    AccountGateRepository().write_gate("user-a", requested_at=now, sweep_at=now + timedelta(hours=9))
+    status, body, _ = call("POST", "/sessions", sub="user-a", body={"title": "t", "mode": "science"})
+    assert status == 403 and body["error"]["code"] == "forbidden"
+
+
+def test_create_is_allowed_before_the_gate_is_set():
+    status, _, _ = call("POST", "/sessions", sub="user-a", body={"title": "t", "mode": "science"})
+    assert status == 201
 
 
 # -- F08: default model id applied on session create (no explicit selection) ------------------------------------
