@@ -21,6 +21,7 @@ function apiGatewayProxy(apiBaseUrl: string | undefined): Record<string, ProxyOp
     '/api/sessions': proxy,
     '/api/models': proxy,
     '/api/settings': proxy,
+    '/api/account': proxy,
   }
 }
 
