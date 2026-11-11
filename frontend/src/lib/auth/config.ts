@@ -10,6 +10,8 @@ export interface RuntimeConfig {
   apiBaseUrl?: string;
   /** Enable only after the Research streaming endpoint has been deployed and verified. */
   researchStreamingEnabled?: boolean;
+  /** Behind a flag, off by default (B109). Shows the Settings "Delete account" section. */
+  accountDeletionEnabled?: boolean;
   /** Direct AgentCore invocation URLs per agent. Absent entries → the relative '/api/agents/<name>' dev proxy. */
   agentUrls?: Partial<Record<AgentUrlKey, string>>;
 }
@@ -70,6 +72,7 @@ function validateRuntimeConfig(data: unknown): RuntimeConfig {
   const apiBaseUrl = validateApiBaseUrl(candidate.apiBaseUrl);
   if (apiBaseUrl) config.apiBaseUrl = apiBaseUrl;
   if (candidate.researchStreamingEnabled === true) config.researchStreamingEnabled = true;
+  if (candidate.accountDeletionEnabled === true) config.accountDeletionEnabled = true;
   const agentUrls = validateAgentUrls(candidate.agentUrls);
   if (agentUrls) config.agentUrls = agentUrls;
   return config;
