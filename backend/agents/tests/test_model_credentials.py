@@ -16,6 +16,9 @@ class _FakeModel:
 @pytest.fixture
 def capture(monkeypatch):
     monkeypatch.setattr(utils, "ChatBedrockConverse", _FakeModel)
+    # GuardScopedChatBedrockConverse is only used on the guardrail-configured path;
+    # patch it too so those tests capture kwargs the same way as the plain path.
+    monkeypatch.setattr(utils, "GuardScopedChatBedrockConverse", _FakeModel)
 
     def _build(cfg: AgentConfig) -> dict:
         monkeypatch.setattr(utils, "config", cfg)
@@ -51,3 +54,35 @@ def test_get_model_passes_profile_when_set(monkeypatch, capture) -> None:
 def test_get_model_uses_deployment_default(monkeypatch, capture) -> None:
     monkeypatch.setenv("CEI_DEFAULT_MODEL_ID", "example.model-v2")
     assert capture(AgentConfig())['model_id'] == "example.model-v2"
+
+
+def test_get_model_omits_guardrail_when_unset(monkeypatch, capture) -> None:
+    monkeypatch.delenv("CEI_GUARDRAIL_ID", raising=False)
+    monkeypatch.delenv("CEI_GUARDRAIL_VERSION", raising=False)
+    assert "guardrails" not in capture(AgentConfig())
+
+
+def test_get_model_wires_native_guardrail_when_configured(monkeypatch, capture) -> None:
+    monkeypatch.setenv("CEI_GUARDRAIL_ID", "gr-123")
+    monkeypatch.setenv("CEI_GUARDRAIL_VERSION", "3")
+    kwargs = capture(AgentConfig())
+    # B7: trace "disabled" so the Guardrail's own assessment never reaches the agent trace.
+    assert kwargs["guardrails"] == {
+        "guardrail_identifier": "gr-123", "guardrail_version": "3", "trace": "disabled",
+    }
+    # ADR: default is "required" | a guarded call with no opt-out must fail closed (B51)
+    assert kwargs["user_text_required"] is True
+
+
+def test_get_model_requires_both_guardrail_id_and_version(monkeypatch, capture) -> None:
+    monkeypatch.setenv("CEI_GUARDRAIL_ID", "gr-123")
+    monkeypatch.delenv("CEI_GUARDRAIL_VERSION", raising=False)
+    assert "guardrails" not in capture(AgentConfig())
+
+
+def test_get_model_user_text_false_opts_out_of_guard_requirement(monkeypatch, capture) -> None:
+    monkeypatch.setenv("CEI_GUARDRAIL_ID", "gr-123")
+    monkeypatch.setenv("CEI_GUARDRAIL_VERSION", "3")
+    monkeypatch.setattr(utils, "config", AgentConfig())
+    kwargs = utils.get_model(user_text=False).kwargs
+    assert kwargs["user_text_required"] is False

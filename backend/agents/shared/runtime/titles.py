@@ -2,33 +2,26 @@
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import logging
 
 from shared.config import config
 from shared.persistence.conversation import GENERATED_TITLE_CHARS, TitleGenerator
+from shared.runtime.guarded_input import user_turn
+from shared.runtime.model_policy import is_blocked
 
 log = logging.getLogger(__name__)
 
-# D3: models that must never be invoked by the application. Matched against the id with any
-# cross-Region inference-profile prefix ("us.", "eu.", "apac.", "global.") removed.
-BLOCKED_MODEL_PATTERNS: tuple[str, ...] = ("anthropic.claude-fable-5*", "anthropic.claude-mythos-*")
-_PROFILE_PREFIXES = ("us.", "eu.", "apac.", "global.")
-
-_PROMPT = (
+_PROMPT_HEADER = (
     "Write a short title (at most 6 words) for this conversation. Reply with the title only: no quotes, "
-    "no trailing punctuation.\n\nUser: {prompt}\n\nAssistant: {answer}"
+    "no trailing punctuation.\n\nUser: "
 )
 _EXCERPT_CHARS = 2000
 
 
 def is_blocked_model(model_id: str) -> bool:
-    base = model_id
-    for prefix in _PROFILE_PREFIXES:
-        if base.startswith(prefix):
-            base = base[len(prefix):]
-            break
-    return any(fnmatch.fnmatch(base, pattern) for pattern in BLOCKED_MODEL_PATTERNS)
+    # ADR: config.model_blocklist (D3 + CEI_BLOCKED_MODELS) | Rationale: B18 — one blocklist, one matching rule
+    # (shared/runtime/model_policy.is_blocked), shared with /models, session create, and the per-turn recheck.
+    return is_blocked(model_id, config.model_blocklist)
 
 
 def bedrock_title_generator(
@@ -36,15 +29,18 @@ def bedrock_title_generator(
 ) -> TitleGenerator:
     model = model_id or config.title_model_id
     if is_blocked_model(model):
-        raise ValueError(f"title model {model!r} is on the D3 blocklist")
+        raise ValueError(f"title model {model!r} is on the blocklist")
     timeout = timeout_seconds if timeout_seconds is not None else config.title_timeout_seconds
 
     async def generate(prompt: str, answer: str) -> str | None:
         from shared.utils import extract_tokens, get_model
 
         llm = get_model(model, max_tokens=32)
-        message = _PROMPT.format(prompt=prompt[:_EXCERPT_CHARS], answer=answer[:_EXCERPT_CHARS])
-        response = await asyncio.wait_for(llm.ainvoke(message), timeout=timeout)
+        # ADR: prompt is user-typed, the assistant's own answer is not | B51a scope
+        message = user_turn(
+            prompt[:_EXCERPT_CHARS], before=_PROMPT_HEADER, after=f"\n\nAssistant: {answer[:_EXCERPT_CHARS]}"
+        )
+        response = await asyncio.wait_for(llm.ainvoke([{"role": "user", "content": message}]), timeout=timeout)
         in_tok, out_tok = extract_tokens(response)
         log.info("chat title generated: tokens in=%s out=%s", in_tok, out_tok)
         content = response.content

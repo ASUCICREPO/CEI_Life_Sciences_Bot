@@ -2,22 +2,25 @@ import { defineConfig, loadEnv, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-// ADR: dev proxy for the deployed sessions API, keyed off CEI_API_BASE_URL (the ApiBaseUrl stack output,
+// ADR: dev proxy for the deployed REST API, keyed off CEI_API_BASE_URL (the ApiBaseUrl stack output,
 // https://<id>.execute-api.<region>.amazonaws.com/<stage>) | Rationale: local config.json has no absolute
-// apiBaseUrl, so the client calls same-origin /api/sessions and the dev server forwards it — no CORS from
+// apiBaseUrl, so the clients call same-origin /api/<route> and the dev server forwards it — no CORS from
 // localhost (gateway errors carry only the site origin). Not VITE_-prefixed: dev-server only, never bundled.
-function sessionsProxy(apiBaseUrl: string | undefined): Record<string, ProxyOptions> {
+function apiGatewayProxy(apiBaseUrl: string | undefined): Record<string, ProxyOptions> {
   if (!apiBaseUrl) return {}
   const url = new URL(apiBaseUrl)
   const stagePath = url.pathname.replace(/\/+$/, '')
+  const proxy: ProxyOptions = {
+    target: url.origin,
+    changeOrigin: true,
+    secure: true,
+    // /api/sessions/... -> /<stage>/sessions/...
+    rewrite: (path) => path.replace(/^\/api/, stagePath),
+  }
   return {
-    '/api/sessions': {
-      target: url.origin,
-      changeOrigin: true,
-      secure: true,
-      // /api/sessions/... -> /<stage>/sessions/...
-      rewrite: (path) => path.replace(/^\/api/, stagePath),
-    },
+    '/api/sessions': proxy,
+    '/api/models': proxy,
+    '/api/settings': proxy,
   }
 }
 
@@ -30,7 +33,7 @@ export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), '')
   if (command === 'serve' && !env.CEI_API_BASE_URL) {
     console.warn(
-      '[cei] CEI_API_BASE_URL is not set: /api/sessions is NOT proxied, so chat history and resume will fail locally. ' +
+      '[cei] CEI_API_BASE_URL is not set: /api/sessions, /api/models and /api/settings are NOT proxied, so chat history, resume and model/settings will fail locally. ' +
         'Set it to the ApiBaseUrl stack output in frontend/.env.local (see README "Local development").',
     )
   }
@@ -57,7 +60,7 @@ export default defineConfig(({ mode, command }) => {
           secure: true,
           rewrite: (path) => path.replace(/^\/ncbi-eutils/, '/entrez/eutils'),
         },
-        ...sessionsProxy(env.CEI_API_BASE_URL),
+        ...apiGatewayProxy(env.CEI_API_BASE_URL),
         // ADR: proxy local AgentCore runtimes by name | op-based /invocations
         // contract (B94-B98); long timeout covers run/resume tool calls.
         '/api/agents/research': {

@@ -22,6 +22,7 @@ from http_errors import (
     request_id,
     user_id_from_claims,
 )
+from shared.config import config
 from shared.persistence.chat_history import ChatHistoryRepository
 from shared.persistence.chat_metadata import (
     SEARCH_QUERY_MAX,
@@ -35,8 +36,22 @@ from shared.persistence.chat_metadata import (
     normalize_title,
 )
 from shared.persistence.ownership import OwnershipCheckError, is_session_uuid, verify_session_owner
+from shared.persistence.user_metadata import UserMetadataRepository
+from shared.runtime import model_discovery
 
 logger = get_logger(__name__)
+
+_bedrock_client: Any | None = None
+
+
+def _bedrock() -> Any:
+    global _bedrock_client
+    if _bedrock_client is None:
+        import boto3
+
+        _bedrock_client = boto3.client("bedrock", region_name=config.aws_region)
+    return _bedrock_client
+
 
 TITLE_MAX = 200
 PAGE_SIZE = 25  # chat history page size (GET /sessions default)
@@ -45,6 +60,7 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 _repo: ChatMetadataRepository | None = None
 _history: ChatHistoryRepository | None = None
+_user_metadata: UserMetadataRepository | None = None
 
 
 def _repository() -> ChatMetadataRepository:
@@ -52,6 +68,13 @@ def _repository() -> ChatMetadataRepository:
     if _repo is None:
         _repo = ChatMetadataRepository()
     return _repo
+
+
+def _user_metadata_repository() -> UserMetadataRepository:
+    global _user_metadata
+    if _user_metadata is None:
+        _user_metadata = UserMetadataRepository()
+    return _user_metadata
 
 
 def _history_repository() -> ChatHistoryRepository:
@@ -86,7 +109,30 @@ def _validate_mode(value: Any) -> ChatMode:
 def _validate_model_id(value: Any) -> str:
     if not isinstance(value, str) or not MODEL_ID_PATTERN.match(value):
         raise invalid_request("The model_id field is not a valid model identifier.")
+    # B18/MODEL_POLICY.md step 2: fail closed on both the blocklist and server-side discovery; an
+    # explicitly rejected selection must not silently fall back to the default (shared/runtime/turn_config.py).
+    if not model_discovery.is_model_available(value, _bedrock(), config.model_blocklist):
+        raise invalid_request("The model_id field is not an available model.")
     return value
+
+
+def _default_model_id(user_id: str) -> str:
+    """Resolve the model_id for a session created with no explicit selection (F8 acceptance criteria).
+
+    Prefers the caller's saved UserMetadataTable default, re-checked against the live blocklist/discovery
+    (same fail-closed rule as `_validate_model_id`). Falls back to the global default (`config.default_model_id`)
+    on a stale/blocklisted saved value, no saved profile, or a UserMetadataTable read failure — a create must
+    never fail because of this lookup.
+    """
+    try:
+        profile = _user_metadata_repository().get(user_id)
+    except Exception:
+        logger.exception("user metadata read failed; using global default model", extra={"user_id": user_id})
+        return config.default_model_id
+    saved = profile.default_model_id if profile is not None else None
+    if saved is not None and model_discovery.is_model_available(saved, _bedrock(), config.model_blocklist):
+        return saved
+    return config.default_model_id
 
 
 def _reject_unknown(body: dict[str, Any], allowed: set[str]) -> None:
@@ -145,7 +191,7 @@ def _create(event: dict[str, Any], user_id: str) -> dict[str, Any]:
         user_id=user_id,
         title=_validate_title(body["title"]),
         mode=_validate_mode(body["mode"]),
-        model_id=_validate_model_id(body["model_id"]) if body.get("model_id") is not None else None,
+        model_id=_validate_model_id(body["model_id"]) if body.get("model_id") is not None else _default_model_id(user_id),
         agent_type=agent_type,
         created_at=now,
         updated_at=now,

@@ -1,5 +1,5 @@
 # F16 — Background jobs
-Status: not started | Depends on: F5, S3 | Decisions: B22, B23/B79, B24, B25, B28, B67 | Specs: ../specs/architecture.md, ../specs/data-model.md, ../specs/api.md
+Status: partial (Job ID Store, jobs routes, cancel and watchdog in CDK; async handoff and S3 proofs pending; see "Implementation status") | Depends on: F5, S3 | Decisions: B22, B23/B79, B24, B25, B28, B67 | Specs: ../specs/architecture.md, ../specs/data-model.md, ../specs/api.md
 
 ## Goal
 Let a run that will take more than 15 minutes finish as a background job instead of over SSE: an AgentCore Runtime **async session** (not Fargate — B25), tracked in a Job ID Store, checked by a Polling Lambda, and recovered by a watchdog if it goes stale.

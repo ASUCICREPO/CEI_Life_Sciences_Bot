@@ -9,16 +9,45 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+import os
 from datetime import datetime
 from typing import Any
 
 from shared.memory.long_term import MAX_RECORDS, MAX_RECORD_CHARS, fetch_long_term_context, record_conversation
+
+log = logging.getLogger(__name__)
 
 
 async def load_turn_memories(*, client: Any, memory_id: str | None, user_id: str, query: str) -> list[str]:
     """Retrieve exact-namespace records without blocking the runtime event loop."""
     return await asyncio.to_thread(fetch_long_term_context, client=client, memory_id=memory_id,
                                    user_id=user_id, query=query)
+
+
+async def load_long_term_context(user_id: str, prompt: str, *, enabled_env: str, memory_id_env: str) -> list[str]:
+    """Load one actor's memory, gated on a per-agent opt-in flag and memory id env var.
+
+    # ADR: generic helper, env var names supplied by the caller | each specialist agent gets
+    # its own CEI_<AGENT>_LONG_TERM_ENABLED/CEI_<AGENT>_MEMORY_ID pair, same off-by-default shape as Research.
+    """
+    if os.environ.get(enabled_env, "").lower() != "true":
+        return []
+    memory_id = os.environ.get(memory_id_env, "").strip()
+    if not memory_id:
+        return []
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+    from shared.config import config
+
+    client = boto3.client("bedrock-agentcore", region_name=config.aws_region)
+    try:
+        return await load_turn_memories(client=client, memory_id=memory_id, user_id=user_id, query=prompt)
+    except (BotoCoreError, ClientError) as exc:
+        # Memory is optional context; a service failure must not fail the turn.
+        # Validation errors (e.g. a foreign namespace) still propagate.
+        log.warning("long-term memory unavailable: %s", type(exc).__name__)
+        return []
 
 
 def render_untrusted_memories(records: list[str]) -> str:

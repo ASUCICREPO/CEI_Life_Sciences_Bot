@@ -32,6 +32,15 @@ export const AGENT_RUNTIMES = [
   { id: 'Pipeline', runtimeName: 'CEIPipelineManager', entrypoint: 'pipeline_main.py' },
 ] as const;
 
+// F11: each runtime reads its own memory id env var; opt-in recall flags (CEI_<AGENT>_LONG_TERM_ENABLED)
+// default off and are not set here, matching Research's existing off-by-default convention.
+const MEMORY_ID_ENV: Record<(typeof AGENT_RUNTIMES)[number]['id'], string> = {
+  Research: 'CEI_RESEARCH_MEMORY_ID',
+  Drafting: 'CEI_DRAFTING_MEMORY_ID',
+  Analysis: 'CEI_ANALYSIS_MEMORY_ID',
+  Pipeline: 'CEI_PIPELINE_MEMORY_ID',
+};
+
 // ADR: AgentCore Runtime is arm64 (Graviton) + PYTHON_3_12 (agentcore.json) | Rationale: CodeZip deps must be
 // manylinux aarch64 wheels for that interpreter, so they are resolved for the target, not the build host.
 // manylinux_2_28 (glibc 2.28): numpy 2.5 ships no manylinux2014 aarch64 wheels; the runtime image's glibc is newer
@@ -107,6 +116,12 @@ export const JOB_AGENT_TYPES = {
 export interface AgentRuntimesProps {
   /** Validated deployment default; absent only during environment-agnostic synth. */
   readonly defaultModelId?: string;
+  /** B18: deploy.sh/CDK-supplied extra blocklist patterns, merged with the fixed D3 defaults (shared/config.py). */
+  readonly blockedModelIds?: string[];
+  /** F8/B51: input-only PII Guardrail (model-guardrail.ts); undefined => get_model() attaches no Guardrail. */
+  readonly guardrailId?: string;
+  readonly guardrailVersion?: string;
+  readonly guardrailArn?: string;
   readonly userPool: cognito.IUserPool;
   readonly spaClient: cognito.IUserPoolClient;
   readonly chatMetadataTable: dynamodb.ITable;
@@ -120,6 +135,8 @@ export interface AgentRuntimesProps {
    * container as CEI_ALLOWED_ORIGINS, where shared/runtime/app_factory.py answers the CORS preflight.
    */
   readonly allowedOrigins: string[];
+  /** B44/B45: mirrors ToolGateway's prop of the same name -- true only when the Region gate and the deploy config both allow Web Search (reaches the container as CEI_WEB_SEARCH_ENABLED). */
+  readonly webSearchEnabled?: boolean;
 }
 
 /**
@@ -184,6 +201,9 @@ export class AgentRuntimes extends Construct {
     const environmentVariables: Record<string, string> = {
       CEI_AWS_REGION: stack.region,
       ...(props.defaultModelId ? { CEI_DEFAULT_MODEL_ID: props.defaultModelId } : {}),
+      CEI_BLOCKED_MODELS: (props.blockedModelIds ?? []).join(','),
+      ...(props.guardrailId ? { CEI_GUARDRAIL_ID: props.guardrailId } : {}),
+      ...(props.guardrailVersion ? { CEI_GUARDRAIL_VERSION: props.guardrailVersion } : {}),
       CEI_COGNITO_USER_POOL_ID: props.userPool.userPoolId,
       CEI_COGNITO_REGION: stack.region,
       CEI_COGNITO_APP_CLIENT_IDS: appClientIds,
@@ -205,6 +225,8 @@ export class AgentRuntimes extends Construct {
       // ADR: comma-joined string | Rationale: parsed by config.allowed_origins_list; same origin set as the
       // sessions API (API Gateway preflight + Lambda ALLOWED_ORIGINS) so all CORS layers agree
       CEI_ALLOWED_ORIGINS: cdk.Fn.join(',', props.allowedOrigins),
+      // B44/B86: shared/tools/data_sources.all_langchain_tools() only adds the web search tool when this is "true"
+      CEI_WEB_SEARCH_ENABLED: props.webSearchEnabled ? 'true' : 'false',
     };
 
     const runtimes = {} as Record<(typeof AGENT_RUNTIMES)[number]['id'], agentcore.Runtime>;
@@ -225,16 +247,22 @@ export class AgentRuntimes extends Construct {
         // Layer 2 needs the raw bearer token in-process (identity.py verifies it against the JWKS again)
         requestHeaderConfiguration: { allowlistedHeaders: ['Authorization'] },
         environmentVariables: def.id === 'Research'
-          ? { ...environmentVariables, CEI_RESEARCH_MEMORY_ID: researchMemory.attrMemoryId, CEI_REQUIRE_TOOL_GATEWAY: 'true' }
-          : environmentVariables,
+          ? {
+              ...environmentVariables,
+              [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId,
+              CEI_REQUIRE_TOOL_GATEWAY: 'true',
+            }
+          : { ...environmentVariables, [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId },
       });
-      if (def.id === 'Research') {
-        runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
-          actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent',
-            'bedrock-agentcore:RetrieveMemoryRecords'],
-          resources: [researchMemory.attrMemoryArn],
-        }));
-      }
+      // F11: all four runtimes can retrieve from the one shared Memory resource; only
+      // Research writes conversation events into it (B37 strategies, opt-in recall per agent).
+      runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: def.id === 'Research'
+          ? ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent',
+            'bedrock-agentcore:RetrieveMemoryRecords']
+          : ['bedrock-agentcore:RetrieveMemoryRecords'],
+        resources: [researchMemory.attrMemoryArn],
+      }));
       this.grantData(runtime, props);
       props.codeInterpreter.grantUse(runtime);
       runtime.role.addToPrincipalPolicy(
@@ -246,6 +274,13 @@ export class AgentRuntimes extends Construct {
           ],
         }),
       );
+      // F8/B51: the native guardrailConfig on every get_model() call (shared/utils.py) needs this on the
+      // model-invoking role; scoped to the one Guardrail ARN, not a wildcard.
+      if (props.guardrailArn) {
+        runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+          actions: ['bedrock:ApplyGuardrail'], resources: [props.guardrailArn],
+        }));
+      }
       NagSuppressions.addResourceSuppressions(
         runtime,
         [

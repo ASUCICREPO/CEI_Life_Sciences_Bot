@@ -42,6 +42,8 @@ class ComparisonsOutput(BaseModel):
 
 
 class AnalysisState(BaseAgentState):
+    # Loaded using the authenticated actor; never supplied by the model.
+    long_term_context: list[str]
     query: str
     analysis_type: AnalysisType | None
     competitors: list[str]

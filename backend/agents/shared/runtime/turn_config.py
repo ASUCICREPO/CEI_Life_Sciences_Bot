@@ -1,8 +1,10 @@
 """Resolve owner-scoped chat settings before starting a specialist turn.
 
-Model discovery and global-blocklist enforcement are not wired yet. Until that
-work is complete, only the configured runtime default is accepted;
-reject a different saved model instead of silently using the wrong one.
+B18: the user may select any non-blocklisted Bedrock model per chat. Real discovery
+(ListFoundationModels/ListInferenceProfiles) is done once, at write time, by the Lambdas
+that hold that IAM grant (models-settings-handler, session-metadata-handler — see
+shared/runtime/model_discovery.py and MODEL_POLICY.md step 2); this runtime's role does not,
+so every turn re-verifies only the blocklist, fail closed, rather than re-running discovery.
 """
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from shared.config import config
-from shared.runtime.model_policy import ModelPolicyError, select_mode
+from shared.runtime.model_policy import ModelPolicyError, is_blocked, select_mode
 
 
 @dataclass(frozen=True)
@@ -30,10 +32,11 @@ async def resolve_turn_config(recorder: Any, *, user_id: str, session_id: str,
         stored_mode = metadata.mode if metadata is not None else None
         mode = select_mode(stored_mode or initial_mode or "science")
         selected = metadata.model_id if metadata is not None else None
-        if selected is not None and selected != config.default_model_id:
+        candidate = selected if selected is not None else config.default_model_id
+        if is_blocked(candidate, config.model_blocklist):
             raise ModelPolicyError("Model unavailable")
         if metadata is None or (stored_mode is not None and selected is not None):
-            return TurnConfig(mode=mode, model_id=config.default_model_id)
+            return TurnConfig(mode=mode, model_id=candidate)
         metadata = await recorder.initialize_turn_settings(
             user_id=user_id, session_id=session_id,
             mode=mode if stored_mode is None else None,

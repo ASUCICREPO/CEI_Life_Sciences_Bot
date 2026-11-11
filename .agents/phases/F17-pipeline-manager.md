@@ -1,5 +1,5 @@
 # F17 — Pipeline Manager
-Status: not started | Depends on: F13, F16 | Decisions: B23/B79, B25, B54, B56, B71, B72, B83 | Specs: ../specs/agents.md, ../specs/architecture.md, ../specs/api.md
+Status: partial (MVP slice, B94/B102: Pipeline runtime in CDK, plan approval, durable Job ID Store; in-process dispatch; see "Implementation status") | Depends on: F13, F16 | Decisions: B23/B79, B25, B54, B56, B71, B72, B83 | Specs: ../specs/agents.md, ../specs/architecture.md, ../specs/api.md
 
 ## Goal
 Implement the Pipeline Manager: it plans a multi-step task across Research/Drafting/Analysis, gets the plan approved by the user in chat, runs the approved plan as an always-async job, and shows live step status on `/pipeline`.

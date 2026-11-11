@@ -1,11 +1,14 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { CEIUISurface } from '../cei-ui/cei-ui-surface';
 import { useAuth } from '../../lib/auth/AuthProvider';
-import type { AgentName } from '../../lib/agentClient';
+import type { AgentEnvelope, AgentName } from '../../lib/agentClient';
 import { openStream as defaultOpenStream, StreamError, type OpenStreamOptions } from '../../lib/stream/openStream';
 import { initialStreamState, reduceEvent, selectTree, type StreamInteraction, type StreamState } from '../../lib/stream/reducer';
 import type { StreamEvent } from '../../lib/stream/events';
 import { ThinkingBlock } from './ThinkingBlock';
+
+/** Called when a stream `hitl_request` card is answered; `seq` identifies which interaction. */
+export type StreamInteractionAction = (seq: number, envelope: AgentEnvelope) => void;
 
 export type StreamingSurfaceProps = {
   sessionId: string;
@@ -21,6 +24,10 @@ export type StreamingSurfaceProps = {
   onFinished?: (state: StreamState, connectionError: string | null) => void;
   /** Injected for tests. */
   openStreamImpl?: (options: OpenStreamOptions) => AsyncIterable<StreamEvent>;
+  /** Seq numbers of hitl interactions already answered (disables their card). */
+  answeredInteractions?: ReadonlySet<number>;
+  /** Called when a hitl interaction card is answered via POST /ui-actions. */
+  onInteractionAction?: StreamInteractionAction;
 };
 
 const PROGRESS_LABEL: Record<NonNullable<StreamState['progress']>['status'], string> = {
@@ -30,7 +37,7 @@ const PROGRESS_LABEL: Record<NonNullable<StreamState['progress']>['status'], str
   finalizing: 'Finalizing',
 };
 
-export function StreamingSurface({ sessionId, agent, body, url, messageId, onStateChange, onFinished, openStreamImpl }: StreamingSurfaceProps) {
+export function StreamingSurface({ sessionId, agent, body, url, messageId, onStateChange, onFinished, openStreamImpl, answeredInteractions, onInteractionAction }: StreamingSurfaceProps) {
   const { getAccessToken } = useAuth();
   const [state, dispatch] = useReducer(reduceEvent, initialStreamState);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -78,16 +85,28 @@ export function StreamingSurface({ sessionId, agent, body, url, messageId, onSta
     finishedCallback.current?.(state, connectionError);
   }, [state, connectionError]);
 
-  return <StreamView state={state} connectionError={connectionError} sessionId={sessionId} agent={agent} messageId={messageId} />;
+  return (
+    <StreamView
+      state={state}
+      connectionError={connectionError}
+      sessionId={sessionId}
+      agent={agent}
+      messageId={messageId}
+      answeredInteractions={answeredInteractions}
+      onInteractionAction={onInteractionAction}
+    />
+  );
 }
 
 /** Render a saved stream state without opening another network request. */
-export function StreamView({ state, connectionError, sessionId, agent, messageId }: {
+export function StreamView({ state, connectionError, sessionId, agent, messageId, answeredInteractions, onInteractionAction }: {
   state: StreamState;
   connectionError?: string | null;
   sessionId: string;
   agent: AgentName;
   messageId?: string;
+  answeredInteractions?: ReadonlySet<number>;
+  onInteractionAction?: StreamInteractionAction;
 }) {
   const tree = selectTree(state);
   const pendingGrounding = Object.values(state.grounding).filter((detail) => detail.status === 'pending').length;
@@ -112,7 +131,14 @@ export function StreamView({ state, connectionError, sessionId, agent, messageId
         </p>
       )}
       {state.interactions.map((interaction) => (
-        <InteractionCard key={interaction.seq} interaction={interaction} agent={agent} sessionId={sessionId} />
+        <InteractionCard
+          key={interaction.seq}
+          interaction={interaction}
+          agent={agent}
+          sessionId={sessionId}
+          answered={answeredInteractions?.has(interaction.seq) ?? false}
+          onAction={onInteractionAction}
+        />
       ))}
       {state.error && (
         <p className="rounded-md border border-border-subtle p-3 text-sm text-text-primary" role="alert">
@@ -128,13 +154,26 @@ export function StreamView({ state, connectionError, sessionId, agent, messageId
   );
 }
 
-// Render-only (A5): no /ui-actions post and no job polling happens from the stream view.
-function InteractionCard({ interaction, agent, sessionId }: { interaction: StreamInteraction; agent: AgentName; sessionId: string }) {
+// ADR: hitl_request cards post through /ui-actions, like the buffered path | job_handoff
+// stays render-only here (no polling); the chat navigates to /pipeline on the resumed envelope's job_id.
+function InteractionCard({ interaction, agent, sessionId, answered, onAction }: {
+  interaction: StreamInteraction;
+  agent: AgentName;
+  sessionId: string;
+  answered: boolean;
+  onAction?: StreamInteractionAction;
+}) {
   if (interaction.kind === 'hitl') {
     return (
       <section className="rounded-lg border border-border-subtle bg-surface-elevated p-3 space-y-2" aria-label="Waiting for you">
-        <p className="text-sm font-medium text-text-primary">Waiting for you</p>
-        <CEIUISurface surface={interaction.surface} agent={agent} sessionId={sessionId} disabled />
+        <p className="text-sm font-medium text-text-primary">{answered ? 'Answered' : 'Waiting for you'}</p>
+        <CEIUISurface
+          surface={interaction.surface}
+          agent={agent}
+          sessionId={sessionId}
+          disabled={answered}
+          onAction={onAction ? (envelope) => onAction(interaction.seq, envelope) : undefined}
+        />
       </section>
     );
   }

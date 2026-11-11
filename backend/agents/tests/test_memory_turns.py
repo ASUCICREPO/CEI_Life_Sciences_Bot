@@ -5,7 +5,40 @@ from unittest.mock import Mock
 
 import pytest
 
-from shared.memory.turns import load_turn_memories, record_completed_turn, render_untrusted_memories, turn_event_token
+from shared.memory.turns import (
+    load_long_term_context,
+    load_turn_memories,
+    record_completed_turn,
+    render_untrusted_memories,
+    turn_event_token,
+)
+
+
+def test_generic_load_uses_the_caller_supplied_env_var_names(monkeypatch):
+    """Any specialist agent can reuse the same helper with its own env var pair."""
+    client = Mock()
+    client.retrieve_memory_records.return_value = {"memoryRecordSummaries": [
+        {"content": {"text": "prefers concise answers"}, "namespaces": ["/users/alice/"]}]}
+    monkeypatch.setenv("CEI_DRAFTING_LONG_TERM_ENABLED", "true")
+    monkeypatch.setenv("CEI_DRAFTING_MEMORY_ID", "memory-id")
+    monkeypatch.delenv("CEI_RESEARCH_LONG_TERM_ENABLED", raising=False)
+    monkeypatch.setattr("boto3.client", lambda *_a, **_k: client)
+    records = asyncio.run(load_long_term_context(
+        "alice", "question", enabled_env="CEI_DRAFTING_LONG_TERM_ENABLED", memory_id_env="CEI_DRAFTING_MEMORY_ID",
+    ))
+    assert records == ["prefers concise answers"]
+
+
+def test_generic_load_is_off_by_default_per_agent(monkeypatch):
+    monkeypatch.delenv("CEI_ANALYSIS_LONG_TERM_ENABLED", raising=False)
+    monkeypatch.setenv("CEI_ANALYSIS_MEMORY_ID", "memory-id")
+    client = Mock()
+    monkeypatch.setattr("boto3.client", client)
+    records = asyncio.run(load_long_term_context(
+        "alice", "question", enabled_env="CEI_ANALYSIS_LONG_TERM_ENABLED", memory_id_env="CEI_ANALYSIS_MEMORY_ID",
+    ))
+    assert records == []
+    client.assert_not_called()
 
 
 class FakeFence:

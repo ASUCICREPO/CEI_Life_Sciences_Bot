@@ -17,10 +17,20 @@ def test_existing_session_settings_override_payload():
     recorder.session_metadata.assert_awaited_once_with(user_id="owner", session_id="session")
 
 
-def test_unverified_saved_model_is_rejected():
-    recorder = SimpleNamespace(session_metadata=AsyncMock(return_value=SimpleNamespace(mode="science", model_id="other-model")))
+def test_blocklisted_saved_model_is_rejected():
+    # B18: the global blocklist (D3 defaults + CEI_BLOCKED_MODELS), not "any model other than the default".
+    recorder = SimpleNamespace(session_metadata=AsyncMock(
+        return_value=SimpleNamespace(mode="science", model_id="anthropic.claude-fable-5-v1")))
     with pytest.raises(ModelPolicyError):
         asyncio.run(resolve_turn_config(recorder, user_id="owner", session_id="session", initial_mode="science"))
+
+
+def test_non_default_non_blocklisted_saved_model_is_accepted():
+    # B18: the user may select any non-blocklisted model per chat; this is no longer limited to the runtime default.
+    recorder = SimpleNamespace(session_metadata=AsyncMock(
+        return_value=SimpleNamespace(mode="science", model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0")))
+    result = asyncio.run(resolve_turn_config(recorder, user_id="owner", session_id="session", initial_mode="science"))
+    assert result.model_id == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 def test_legacy_settings_are_initialized_and_race_winner_is_rechecked():
@@ -75,13 +85,13 @@ def test_research_turn_uses_saved_mode_and_model(monkeypatch):
     assert seen["mode"] == "business" and seen["model_id"] == config.default_model_id
 
 
-def test_research_rejects_unverified_model_before_history_write(monkeypatch):
+def test_research_rejects_blocklisted_model_before_history_write(monkeypatch):
     import main
     from shared.runtime import history
 
     recorder = history.get_recorder()
     monkeypatch.setattr(recorder, "session_metadata", AsyncMock(return_value=SimpleNamespace(
-        mode="science", model_id="unverified-model")))
+        mode="science", model_id="anthropic.claude-mythos-5-v1")))
     start_turn = AsyncMock()
     monkeypatch.setattr(recorder, "start_turn", start_turn)
     monkeypatch.setattr(history, "get_recorder", lambda: recorder)
@@ -89,17 +99,17 @@ def test_research_rejects_unverified_model_before_history_write(monkeypatch):
                               request_headers={"Authorization": "Bearer test-token:test-user"})
     response = asyncio.run(main.invoke({"prompt": "question"}, context))
     assert response.status_code == 400
-    assert b"unverified-model" not in response.body
+    assert b"anthropic.claude-mythos-5-v1" not in response.body
     start_turn.assert_not_awaited()
 
 
-def test_stream_reports_racing_model_change_without_leaking_id(monkeypatch):
+def test_stream_reports_racing_blocklist_change_without_leaking_id(monkeypatch):
     import main
     from shared.runtime import history
 
     recorder = history.get_recorder()
     monkeypatch.setattr(recorder, "session_metadata", AsyncMock(return_value=SimpleNamespace(
-        mode="science", model_id="private-model")))
+        mode="science", model_id="anthropic.claude-mythos-5-v1")))
     monkeypatch.setattr(history, "get_recorder", lambda: recorder)
     context = SimpleNamespace(session_id="0b0c4f7e-3333-4a33-8a33-000000000001",
                               request_headers={"Authorization": "Bearer test-token:test-user"})
@@ -109,7 +119,7 @@ def test_stream_reports_racing_model_change_without_leaking_id(monkeypatch):
         return b"".join([chunk async for chunk in response.body_iterator])
 
     output = asyncio.run(invoke_and_read())
-    assert b"model_unavailable" in output and b"private-model" not in output
+    assert b"model_unavailable" in output and b"anthropic.claude-mythos-5-v1" not in output
 
 
 def test_streaming_research_uses_saved_settings(monkeypatch):

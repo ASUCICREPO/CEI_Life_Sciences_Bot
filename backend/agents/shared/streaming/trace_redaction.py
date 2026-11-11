@@ -67,8 +67,23 @@ DENY_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 )
 
 
+# B44: web search citations may only carry url/title/snippet into a trace -- never the full
+# upstream result shape (authors, year, relevant_passage, source_id, etc. are all dropped here).
+WEB_SOURCE_ALLOWED_KEYS: frozenset[str] = frozenset({"url", "title", "snippet"})
+
+
 def is_sensitive(value: str) -> bool:
     return any(pattern.search(value) for pattern in DENY_PATTERNS)
+
+
+def _is_web_source(entry: Mapping[str, Any]) -> bool:
+    source_type = entry.get("source_type")
+    return source_type == "web" or source_type == "SourceType.WEB"
+
+
+def _trim_web_source(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """B44: only `url`, `title`, and `snippet` survive for a web search citation."""
+    return {key: entry[key] for key in WEB_SOURCE_ALLOWED_KEYS if key in entry}
 
 
 def redact_text(value: str) -> str:
@@ -111,6 +126,11 @@ def redact_trace_event(event: Mapping[str, Any]) -> dict[str, Any]:
             continue
         if key == "sources" and not isinstance(value, (list, tuple)):
             continue
+        if key == "sources":
+            # B44: trim web search citations to url/title/snippet before the generic deny-scan
+            # runs, so no upstream field (and never the raw result list) reaches the trace.
+            value = [_trim_web_source(item) if isinstance(item, Mapping) and _is_web_source(item) else item
+                     for item in value]
         redacted = _redact_value(value)
         if redacted is not None:
             safe[key] = redacted

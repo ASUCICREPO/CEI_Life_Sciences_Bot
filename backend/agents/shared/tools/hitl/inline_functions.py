@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from langchain_core.tools import StructuredTool
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field, field_validator
 
 from shared.schemas.cei_ui import (
@@ -112,97 +113,156 @@ def build_scope_confirmation_surface(
     return surface.model_dump(mode="json")
 
 
-class InlineFunctionRegistry:
-    def _ask_user_question(self, question: str, options: list[str]) -> dict[str, object]:
-        surface = CEIUISurface(
-            surface_id="hitl-ask-user-question",
-            root_id="root",
-            components=[
-                ColumnComponent(id="root", children=["question", "answer"]),
-                TextComponent(id="question", content=question),
-                ChoicePickerComponent(
-                    id="answer",
-                    interaction_id="ask-user-question",
-                    label=question,
-                    options=[ChoiceOption(label=option, value=option) for option in options],
-                    action=ActionDescriptor(action_id="submit-answer", label="Submit"),
-                ),
-            ],
-        )
-        return surface.model_dump(mode="json")
+def build_ask_user_question_surface(
+    question: str,
+    options: list[str],
+    *,
+    surface_id: str = "hitl-ask-user-question",
+    revision: int = 1,
+) -> dict[str, object]:
+    """Pure surface builder (no `interrupt()`) — reusable by both the tool and node callers."""
+    surface = CEIUISurface(
+        surface_id=surface_id,
+        revision=revision,
+        root_id="root",
+        components=[
+            ColumnComponent(id="root", children=["question", "answer"]),
+            TextComponent(id="question", content=question),
+            ChoicePickerComponent(
+                id="answer",
+                interaction_id="ask-user-question",
+                label=question,
+                options=[ChoiceOption(label=option, value=option) for option in options],
+                action=ActionDescriptor(action_id="submit-answer", label="Submit"),
+            ),
+        ],
+    )
+    return surface.model_dump(mode="json")
 
-    def _present_alternatives(
-        self, title: str, alternatives: list[AlternativeInput]
-    ) -> dict[str, object]:
-        surface = CEIUISurface(
-            surface_id="hitl-present-alternatives",
-            root_id="root",
-            components=[
-                ColumnComponent(id="root", children=["title", "alternatives"]),
-                TextComponent(id="title", content=title, variant="h2"),
-                ChoicePickerComponent(
-                    id="alternatives",
-                    interaction_id="present-alternatives",
-                    label=title,
-                    options=[
-                        ChoiceOption(
-                            label=alternative.title,
-                            value=f"alternative-{index}",
-                            description=alternative.description,
+
+def build_present_alternatives_surface(
+    title: str,
+    alternatives: list[AlternativeInput],
+    *,
+    surface_id: str = "hitl-present-alternatives",
+    revision: int = 1,
+) -> dict[str, object]:
+    """Pure surface builder (no `interrupt()`) — reusable by both the tool and node callers."""
+    surface = CEIUISurface(
+        surface_id=surface_id,
+        revision=revision,
+        root_id="root",
+        components=[
+            ColumnComponent(id="root", children=["title", "alternatives"]),
+            TextComponent(id="title", content=title, variant="h2"),
+            ChoicePickerComponent(
+                id="alternatives",
+                interaction_id="present-alternatives",
+                label=title,
+                options=[
+                    ChoiceOption(
+                        label=alternative.title,
+                        value=f"alternative-{index}",
+                        description=alternative.description,
+                    )
+                    for index, alternative in enumerate(alternatives, start=1)
+                ],
+                action=ActionDescriptor(action_id="select-alternative", label="Select"),
+            ),
+        ],
+    )
+    return surface.model_dump(mode="json")
+
+
+def build_plan_approval_surface(
+    plan_summary: str,
+    steps: list[PlanStepInput],
+    *,
+    surface_id: str = "hitl-plan-approval",
+    revision: int = 1,
+) -> dict[str, object]:
+    """Pure surface builder (no `interrupt()`) — reusable by both the tool and node callers.
+
+    Pipeline Manager's `approve` node (B72) calls this directly and performs its own single
+    `interrupt()`; it must not go through the tool method below, which would interrupt twice.
+    """
+    surface = CEIUISurface(
+        surface_id=surface_id,
+        revision=revision,
+        root_id="plan-review",
+        components=[
+            ReviewGateComponent(
+                id="plan-review",
+                interaction_id="plan-approval",
+                plan=Plan(
+                    summary=plan_summary,
+                    steps=[
+                        PlanStep(
+                            step_id=f"step-{index}",
+                            title=step.title,
+                            description=step.description,
                         )
-                        for index, alternative in enumerate(alternatives, start=1)
+                        for index, step in enumerate(steps, start=1)
                     ],
-                    action=ActionDescriptor(action_id="select-alternative", label="Select"),
                 ),
-            ],
-        )
-        return surface.model_dump(mode="json")
+                actions=[
+                    ActionDescriptor(action_id="approve-plan", label="Approve", intent="approve"),
+                    ActionDescriptor(action_id="reject-plan", label="Reject", intent="reject"),
+                ],
+            )
+        ],
+    )
+    return surface.model_dump(mode="json")
 
-    def _request_plan_approval(
-        self, plan_summary: str, steps: list[PlanStepInput]
-    ) -> dict[str, object]:
-        surface = CEIUISurface(
-            surface_id="hitl-plan-approval",
-            root_id="plan-review",
-            components=[
-                ReviewGateComponent(
-                    id="plan-review",
-                    interaction_id="plan-approval",
-                    plan=Plan(
-                        summary=plan_summary,
-                        steps=[
-                            PlanStep(
-                                step_id=f"step-{index}",
-                                title=step.title,
-                                description=step.description,
-                            )
-                            for index, step in enumerate(steps, start=1)
-                        ],
-                    ),
-                    actions=[
-                        ActionDescriptor(action_id="approve-plan", label="Approve", intent="approve"),
-                        ActionDescriptor(action_id="reject-plan", label="Reject", intent="reject"),
-                    ],
-                )
-            ],
-        )
-        return surface.model_dump(mode="json")
 
-    def _get_user_input(self, prompt: str, placeholder: str = "") -> dict[str, object]:
-        surface = CEIUISurface(
-            surface_id="hitl-get-user-input",
-            root_id="user-input",
-            components=[
-                TextFieldComponent(
-                    id="user-input",
-                    interaction_id="get-user-input",
-                    label=prompt,
-                    placeholder=placeholder,
-                    action=ActionDescriptor(action_id="submit-input", label="Submit"),
-                )
-            ],
-        )
-        return surface.model_dump(mode="json")
+def build_get_user_input_surface(
+    prompt: str,
+    placeholder: str = "",
+    *,
+    surface_id: str = "hitl-get-user-input",
+    revision: int = 1,
+) -> dict[str, object]:
+    """Pure surface builder (no `interrupt()`) — reusable by both the tool and node callers."""
+    surface = CEIUISurface(
+        surface_id=surface_id,
+        revision=revision,
+        root_id="user-input",
+        components=[
+            TextFieldComponent(
+                id="user-input",
+                interaction_id="get-user-input",
+                label=prompt,
+                placeholder=placeholder,
+                action=ActionDescriptor(action_id="submit-input", label="Submit"),
+            )
+        ],
+    )
+    return surface.model_dump(mode="json")
+
+
+class InlineFunctionRegistry:
+    """LLM-facing tools: each builds its surface, then `interrupt()`s so the graph really pauses (F13).
+
+    These are only reachable through `as_langchain_tools()` (LLM tool-calling) today; no graph node
+    calls them directly as tools yet. A node that needs the surface without a second interrupt (for
+    example Pipeline Manager's `approve`) must call the matching `build_*_surface` function instead.
+    """
+
+    def _ask_user_question(self, question: str, options: list[str]) -> object:
+        surface = build_ask_user_question_surface(question, options)
+        return interrupt(surface)
+
+    def _present_alternatives(self, title: str, alternatives: list[AlternativeInput]) -> object:
+        surface = build_present_alternatives_surface(title, alternatives)
+        return interrupt(surface)
+
+    def _request_plan_approval(self, plan_summary: str, steps: list[PlanStepInput]) -> object:
+        surface = build_plan_approval_surface(plan_summary, steps)
+        return interrupt(surface)
+
+    def _get_user_input(self, prompt: str, placeholder: str = "") -> object:
+        surface = build_get_user_input_surface(prompt, placeholder)
+        return interrupt(surface)
 
     def as_langchain_tools(self) -> list[StructuredTool]:
         return [

@@ -17,6 +17,8 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { DeployConfig, DEFAULT_LIMITS, DEFAULT_TOOL_POLICY_MODE } from './config/deploy-config';
 import { PythonDepsLayer } from './constructs/python-deps-layer';
 import { AgentRuntimes } from './constructs/agent-runtimes';
+import { ModelGuardrail } from './constructs/model-guardrail';
+import { ModelSettings } from './constructs/model-settings';
 import { ToolGateway, fullScope } from './constructs/tool-gateway';
 import { SessionRouter } from './constructs/session-router';
 import { suppressXrayWildcard } from './constructs/tracing';
@@ -459,6 +461,8 @@ export class BackendStack extends cdk.Stack {
       CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName,
       CEI_CHAT_HISTORY_TABLE: chatHistoryTable.tableName,
       ALLOWED_ORIGINS: allowedOrigins.join(','),
+      // F8/B18: session-metadata-handler's _validate_model_id (create/PATCH) needs the same blocklist as /models
+      CEI_BLOCKED_MODELS: (this.config?.blockedModelIds ?? []).join(','),
     };
 
     const createSessionFunction = (id: string, dir: string, handlerName: string,
@@ -532,6 +536,16 @@ export class BackendStack extends cdk.Stack {
     );
     // GET/PATCH /sessions/{id} prove ownership against the history partition's stamped owner (owner_of) first
     chatHistoryTable.grant(sessionMetadata.role, 'dynamodb:Query');
+    // F8/B18: POST /sessions validates model_id against server discovery before saving it (fail closed,
+    // MODEL_POLICY.md step 2) — same discovery actions as model-settings.ts, same "no resource ARN" rationale.
+    sessionMetadata.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['bedrock:ListFoundationModels', 'bedrock:ListInferenceProfiles', 'bedrock:GetInferenceProfile'],
+      resources: ['*'],
+    }));
+    NagSuppressions.addResourceSuppressions(sessionMetadata.role, [{
+      id: 'AwsSolutions-IAM5',
+      reason: 'ADR: Bedrock discovery actions have no resource-level ARN | Rationale: ListFoundationModels/ListInferenceProfiles/GetInferenceProfile are account+Region-wide read-only list/describe operations; AWS defines no resource type to scope them to | Alternative: per-model ARNs rejected — not applicable to list operations',
+    }], true);
     // B12: history is keyed by session_id only, so the history handler proves ownership with a metadata GetItem first
     sessionHistory.role.addToPrincipalPolicy(
       new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }),
@@ -546,8 +560,16 @@ export class BackendStack extends cdk.Stack {
     // agentcore.json stays local-development-only (docs/architectureDeepDive.md).
     // ---------------------------------------------------------------
 
+    // F8/B51: input-only PII Guardrail (B51a), applied via the native guardrailConfig on every get_model()
+    // call (shared/utils.py) — not added to BackendStack until now, per model-guardrail.ts's own note.
+    const modelGuardrail = new ModelGuardrail(this, 'ModelGuardrail');
+
     const agentRuntimes = new AgentRuntimes(this, 'AgentRuntimes', {
       defaultModelId: this.config?.defaultModelId,
+      blockedModelIds: this.config?.blockedModelIds,
+      guardrailId: modelGuardrail.guardrailId,
+      guardrailVersion: modelGuardrail.guardrailVersion,
+      guardrailArn: modelGuardrail.guardrailArn,
       userPool,
       spaClient,
       chatMetadataTable,
@@ -558,6 +580,8 @@ export class BackendStack extends cdk.Stack {
       // Same origin set as the sessions API CORS; the containers answer CORS only if a browser ever reaches them
       // directly (the SPA goes through the agent proxy below)
       allowedOrigins,
+      // B44/B45: same value ToolGateway uses to decide whether to build the Web Search target (below)
+      webSearchEnabled: this.config?.webSearchEnabled,
     });
 
     // ---------------------------------------------------------------
@@ -635,7 +659,8 @@ export class BackendStack extends cdk.Stack {
     };
     const corsOptions: apigw.CorsOptions = {
       allowOrigins: allowedOrigins,
-      allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+      // PUT: F8's GET/PUT /settings (model-settings.ts)
+      allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'OPTIONS'],
       allowHeaders: ['Authorization', 'Content-Type', 'Accept', 'X-Amz-Date', 'X-Amz-Security-Token'],
       maxAge: Duration.hours(1),
     };
@@ -684,7 +709,7 @@ export class BackendStack extends cdk.Stack {
         responseHeaders: {
           'Access-Control-Allow-Origin': `'${siteUrl}'`,
           'Access-Control-Allow-Headers': "'Authorization,Content-Type,Accept'",
-          'Access-Control-Allow-Methods': "'GET,POST,PATCH,OPTIONS'",
+          'Access-Control-Allow-Methods': "'GET,POST,PATCH,PUT,OPTIONS'",
           Vary: "'Origin'",
         },
         templates: { 'application/json': envelope(code, message, retriable) },
@@ -744,6 +769,19 @@ export class BackendStack extends cdk.Stack {
       runtimeStopUrls: agentRuntimes.stopUrls,
     });
     agentRuntimes.configureJobStore(backgroundJobs.table, activeRunsTable);
+    // F8: GET /models, GET/PUT /settings — UserMetadataTable's first real use (data-model.md Section 4)
+    const modelSettings = new ModelSettings(this, 'ModelSettings', {
+      api,
+      methodOptions,
+      corsOptions,
+      requestValidator,
+      pythonDepsLayer: pythonDeps.layer,
+      allowedOrigins,
+      blockedModelIds: this.config?.blockedModelIds ?? [],
+    });
+    // F08: POST /sessions reads the caller's saved default_model_id when none is given (read-only, no PutItem)
+    sessionMetadata.fn.addEnvironment('CEI_USER_METADATA_TABLE', modelSettings.table.tableName);
+    modelSettings.table.grant(sessionMetadata.role, 'dynamodb:GetItem');
     const gateway = new ToolGateway(this, 'ToolGateway', {
       userPool,
       cognitoDomainUrl,
@@ -757,6 +795,8 @@ export class BackendStack extends cdk.Stack {
       jobTable: backgroundJobs.table,
       spaClientId: spaClient.userPoolClientId,
       refreshCallerRoleArns: [agentRuntimes.runtimes.Research.role.roleArn],
+      // B44/B45: preflight.ts already folds the Region gate into this value (see config.webSearchEnabled doc)
+      webSearchEnabled: this.config?.webSearchEnabled,
     });
     agentRuntimes.configureResearchGateway(gateway.routerClient.userPoolClientId, gateway.gateway.attrGatewayUrl);
     // B67: only the Research runtime may invoke the internal IAM-authenticated
@@ -768,6 +808,12 @@ export class BackendStack extends cdk.Stack {
 
     const router = new SessionRouter(this, 'SessionRouter', {
       defaultModelId: this.config?.defaultModelId,
+      blockedModelIds: this.config?.blockedModelIds,
+      // F9/B17: fixed classifier model, independent of the user's own chat model selection.
+      routerModelId: this.config?.routerModelId,
+      guardrailId: modelGuardrail.guardrailId,
+      guardrailVersion: modelGuardrail.guardrailVersion,
+      guardrailArn: modelGuardrail.guardrailArn,
       role: gateway.routerRole,
       pythonDepsLayer: pythonDeps.layer,
       metadataTable: chatMetadataTable,
@@ -778,7 +824,12 @@ export class BackendStack extends cdk.Stack {
       clientId: gateway.routerClient.userPoolClientId,
       secretArn: gateway.routerSecret.secretArn,
       scopes: gateway.scopeNames.map(fullScope),
-      runtimeUrl: agentRuntimes.invocationUrls.research,
+      runtimeUrls: {
+        research: agentRuntimes.invocationUrls.research,
+        drafting: agentRuntimes.invocationUrls.drafting,
+        analysis: agentRuntimes.invocationUrls.analysis,
+        pipeline_manager: agentRuntimes.invocationUrls.pipeline,
+      },
     });
     const runnerLogs = new logs.LogGroup(this, 'SessionRunnerLogs', { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY });
     const runnerRole = new iam.Role(this, 'SessionRunnerRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
@@ -808,6 +859,10 @@ export class BackendStack extends cdk.Stack {
     const uiActionsRole = new iam.Role(this, 'UiActionsRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
     uiActionsLogs.grantWrite(uiActionsRole);
     uiActionsRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [chatMetadataTable.tableArn] }));
+    // F9: the route-choice action reads then clears its own pending-choice record (handler.py writes it)
+    // and starts the chosen agent through the Router, same lease/token broker the Runner uses.
+    uiActionsRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem', 'dynamodb:DeleteItem'], resources: [activeRunsTable.tableArn] }));
+    uiActionsRole.addToPrincipalPolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [router.function.functionArn] }));
     const uiActions = new lambda.Function(this, 'UiActions', {
       tracing: lambda.Tracing.ACTIVE,
       runtime: lambda.Runtime.NODEJS_24_X,
@@ -819,6 +874,8 @@ export class BackendStack extends cdk.Stack {
       memorySize: 256,
       environment: {
         CEI_CHAT_METADATA_TABLE: chatMetadataTable.tableName,
+        CEI_ACTIVE_RUNS_TABLE: activeRunsTable.tableName,
+        CEI_ROUTER_FUNCTION: router.function.functionName,
         AGENT_URLS: this.toJsonString(agentRuntimes.invocationUrls),
         ALLOWED_ORIGINS: allowedOrigins.join(','),
       },
@@ -844,11 +901,12 @@ export class BackendStack extends cdk.Stack {
         AgentProxy: agentProxyFn, SessionRouter: router.function, SessionRunner: runner, UiActions: uiActions,
         ClientDiagnostics: clientDiagnostics.fn, Exports: exportsHandler.fn, LifeSciencesOperations: gateway.operationsFunction,
         NcbiReadOnly: gateway.ncbiFunction, Jobs: backgroundJobs.jobsFunction, JobWatchdog: backgroundJobs.watchdogFunction,
-        PreToken: gateway.preTokenFunction, TokenRefresh: gateway.tokenRefreshFunction,
+        PreToken: gateway.preTokenFunction, TokenRefresh: gateway.tokenRefreshFunction, ModelSettings: modelSettings.function,
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) => [`Source${name}`, fn])),
       },
       tables: { ChatMetadata: chatMetadataTable, ChatHistory: chatHistoryTable, ActiveRuns: activeRunsTable,
-        Exports: exportsTable, NcbiRateLimiter: gateway.ncbiRateTable, JobIdStore: backgroundJobs.table },
+        Exports: exportsTable, NcbiRateLimiter: gateway.ncbiRateTable, JobIdStore: backgroundJobs.table,
+        UserMetadata: modelSettings.table },
       signupLogs: preSignUpLogGroup,
       gatewayLogs: gateway.gatewayLogGroup,
       clientLogs: clientDiagnostics.fn.logGroup,
@@ -860,6 +918,7 @@ export class BackendStack extends cdk.Stack {
         SessionMetadata: { logGroup: sessionMetadata.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         SessionHistory: { logGroup: sessionHistory.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         Exports: { logGroup: exportsHandler.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
+        ModelSettings: { logGroup: modelSettings.function.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         NcbiReadOnly: { logGroup: gateway.ncbiFunction.logGroup, terms: ['ncbi_request_failed'] },
         UiActions: { logGroup: uiActionsLogs, terms: ['resume_failed'] },
         Jobs: { logGroup: backgroundJobs.jobsFunction.logGroup, terms: ['handled_api_failure', 'unhandled error', 'runtime_stop_failed'] },

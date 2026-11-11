@@ -34,8 +34,11 @@ def call_gateway_tool(url: str, token: str, source_id: str, arguments: dict[str,
         valid = False
     if not valid:
         raise GatewayCallError("The data source gateway configuration is invalid.")
+    # ADR: tool_name allows mixed case | Rationale: B44/B86 -- the AgentCore Web Search built-in
+    # connector's own MCP tool is named "WebSearch" (installed-SDK fact), unlike the lowercase
+    # names this repo chooses for its own Lambda target schemas
     if (not token or not isinstance(source_id, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", source_id)
-            or not isinstance(tool_name, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", tool_name)
+            or not isinstance(tool_name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", tool_name)
             or not isinstance(arguments, dict)):
         raise GatewayCallError("The data source gateway request is invalid.")
     try:

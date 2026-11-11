@@ -49,4 +49,13 @@ ALL_DATA_SOURCE_TOOLS: list[DataSourceTool] = [
 
 
 def all_langchain_tools() -> list:
-    return [t.as_langchain_tool() for t in ALL_DATA_SOURCE_TOOLS]
+    tools = [t.as_langchain_tool() for t in ALL_DATA_SOURCE_TOOLS]
+    # B44/B86: Web Search is a Gateway built-in connector, not a DataSourceTool subclass (no
+    # upstream HTTP fetch of its own) -- added here only, gated on the CDK-set env flag, so this
+    # stays the single registry agents could bind from without a nodes.py/graph.py change.
+    from shared.tools.web_search import as_langchain_tool as web_search_tool
+    from shared.tools.web_search import web_search_enabled
+
+    if web_search_enabled():
+        tools.append(web_search_tool())
+    return tools

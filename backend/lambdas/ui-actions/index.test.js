@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createHandler, validateRequest } = require('./index');
+const { createHandler, validateRequest, isRouteChoice, actionResponse, mapRouterError, ROUTE_CHOICE_INTERACTION_ID, ROUTE_CHOICE_COMPONENT_ID, ROUTE_CHOICE_ACTION_ID } = require('./index');
 
 const SESSION = '6f1c2d3e-0000-4000-8000-000000000001';
 const ACTION = { request_id: 'r1', session_id: SESSION, surface_id: 'analysis-scope', revision: 1, interaction_id: 'i-1', component_id: 'c-1', action_id: 'approve-scope', value: null };
@@ -10,13 +10,30 @@ function request(body = ACTION, { sub = 'user-1', auth = 'Bearer token' } = {}) 
   return { requestContext: { requestId: 'req-1', authorizer: { claims: { sub } } }, headers: { Authorization: auth }, body: JSON.stringify(body) };
 }
 
-function harness({ agent = 'analysis', envelope = { status: 'completed', text: 'done' }, fail } = {}) {
+function harness({ agent = 'analysis', envelope = { status: 'completed', text: 'done' }, fail, routeChoice = {} } = {}) {
   const calls = [];
   const out = { chunks: [], metadata: null, ended: false };
   const deps = {
     headers: () => ({ 'Content-Type': 'application/json' }),
     sessionAgent: async (user, session) => (user === 'user-1' && session === SESSION ? agent : null),
     resume: async (target, parsed) => { calls.push({ target, parsed }); if (fail) throw fail; return envelope; },
+    // F9: route-choice-only deps; each test below overrides only what it exercises.
+    newRunId: () => 'new-run-id',
+    pendingChoice: async () => routeChoice.pending ?? null,
+    clearPendingChoice: async (userId, sessionId) => calls.push({ target: 'clearPendingChoice', userId, sessionId }),
+    routeStart: async (bearerToken, runId, sessionId, chosenAgent, pending, requestId) => {
+      calls.push({ target: 'routeStart', bearerToken, runId, sessionId, chosenAgent, pending, requestId });
+      const value = routeChoice.route ?? { status: 200, runtime_url: 'https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/x/invocations?qualifier=DEFAULT', gateway_token: 'secret' };
+      // Mirrors productionDependencies().routeStart's own contract: throw on anything but a routed 200.
+      if (value.status !== 200 || !value.runtime_url) throw mapRouterError(value);
+      return value;
+    },
+    routeFinish: async (bearerToken, sessionId, runId) => calls.push({ target: 'routeFinish', bearerToken, sessionId, runId }),
+    invokeAgentRun: async (route, chosenAgent, pending, parsed) => {
+      calls.push({ target: 'invokeAgentRun', route, chosenAgent, pending, parsed });
+      if (routeChoice.fail) throw routeChoice.fail;
+      return routeChoice.envelope ?? { status: 'completed', text: 'done' };
+    },
   };
   const responseFrom = (_raw, metadata) => {
     out.metadata = metadata;
@@ -24,6 +41,12 @@ function harness({ agent = 'analysis', envelope = { status: 'completed', text: '
   };
   return { handler: createHandler(responseFrom, deps), calls, out, body: () => JSON.parse(out.chunks.join('')) };
 }
+
+const routeChoiceAction = (overrides = {}) => ({
+  request_id: 'r1', session_id: SESSION, surface_id: 'router-choice-1', revision: 1,
+  interaction_id: ROUTE_CHOICE_INTERACTION_ID, component_id: ROUTE_CHOICE_COMPONENT_ID, action_id: ROUTE_CHOICE_ACTION_ID,
+  value: 'drafting', ...overrides,
+});
 
 test('a valid action on an owned analysis chat resumes the analysis runtime with the caller token', async () => {
   const h = harness();
@@ -42,6 +65,18 @@ test('pipeline chats resume the pipeline runtime', async () => {
   assert.equal(h.calls[0].target, 'pipeline');
 });
 
+test('research chats resume the research runtime', async () => {
+  const h = harness({ agent: 'research' });
+  await h.handler(request(), {});
+  assert.equal(h.calls[0].target, 'research');
+});
+
+test('drafting chats resume the drafting runtime', async () => {
+  const h = harness({ agent: 'drafting' });
+  await h.handler(request(), {});
+  assert.equal(h.calls[0].target, 'drafting');
+});
+
 test('another user\'s session is not found and never reaches a runtime', async () => {
   const h = harness();
   await h.handler(request(ACTION, { sub: 'user-2' }), {});
@@ -51,7 +86,7 @@ test('another user\'s session is not found and never reaches a runtime', async (
 });
 
 test('chats whose agent cannot pause are refused', async () => {
-  for (const agent of ['research', '', 'unknown']) {
+  for (const agent of ['tool_agent', '', 'unknown']) {
     const h = harness({ agent });
     await h.handler(request(), {});
     assert.equal(h.out.metadata.statusCode, 400);
@@ -103,4 +138,96 @@ test('validation rejects missing auth, unknown or missing fields and bad bounds'
 test('a missing value is sent as null', () => {
   const { value, ...rest } = ACTION;
   assert.equal(validateRequest(request(rest)).action.value, null);
+});
+
+// F9/B80: the route-choice action -- a ChoicePicker pick, not a graph resume.
+test('isRouteChoice matches only the fixed router-choice action and not an ordinary resume', () => {
+  assert.equal(isRouteChoice(routeChoiceAction()), true);
+  assert.equal(isRouteChoice(ACTION), false);
+});
+
+test('a valid route choice starts the chosen agent through the Router and returns one envelope', async () => {
+  const future = Math.floor(Date.now() / 1000) + 300;
+  const pending = { message: 'original free-text prompt', mode: 'science', surface_id: 'router-choice-1', expires_at: future };
+  const h = harness({ routeChoice: { pending, envelope: { status: 'completed', text: 'done', ui: { root_id: 'root' } } } });
+  await h.handler(request(routeChoiceAction()), {});
+  assert.equal(h.out.metadata.statusCode, 200);
+  const body = h.body();
+  assert.equal(body.status, 'completed');
+  assert.equal(body.action_response.status, 'completed');
+  assert.equal(body.action_response.action_id, ROUTE_CHOICE_ACTION_ID);
+  const routeStart = h.calls.find((c) => c.target === 'routeStart');
+  assert.equal(routeStart.chosenAgent, 'drafting');
+  assert.equal(routeStart.pending.message, 'original free-text prompt');
+  assert.ok(h.calls.some((c) => c.target === 'clearPendingChoice'));
+  assert.ok(h.calls.some((c) => c.target === 'routeFinish' && c.runId === 'new-run-id'));
+});
+
+test('an expired route choice is rejected without starting the Router', async () => {
+  const pending = { message: 'x', mode: 'science', surface_id: 'router-choice-1', expires_at: Math.floor(Date.now() / 1000) - 10 };
+  const h = harness({ routeChoice: { pending } });
+  await h.handler(request(routeChoiceAction()), {});
+  assert.equal(h.out.metadata.statusCode, 200);
+  const body = h.body();
+  assert.equal(body.status, 'rejected'); assert.equal(body.code, 'expired');
+  assert.equal(h.calls.some((c) => c.target === 'routeStart'), false);
+});
+
+test('a route choice with no pending record is treated as expired', async () => {
+  const h = harness({ routeChoice: { pending: null } });
+  await h.handler(request(routeChoiceAction()), {});
+  const body = h.body();
+  assert.equal(body.status, 'rejected'); assert.equal(body.code, 'expired');
+});
+
+test('a route choice whose surface_id does not match the pending record is stale', async () => {
+  const future = Math.floor(Date.now() / 1000) + 300;
+  const pending = { message: 'x', mode: 'science', surface_id: 'router-choice-OTHER', expires_at: future };
+  const h = harness({ routeChoice: { pending } });
+  await h.handler(request(routeChoiceAction()), {});
+  const body = h.body();
+  assert.equal(body.status, 'stale');
+  assert.equal(h.calls.some((c) => c.target === 'routeStart'), false);
+});
+
+test('a route choice value outside the four agents is stale, not trusted as a destination', async () => {
+  const future = Math.floor(Date.now() / 1000) + 300;
+  const pending = { message: 'x', mode: 'science', surface_id: 'router-choice-1', expires_at: future };
+  const h = harness({ routeChoice: { pending } });
+  await h.handler(request(routeChoiceAction({ value: 'not-a-real-agent' })), {});
+  assert.equal(h.body().status, 'stale');
+});
+
+test('a foreign session never reaches the pending choice or the Router', async () => {
+  const h = harness();
+  await h.handler(request(routeChoiceAction(), { sub: 'user-2' }), {});
+  assert.equal(h.out.metadata.statusCode, 404);
+  assert.equal(h.calls.length, 0);
+});
+
+test('a concurrency-limited Router start maps to a 429, not a silent 200', async () => {
+  const future = Math.floor(Date.now() / 1000) + 300;
+  const pending = { message: 'x', mode: 'science', surface_id: 'router-choice-1', expires_at: future };
+  const h = harness({ routeChoice: { pending, route: { status: 429, code: 'concurrency_limit' } } });
+  await h.handler(request(routeChoiceAction()), {});
+  assert.equal(h.out.metadata.statusCode, 429);
+  assert.equal(h.body().error.code, 'concurrency_limit');
+});
+
+test('the Router lease is always released even when the agent invocation fails', async () => {
+  const future = Math.floor(Date.now() / 1000) + 300;
+  const pending = { message: 'x', mode: 'science', surface_id: 'router-choice-1', expires_at: future };
+  const h = harness({ routeChoice: { pending, fail: new Error('runtime unavailable with secrets') } });
+  await h.handler(request(routeChoiceAction()), {});
+  assert.equal(h.out.metadata.statusCode, 503);
+  assert.ok(!h.out.chunks.join('').includes('secrets'));
+  assert.ok(h.calls.some((c) => c.target === 'routeFinish'));
+  assert.equal(h.calls.some((c) => c.target === 'clearPendingChoice'), false);
+});
+
+test('actionResponse echoes the action and attaches a status and message', () => {
+  const response = actionResponse(routeChoiceAction(), 'completed');
+  assert.equal(response.action_id, ROUTE_CHOICE_ACTION_ID);
+  assert.equal(response.status, 'completed');
+  assert.equal(response.message, null);
 });

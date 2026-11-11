@@ -1,5 +1,5 @@
 # F15 — Tool agents
-Status: not started | Depends on: F4, F6 | Decisions: B21, B27, B29, B30, B69, B84, B85, B86 | Specs: ../specs/agents.md, ../specs/tools.md, ../specs/auth-and-tool-scope.md, ../specs/api.md (`/tools/{source}/chat/stream`)
+Status: partial (tool-agent graph and 13 YAML profiles, NCBI Gateway targets built; no runtime, no `/tools/{source}/chat/stream` route) | Depends on: F4, F6 | Decisions: B21, B27, B29, B30, B69, B84, B85, B86 | Specs: ../specs/agents.md, ../specs/tools.md, ../specs/auth-and-tool-scope.md, ../specs/api.md (`/tools/{source}/chat/stream`)
 
 Implementation note: the taxonomy and sequence Gateway targets and their shared
 PubMed/NCBI E-utilities rate limiter are implemented, but have not been deployed

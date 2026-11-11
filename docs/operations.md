@@ -35,8 +35,11 @@ real development traffic before any production rollout.
 
 The dashboard includes browser failure counts and agent application errors;
 neither has a separate alarm. B75 excludes stale-job and agent-health alarms:
-the planned watchdog and live job view must handle those conditions. The
-watchdog and full background job workflow are not yet proven.
+the watchdog and live job view must handle those conditions. CDK defines the
+watchdog (`JobWatchdog`, run every 5 minutes by an EventBridge rule in
+`backend/lib/constructs/background-jobs.ts`). Its checkpoint resume is off
+(`CEI_WATCHDOG_RESUME_ENABLED=false`). The watchdog and the full background
+job workflow are not yet proven on a live deployment.
 
 ## Verification in an isolated development environment
 
@@ -65,9 +68,13 @@ watchdog and full background job workflow are not yet proven.
   accuracy against the actual delivered event format and notification path has
   not been demonstrated. `LOG_ONLY` records decisions but does not enforce them;
   it cannot demonstrate cross-source isolation. Verify enforcement separately.
-- The input PII Guardrail construct is not connected to production agent calls,
-  and a Guardrail intervention alarm is not yet connected. Add and test that
-  alarm when the Guardrail and its actual intervention metric are integrated.
+- The input PII Guardrail is now in `BackendStack` (F8). Every `get_model()`
+  call and the F9 router classifier attach it. A Guardrail intervention alarm
+  is not yet connected. Add and test that alarm with the real intervention
+  metric. A blocked classifier input returns `400`, not a handled failure.
+- The new ModelSettings Lambda (F8) has Lambda error, throttle, and
+  handled-failure alarms. The UserMetadataTable has a DynamoDB throttle alarm.
+  These alarms are not yet tested on a live deployment.
 - Alert thresholds, WAF cross-region delivery, and alarm firing have not been
   validated by a deployed user journey. Trace coverage and sensitive-data
   redaction also require the security review.

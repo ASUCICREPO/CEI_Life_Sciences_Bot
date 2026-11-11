@@ -146,7 +146,7 @@ CloudFront serves the SPA fallback for client-side routing: a 403 or 404 from S3
 
 ## Post-deployment verification
 
-After `./deploy.sh` succeeds, verify (see `.agents/phases/F02-hosting-auth.md` task 10, not yet run against a real deployment as of this writing):
+After `./deploy.sh` succeeds, verify (see `.agents/phases/F02-hosting-auth.md` task 10; the user ran this check on a real deployment and it passed on 2026-10-05):
 
 1. Open a deep link (for example `<SiteUrl>/history`) — the SPA loads (the CloudFront fallback works).
 2. Sign up with a disallowed email domain — Cognito rejects it (the pre-sign-up Lambda trigger).

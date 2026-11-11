@@ -32,12 +32,115 @@ function validateRequest(event) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new RequestError(400, 'invalid_request', 'The request body is invalid.');
   if (!UUID.test(input.session_id || '') || !UUID.test(input.run_id || '')) throw new RequestError(400, 'invalid_request', 'A valid session and run are required.');
   if (input.resume_from_seq !== undefined && (!Number.isSafeInteger(input.resume_from_seq) || input.resume_from_seq < 0)) throw new RequestError(400, 'invalid_request', 'The replay position is invalid.');
-  if (typeof input.message !== 'string' || !input.message.trim() || input.message.length > 16000 || input.task_type !== 'live-research' || !['science', 'business'].includes(input.mode)) throw new RequestError(400, 'invalid_request', 'The research request is invalid.');
-  return { userId: sub, bearerToken: match[1], request: { session_id: input.session_id, run_id: input.run_id, message: input.message.trim(), task_type: input.task_type, mode: input.mode, ...(input.resume_from_seq !== undefined ? { resume_from_seq: input.resume_from_seq } : {}) } };
+  // F9/B15: task_type "live-research" is today's only dashboard task (deterministic, unchanged); an absent
+  // task_type is free text, routed by the Session Router's classifier. Any other value is still invalid.
+  const taskType = input.task_type;
+  if (typeof input.message !== 'string' || !input.message.trim() || input.message.length > 16000
+      || (taskType !== undefined && taskType !== 'live-research') || !['science', 'business'].includes(input.mode)) {
+    throw new RequestError(400, 'invalid_request', 'The chat request is invalid.');
+  }
+  return { userId: sub, bearerToken: match[1], request: { session_id: input.session_id, run_id: input.run_id, message: input.message.trim(), task_type: taskType, mode: input.mode, ...(input.resume_from_seq !== undefined ? { resume_from_seq: input.resume_from_seq } : {}) } };
 }
 
 const partition = ({ userId, request }) => `sse#${userId}#${request.session_id}#${request.run_id}`;
 const frame = (event) => `id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+
+// F9: CEI UI 1.1 surface envelope constants and the fixed ChoicePicker/route-choice contract. ui-actions's
+// index.js must agree on ROUTE_CHOICE_* (it validates a submitted action against a Router-persisted record
+// keyed by these same ids); session-runner is the only place that renders the ChoicePicker surface itself.
+const CEI_UI_CONTENT_TYPE = 'application/vnd.cei.ui+json';
+const CEI_UI_PROTOCOL = 'cei-ui';
+const SURFACE_BEGIN_VERSION = '1.2'; // the SSE transport version (research.py's ResearchEventStream.begin());
+                                      // the surface's own embedded "version" field (CEI UI 1.1) is separate.
+const ROUTE_CHOICE_INTERACTION_ID = 'router-choice';
+const ROUTE_CHOICE_COMPONENT_ID = 'router-choice';
+const ROUTE_CHOICE_ACTION_ID = 'route-choice';
+const ROUTE_CHOICE_OPTIONS = [
+  { label: 'Research', value: 'research', description: 'Deep research across data sources with citations.' },
+  { label: 'Drafting', value: 'drafting', description: 'Prepare a document (grant, pitch, paper, whitepaper).' },
+  { label: 'Analysis', value: 'analysis', description: 'Competitor, market or legal landscape analysis.' },
+  { label: 'Pipeline Manager', value: 'pipeline_manager', description: 'Multi-step work across specialists.' },
+];
+
+function choicePickerSurface(surfaceId) {
+  return {
+    content_type: CEI_UI_CONTENT_TYPE, protocol: CEI_UI_PROTOCOL, version: '1.1',
+    surface_id: surfaceId, revision: 1, root_id: ROUTE_CHOICE_COMPONENT_ID,
+    components: [{
+      id: ROUTE_CHOICE_COMPONENT_ID, type: 'ChoicePicker', interaction_id: ROUTE_CHOICE_INTERACTION_ID,
+      label: 'Which kind of help do you want?', multi: false, options: ROUTE_CHOICE_OPTIONS,
+      action: { action_id: ROUTE_CHOICE_ACTION_ID, label: 'Choose', intent: 'select' },
+    }],
+  };
+}
+
+/** Parent-first walk of a CEI UI surface's components, mirroring research.py's ResearchEventStream.components(). */
+function* walkComponents(ui, rootId) {
+  const byId = new Map((ui.components || []).map((component) => [component.id, component]));
+  const seen = new Set();
+  function* visit(id, parentId, index) {
+    if (seen.has(id) || !byId.has(id)) throw new Error('invalid surface component graph');
+    seen.add(id);
+    const component = { ...byId.get(id) };
+    let children;
+    if (component.type === 'Tabs') children = (component.tabs || []).map((tab) => tab.child_id);
+    else if (Array.isArray(component.children)) { children = component.children; component.children = []; }
+    else children = [];
+    const record = { parent_id: parentId, component };
+    if (parentId !== null) record.index = index;
+    yield record;
+    let position = 0;
+    for (const childId of children) { yield* visit(childId, id, position); position += 1; }
+  }
+  yield* visit(rootId, null, 0);
+}
+
+const surfaceBeginEvent = (ui) => ({ seq: 0, type: 'surface_begin', surface_id: ui.surface_id, revision: ui.revision || 1,
+  content_type: CEI_UI_CONTENT_TYPE, protocol: CEI_UI_PROTOCOL, version: SURFACE_BEGIN_VERSION, root_id: ui.root_id });
+
+/** One buffered `op: run` JSON envelope (a non-Research specialist) -> the same SSE contract every agent uses. */
+function bufferedToEvents(envelope) {
+  const status = envelope && (envelope.status || (typeof envelope.text === 'string' ? 'completed' : undefined));
+  if (status === 'awaiting_input' && envelope.ui) {
+    // Same shape as a Research clarify pause: surface_begin, then one hitl_request carrying the full
+    // pending surface (research/nodes.py's extract_interrupt_surface via awaiting_envelope()).
+    return [surfaceBeginEvent(envelope.ui), { seq: 1, type: 'hitl_request', ...envelope.ui }];
+  }
+  if (status === 'completed') {
+    const ui = envelope.ui || {
+      content_type: CEI_UI_CONTENT_TYPE, protocol: CEI_UI_PROTOCOL, version: '1.1', surface_id: 'agent-final',
+      revision: 1, root_id: 'root', components: [{ id: 'root', type: 'Text', content: envelope.text || 'No response generated.' }],
+    };
+    const events = [surfaceBeginEvent(ui)];
+    let seq = 1;
+    for (const record of walkComponents(ui, ui.root_id)) { events.push({ seq, type: 'component_add', ...record }); seq += 1; }
+    events.push({ seq, type: 'surface_end', surface_id: ui.surface_id, revision: ui.revision || 1, root_id: ui.root_id, final: true });
+    return events;
+  }
+  return [
+    { seq: 0, type: 'surface_begin', surface_id: 'agent-error', revision: 1, content_type: CEI_UI_CONTENT_TYPE, protocol: CEI_UI_PROTOCOL, version: SURFACE_BEGIN_VERSION, root_id: 'root' },
+    { seq: 1, type: 'error', code: 'service_unavailable', message: 'The response could not be completed.', retriable: true },
+  ];
+}
+
+/** B80: the Router's ChoicePicker turn (no agent run); surface_begin then one terminal hitl_request. */
+function choiceRequiredEvents(surfaceId) {
+  const surface = choicePickerSurface(surfaceId);
+  return [surfaceBeginEvent(surface), { seq: 1, type: 'hitl_request', ...surface }];
+}
+
+async function* fromArray(items) { for (const item of items) yield item; }
+
+/** Per-agent request body for the AgentCore `op: run` default; Research is never built here (it always streams). */
+function requestBodyFor(agent, parsed) {
+  const base = { prompt: parsed.request.message, mode: parsed.request.mode };
+  if (agent === 'drafting') {
+    // ADR: default document_type for a free-text drafting route | Rationale: drafting_main.py requires a
+    // valid DocumentType and free text carries none; "whitepaper" is the most general of the five types.
+    return { ...base, document_type: 'whitepaper' };
+  }
+  return base;
+}
 
 /** Parse SSE frames from an async iterable of bytes, including split UTF-8 and CRLF. */
 async function* parseEvents(body) {
@@ -117,7 +220,9 @@ function createHandler(responseFrom, deps) {
       stage = 'router_start';
       const route = await deps.start(parsed.bearerToken, parsed.request, requestId);
       started = true;
-      if (route.run_id !== parsed.request.run_id || route.session_id !== parsed.request.session_id || route.user_id !== parsed.userId || !route.gateway_token) throw new Error('invalid router response');
+      if (route.run_id !== parsed.request.run_id || route.session_id !== parsed.request.session_id || route.user_id !== parsed.userId) throw new Error('invalid router response');
+      // F9/B80: a ChoicePicker turn never runs an agent, so it never carries a gateway token.
+      if (!route.choice_required && !route.gateway_token) throw new Error('invalid router response');
       stream = responseFrom(rawStream, { statusCode: 200, headers: deps.headers(event, true) });
       stream.on?.('error', (error) => { closed = true; log('error', 'stream_transport_failed', error); });
       send(': connected\n\n');
@@ -125,9 +230,16 @@ function createHandler(responseFrom, deps) {
       let seq = -1, terminal = false;
       try {
         stage = 'runtime_open';
-        const body = await deps.open(route, parsed);
+        // F9: a ChoicePicker turn is a fixed two-event stream; Research always streams live; every other
+        // agent returns one buffered JSON envelope, adapted into the same SSE contract (bufferedToEvents).
+        const isResearch = !route.choice_required && (!route.agent || route.agent === 'research');
+        const source = route.choice_required
+          ? fromArray(choiceRequiredEvents(route.surface_id))
+          : isResearch
+            ? parseEvents(await deps.open(route, parsed))
+            : fromArray(bufferedToEvents(await deps.invokeBuffered(route, parsed)));
         stage = 'runtime_stream';
-        for await (const item of parseEvents(body)) {
+        for await (const item of source) {
           if (item.seq !== seq + 1 || (seq === -1 && item.type !== 'surface_begin')) throw new Error('invalid event order');
           stage = 'persist_event'; await deps.append(key, item); seq = item.seq;
           stage = 'client_stream'; send(frame(item));
@@ -219,6 +331,17 @@ function productionDependencies() {
       if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new Error('runtime unavailable');
       return response.body;
     },
+    // F9: Drafting/Analysis/Pipeline Manager's `op: run` (default) is always a single buffered JSON envelope,
+    // never SSE (only the Research runtime streams). Same URL-shape guard as open() above.
+    async invokeBuffered(route, parsed) {
+      const url = new URL(route.runtime_url);
+      if (url.protocol !== 'https:' || !/^bedrock-agentcore\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/.test(url.hostname) || url.port || url.username || url.password || !/^\/runtimes\/[^/]+\/invocations$/.test(url.pathname) || url.search !== '?qualifier=DEFAULT') throw new Error('invalid runtime URL');
+      const response = await fetch(url, { method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${parsed.bearerToken}`, 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': parsed.request.session_id, ...(process.env._X_AMZN_TRACE_ID ? { 'X-Amzn-Trace-Id': process.env._X_AMZN_TRACE_ID } : {}), Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(requestBodyFor(route.agent, parsed)), signal: AbortSignal.timeout(850000) });
+      if (!response.ok) throw new Error('runtime unavailable');
+      const envelope = await response.json();
+      if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) throw new Error('invalid runtime response');
+      return envelope;
+    },
   };
 }
 
@@ -228,3 +351,8 @@ exports.validateRequest = validateRequest;
 exports.parseEvents = parseEvents;
 exports.partition = partition;
 exports.routerError = routerError;
+exports.choicePickerSurface = choicePickerSurface;
+exports.bufferedToEvents = bufferedToEvents;
+exports.choiceRequiredEvents = choiceRequiredEvents;
+exports.requestBodyFor = requestBodyFor;
+exports.walkComponents = walkComponents;

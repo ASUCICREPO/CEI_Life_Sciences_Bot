@@ -3,6 +3,7 @@ import json
 import sys
 import uuid
 from pathlib import Path
+from unittest.mock import Mock
 
 import boto3
 import pytest
@@ -19,6 +20,18 @@ import metadata_handler as handler  # noqa: E402
 ORIGIN = "https://site.example.net"
 GENERIC_500 = "It's not you, it's us. Something went wrong"
 LEGACY_SID = "6f1c2d3e-0000-4000-8000-0000000000aa"
+DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+HAIKU_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+BLOCKED_MODEL_ID = "anthropic.claude-fable-5-v1"  # D3 blocklist pattern
+
+
+def _bedrock_stub(foundation_ids):
+    client = Mock()
+    client.list_foundation_models.return_value = {
+        "modelSummaries": [{"modelId": mid, "modelName": mid} for mid in foundation_ids]
+    }
+    client.list_inference_profiles.return_value = {"inferenceProfileSummaries": []}
+    return client
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +39,9 @@ def tables(monkeypatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
     monkeypatch.setenv("ALLOWED_ORIGINS", ORIGIN)
+    from shared.runtime import model_discovery
+
+    model_discovery._cache.clear()
     with mock_aws():
         ddb = boto3.resource("dynamodb", region_name="us-east-1")
         ddb.create_table(
@@ -74,8 +90,23 @@ def tables(monkeypatch):
             ],
             BillingMode="PAY_PER_REQUEST",
         )
+        # F8: POST /sessions reads the caller's saved default_model_id from here when none is given
+        ddb.create_table(
+            TableName="UserMetadataTable",
+            KeySchema=[
+                {"AttributeName": "user_id", "KeyType": "HASH"},
+                {"AttributeName": "record", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "user_id", "AttributeType": "S"},
+                {"AttributeName": "record", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
         handler._repo = None
         handler._history = None
+        handler._user_metadata = None
+        handler._bedrock_client = _bedrock_stub([DEFAULT_MODEL_ID])
         yield
 
 
@@ -134,6 +165,80 @@ def test_create_then_list_and_get():
 def test_created_session_ids_are_unique_uuids():
     created = {create(title=f"c{i}")["session_id"] for i in range(5)}
     assert len(created) == 5 and all(uuid.UUID(s).version == 4 for s in created)
+
+
+# -- F08: default model id applied on session create (no explicit selection) ------------------------------------
+
+
+def _stored_model_id(sid: str) -> str | None:
+    return call("GET", "/sessions/{sessionId}", path={"sessionId": sid})[1]["model_id"]
+
+
+def test_create_without_model_id_or_profile_uses_global_default():
+    from shared.config import config
+
+    sid = create(sub="user-a")["session_id"]
+    assert _stored_model_id(sid) == config.default_model_id
+
+
+def test_create_without_model_id_uses_saved_default_when_available():
+    from shared.persistence.user_metadata import UserMetadataRepository
+    from shared.runtime import model_discovery
+
+    handler._bedrock_client = _bedrock_stub([DEFAULT_MODEL_ID, HAIKU_MODEL_ID])
+    model_discovery._cache.clear()
+    UserMetadataRepository().put("user-a", default_model_id=HAIKU_MODEL_ID, default_mode=None)
+    sid = create(sub="user-a")["session_id"]
+    assert _stored_model_id(sid) == HAIKU_MODEL_ID
+
+
+def test_explicit_model_id_wins_over_saved_default():
+    from shared.persistence.user_metadata import UserMetadataRepository
+    from shared.runtime import model_discovery
+
+    handler._bedrock_client = _bedrock_stub([DEFAULT_MODEL_ID, HAIKU_MODEL_ID])
+    model_discovery._cache.clear()
+    UserMetadataRepository().put("user-a", default_model_id=HAIKU_MODEL_ID, default_mode=None)
+    sid = create(sub="user-a", model_id=DEFAULT_MODEL_ID)["session_id"]
+    assert _stored_model_id(sid) == DEFAULT_MODEL_ID
+
+
+def test_blocklisted_saved_default_falls_back_to_global_default():
+    from shared.config import config
+    from shared.persistence.user_metadata import UserMetadataRepository
+    from shared.runtime import model_discovery
+
+    handler._bedrock_client = _bedrock_stub([DEFAULT_MODEL_ID, BLOCKED_MODEL_ID])
+    model_discovery._cache.clear()
+    UserMetadataRepository().put("user-a", default_model_id=BLOCKED_MODEL_ID, default_mode=None)
+    sid = create(sub="user-a")["session_id"]
+    assert _stored_model_id(sid) == config.default_model_id
+
+
+def test_undiscovered_saved_default_falls_back_to_global_default():
+    """The saved default no longer exists in the account (e.g. disabled) -> not server-discovered."""
+    from shared.config import config
+    from shared.persistence.user_metadata import UserMetadataRepository
+    from shared.runtime import model_discovery
+
+    handler._bedrock_client = _bedrock_stub([DEFAULT_MODEL_ID])
+    model_discovery._cache.clear()
+    UserMetadataRepository().put("user-a", default_model_id=HAIKU_MODEL_ID, default_mode=None)
+    sid = create(sub="user-a")["session_id"]
+    assert _stored_model_id(sid) == config.default_model_id
+
+
+def test_user_metadata_read_failure_falls_back_to_global_default_and_create_still_succeeds(monkeypatch):
+    from shared.config import config
+    from shared.persistence.user_metadata import UserMetadataRepository
+
+    def broken_get(self, user_id):
+        raise RuntimeError("ProvisionedThroughputExceededException on UserMetadataTable")
+
+    monkeypatch.setattr(UserMetadataRepository, "get", broken_get)
+    status, created, _ = call("POST", "/sessions", body={"title": "t", "mode": "science"})
+    assert status == 201
+    assert _stored_model_id(created["session_id"]) == config.default_model_id
 
 
 def test_list_and_get_return_stored_turn_context():
@@ -384,6 +489,8 @@ def test_tampered_cursor_is_rejected():
         {"title": 5, "mode": "science"},
         {"title": "ok", "mode": "other"},
         {"title": "ok", "mode": "science", "model_id": "bad id!"},
+        {"title": "ok", "mode": "science", "model_id": "unknown.model-v1"},  # not server-discovered
+        {"title": "ok", "mode": "science", "model_id": "anthropic.claude-fable-5-v1"},  # D3 blocklist
     ],
 )
 def test_malformed_create_is_invalid_request(payload):
