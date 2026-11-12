@@ -27,6 +27,7 @@ from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
 from shared.tools.hitl.inline_functions import PlanStepInput, build_plan_approval_surface
+from shared.response_text import content_text
 from shared.utils import extract_tokens, get_model, last_human_message
 
 logger = logging.getLogger(__name__)
@@ -399,7 +400,7 @@ def synthesize(state: PipelineState) -> dict[str, Any]:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ])
-    synthesis_text = str(response.content)
+    synthesis_text = content_text(response.content)
     in_tok, out_tok = extract_tokens(response)
     trace.append(TraceEntry(stage="SYNTHESIZE", detail=f"mode={mode} | response_length={len(synthesis_text)}", input_tokens=in_tok, output_tokens=out_tok))
     logger.info({"event": "synthesize_complete", "structured": False})

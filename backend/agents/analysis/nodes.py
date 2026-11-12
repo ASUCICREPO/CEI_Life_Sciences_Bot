@@ -35,6 +35,7 @@ from shared.tools.hitl.inline_functions import build_scope_confirmation_surface
 # ADR: reuse the already-tested _run() rather than duplicate gateway-call/trim logic | B44/B70
 from shared.tools.web_search import _run as call_web_search
 from shared.tools.web_search import web_search_enabled
+from shared.response_text import content_text
 from shared.utils import extract_tokens, get_model, last_human_message
 
 logger = logging.getLogger(__name__)
@@ -543,7 +544,7 @@ def report(state: AnalysisState) -> dict[str, Any]:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_turn(query, before="Query: ", after=user_suffix)},
     ])
-    report_text = str(response.content)
+    report_text = content_text(response.content)
     in_tok, out_tok = extract_tokens(response)
     trace_entries.append(TraceEntry(
         stage="REPORT",

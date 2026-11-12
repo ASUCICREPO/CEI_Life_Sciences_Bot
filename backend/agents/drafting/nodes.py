@@ -40,6 +40,7 @@ from shared.tools.chart import CHART_FORMATS, ChartSpec, ChartTool, place_charts
 from shared.tools.code_interpreter import CodeInterpreterTool
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
 from shared.tools.export import ExportTool
+from shared.response_text import content_text
 from shared.utils import extract_tokens, get_model, last_human_message
 
 logger = logging.getLogger(__name__)
@@ -98,19 +99,19 @@ def _invoke_with_optional_stream(model: Any, messages: list[dict[str, str]], sta
     """
     if not state.get("stream"):
         response = model.invoke(messages)
-        return str(response.content), response
+        return content_text(response.content), response
     from langgraph.config import get_stream_writer
 
     writer = get_stream_writer()
     accumulated = None
     for chunk in model.stream(messages):
-        delta = str(getattr(chunk, "content", "") or "")
+        delta = content_text(getattr(chunk, "content", None))
         if delta:
             writer({"type": "prose_delta", "delta": delta})
         accumulated = chunk if accumulated is None else accumulated + chunk
     if accumulated is None:
         return "", None
-    return str(accumulated.content), accumulated
+    return content_text(accumulated.content), accumulated
 
 
 # ── route_request: entry node, decides intent/doc type/formats/outline need for this turn ──────
@@ -578,7 +579,18 @@ def plan_research(state: DraftingState) -> dict[str, Any]:
 
 def should_research(state: DraftingState) -> str:
     """Spawn the Research Agent only when plan_research asked questions."""
-    return "research" if state.get("research_questions") else "draft"
+    if state.get("research_questions"):
+        return "research"
+    return route_after_evidence(state)
+
+
+def route_after_evidence(state: DraftingState) -> str:
+    """After guidelines/research: write an outline only when the user must approve it, else draft.
+
+    # ADR: no outline without a review | an unreviewed outline is wasted latency and was streamed
+    # into the chat as if it were the answer; the draft prompt plans its own structure.
+    """
+    return "outline" if state.get("needs_outline_approval") else "draft"
 
 
 def research_subagent(state: DraftingState) -> dict[str, Any]:
@@ -633,7 +645,7 @@ def research_subagent(state: DraftingState) -> dict[str, Any]:
             )
             continue
         messages = result.get("messages", [])
-        answer = str(messages[-1].content) if messages else ""
+        answer = content_text(messages[-1].content) if messages else ""
         findings.append({"question": question, "answer": answer})
         # Keep the subagent's own steps and token usage visible in the drafting trace
         for sub in result.get("trace", []):
@@ -1028,7 +1040,7 @@ def draft(state: DraftingState) -> dict[str, Any]:
             {"role": "user", "content": user_content},
         ]
     )
-    draft_text = _strip_plot_code(str(response.content))
+    draft_text = _strip_plot_code(content_text(response.content))
     in_tok, out_tok = extract_tokens(response)
 
     trace_entries.append(
@@ -1150,7 +1162,7 @@ def revise(state: DraftingState) -> dict[str, Any]:
             {"role": "user", "content": user_content},
         ]
     )
-    revised_text = _strip_plot_code(str(response.content))
+    revised_text = _strip_plot_code(content_text(response.content))
     in_tok, out_tok = extract_tokens(response)
 
     trace_entries.append(

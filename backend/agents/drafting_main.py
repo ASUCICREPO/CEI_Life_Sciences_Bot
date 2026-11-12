@@ -53,7 +53,7 @@ _NODE_PROGRESS_LABELS: dict[str, str] = {
     "plan_research": "Planning the research",
     "research_subagent": "Gathering evidence",
     "outline": "Writing the outline",
-    "approve_outline": "Waiting for outline approval",
+    "approve_outline": "Preparing the outline for review",
     "draft": "Writing the draft",
     "revise": "Revising the draft",
     "plan_visuals": "Preparing charts",

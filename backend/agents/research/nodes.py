@@ -32,6 +32,7 @@ from shared.tools.base import DataSourceResult, GatewayUnavailableError
 # ADR: reuse the already-tested _run() rather than duplicate gateway-call/trim logic | B44
 from shared.tools.web_search import _run as call_web_search
 from shared.tools.web_search import web_search_enabled
+from shared.response_text import content_text
 from shared.utils import extract_tokens, get_model, last_human_message
 
 logger = logging.getLogger(__name__)
@@ -471,7 +472,7 @@ def synthesize(state: ResearchState) -> dict[str, Any]:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ])
-    synthesis_text = str(response.content)
+    synthesis_text = content_text(response.content)
     in_tok, out_tok = extract_tokens(response)
 
     trace_entries.append(TraceEntry(

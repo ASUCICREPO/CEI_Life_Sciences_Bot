@@ -14,6 +14,7 @@ from drafting.nodes import (
     plan_visuals,
     research_guidelines,
     research_subagent,
+    route_after_evidence,
     route_after_outline_approval,
     route_after_request,
     route_request,
@@ -52,9 +53,13 @@ _builder.add_conditional_edges(
 )
 _builder.add_edge("research_guidelines", "plan_research")
 _builder.add_conditional_edges(
-    "plan_research", should_research, {"research": "research_subagent", "draft": "outline"}
+    "plan_research",
+    should_research,
+    {"research": "research_subagent", "outline": "outline", "draft": "draft"},
 )
-_builder.add_edge("research_subagent", "outline")
+_builder.add_conditional_edges(
+    "research_subagent", route_after_evidence, {"outline": "outline", "draft": "draft"}
+)
 _builder.add_edge("outline", "approve_outline")
 _builder.add_conditional_edges(
     "approve_outline", route_after_outline_approval, {"draft": "draft", "outline": "outline", "end": END}
