@@ -770,6 +770,10 @@ export class BackendStack extends cdk.Stack {
       webSearchEnabled: this.config?.webSearchEnabled,
     });
 
+    // live-drafting: Drafting persists its own exports (drafting/nodes.py export_documents ->
+    // shared/persistence/exports.py ExportRepository), Drafting-only for now (see configureDraftingExports).
+    agentRuntimes.configureDraftingExports(exportsTable, exportsBucket);
+
     // ---------------------------------------------------------------
     // Agent proxy: Lambda function URL in front of the AgentCore runtimes
     // ---------------------------------------------------------------

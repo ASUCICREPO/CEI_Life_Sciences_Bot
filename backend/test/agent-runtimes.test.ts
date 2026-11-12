@@ -212,6 +212,33 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
     }
   });
 
+  test('live-drafting: only Drafting gets the export table/bucket env vars and least-privilege grants', () => {
+    const drafting = runtimes.find(([, r]) => (r as any).Properties.AgentRuntimeName === 'CEIDraftingAgent')![1] as any;
+    const exportTableId = tableIds.find((id) => id.includes('ExportMetadataStore'));
+    expect(exportTableId).toBeDefined();
+    expect(drafting.Properties.EnvironmentVariables.CEI_EXPORT_METADATA_TABLE).toEqual({ Ref: exportTableId });
+    expect(drafting.Properties.EnvironmentVariables.CEI_EXPORT_BUCKET).toBeDefined();
+    for (const [, runtime] of runtimes) {
+      if ((runtime as any).Properties.AgentRuntimeName !== 'CEIDraftingAgent') {
+        expect((runtime as any).Properties.EnvironmentVariables.CEI_EXPORT_METADATA_TABLE).toBeUndefined();
+      }
+    }
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    const draftingStatements = policies
+      .filter((p) => JSON.stringify(p.Properties.Roles).includes('AgentRuntimesDraftingRuntime'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement);
+    const exportDynamoStatement = draftingStatements.find((s: any) =>
+      JSON.stringify(s.Resource).includes(exportTableId!) && [s.Action].flat().includes('dynamodb:PutItem'));
+    expect(exportDynamoStatement).toBeDefined();
+    expect([exportDynamoStatement.Action].flat().sort()).toEqual(
+      ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem'].sort(),
+    );
+    const exportS3Statement = draftingStatements.find((s: any) =>
+      [s.Action].flat().includes('s3:PutObject') && JSON.stringify(s.Resource).includes('exports/*'));
+    expect(exportS3Statement).toBeDefined();
+    expect([exportS3Statement.Action].flat().sort()).toEqual(['s3:GetObject', 's3:PutObject'].sort());
+  });
+
   test('zero unsuppressed cdk-nag errors after adding the runtimes', () => {
     const errors = Annotations.fromStack(stack).findError('*', Match.stringLikeRegexp('AwsSolutions-.*'));
     expect(errors).toHaveLength(0);

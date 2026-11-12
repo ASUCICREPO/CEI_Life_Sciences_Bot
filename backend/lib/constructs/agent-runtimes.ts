@@ -358,6 +358,35 @@ export class AgentRuntimes extends Construct {
     }
   }
 
+  /**
+   * live-drafting: the Drafting runtime renders and persists its own exports itself (drafting/nodes.py
+   * export_documents -> shared/persistence/exports.py ExportRepository: save() for a new export, and
+   * download_bytes()/list_for_session() to recover the last draft on a cold thread). Drafting-only --
+   * no other runtime saves exports yet.
+   *
+   * ADR: no writer-fence wiring here | Rationale: drafting/nodes.py calls ExportRepository directly, not
+   * drafting/export_service.py's generate_reviewed_export, so it never constructs a
+   * shared/persistence/writer_fence.py WriterFence; that module's own docstring says "Do not activate
+   * this protocol yet" pending two documented idempotency gaps, and no runtime here needs it provisioned.
+   */
+  public configureDraftingExports(exportsTable: dynamodb.ITable, exportsBucket: s3.IBucket): void {
+    const runtime = this.runtimes.Drafting;
+    const resource = runtime.node.defaultChild as agentcore.CfnRuntime;
+    resource.addPropertyOverride('EnvironmentVariables.CEI_EXPORT_METADATA_TABLE', exportsTable.tableName);
+    resource.addPropertyOverride('EnvironmentVariables.CEI_EXPORT_BUCKET', exportsBucket.bucketName);
+    // shared/persistence/exports.py ExportRepository: save() (PutItem + put_object + UpdateItem) and a later
+    // turn's get()/list_for_session()/download_bytes() (GetItem/Query + S3 GetObject) -- same DynamoDB
+    // actions as ExportsHandler's own grants, plus PutObject for save() and GetObject for cold recovery.
+    exportsTable.grant(runtime.role, 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:GetItem', 'dynamodb:Query');
+    runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['s3:PutObject', 's3:GetObject'], resources: [exportsBucket.arnForObjects('exports/*')],
+    }));
+    NagSuppressions.addResourceSuppressions(runtime, [{
+      id: 'AwsSolutions-IAM5',
+      reason: 'ADR: export object read/write scope | Rationale: report object keys (shared/persistence/exports.py) are generated at runtime under one bucket prefix, the same pattern as ExportsHandler | Alternative: fixed object ARNs rejected because exports do not exist at deployment',
+    }], true);
+  }
+
   /** Exactly the DynamoDB actions ConversationRecorder / ChatHistoryStore / checkpoint writer call. */
   private grantData(runtime: agentcore.Runtime, props: AgentRuntimesProps): void {
     // ADR: explicit statements, not Table.grant | Rationale: Table.grant appends `<table>/index/*` once a table has GSIs (IAM5)
