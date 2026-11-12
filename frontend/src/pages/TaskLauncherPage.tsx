@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { useProductTour } from '../components/tour/ProductTour';
-import { mockTaskGroups } from '../mocks/tasks';
+import { taskGroupsForMode } from '../mocks/tasks';
 import { LiveAgentChat } from '../components/LiveAgentChat';
 import { ViewMode } from '../design-system/tokens';
 import type { AgentName } from '../lib/agentClient';
@@ -26,11 +26,19 @@ const groupIcons: Record<string, typeof Scale> = {
 
 // ADR: every task on this page opens a live agent | lib/resumeRouting.ts owns the task <-> agent map;
 // mocks/tasks.ts no longer lists any task that doesn't resolve to one of these agents.
-const livePlaceholders: Record<AgentName, string> = {
-  research: 'Ask a scientific question...',
-  drafting: 'Describe the document to draft...',
-  analysis: 'Describe the competitor, market, or legal scope to analyze...',
-  pipeline: 'Describe the multi-step request...',
+const livePlaceholders: Record<'science' | 'business', Record<AgentName, string>> = {
+  science: {
+    research: 'Ask a scientific question...',
+    drafting: 'Describe the scientific document to draft...',
+    analysis: 'Describe the programs, indication, or regulatory scope to analyze...',
+    pipeline: 'Describe the multi-step research request...',
+  },
+  business: {
+    research: 'Ask a business question...',
+    drafting: 'Describe the business document to draft...',
+    analysis: 'Describe the competitor, market, or legal scope to analyze...',
+    pipeline: 'Describe the multi-step business request...',
+  },
 };
 
 export function TaskLauncherPage() {
@@ -53,10 +61,12 @@ export function TaskLauncherPage() {
   const [unresumable, setUnresumable] = useState(
     resumeTarget?.kind === 'unresumable' && !routeState?.taskId ? resumeTarget : null,
   );
+  const agentMode = mode === ViewMode.BUSINESS ? 'business' : 'science';
+  const taskGroups = taskGroupsForMode(agentMode);
   const tourIsGuidingTask = tourIsOpen && ['task-query', 'task-group', 'task-select'].includes(tourStage);
 
   const filteredGroups = searchQuery
-    ? mockTaskGroups.map(group => ({
+    ? taskGroups.map(group => ({
         ...group,
         tasks: group.tasks.filter(task =>
           task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -64,7 +74,7 @@ export function TaskLauncherPage() {
           task.examples.some(e => e.toLowerCase().includes(searchQuery.toLowerCase()))
         ),
       })).filter(group => group.tasks.length > 0)
-    : mockTaskGroups;
+    : taskGroups;
 
   useEffect(() => {
     if (searchQuery.trim().length < 3 || filteredGroups.length === 0) return;
@@ -128,8 +138,7 @@ export function TaskLauncherPage() {
   const liveAgent = activeTask ? agentForTask(activeTask) : null;
   if (activeTask && liveAgent) {
     const analysisType = liveAnalysisTaskIds[activeTask];
-    const taskDef = mockTaskGroups.flatMap((group) => group.tasks).find((task) => task.id === activeTask);
-    const agentMode = mode === ViewMode.BUSINESS ? 'business' : 'science';
+    const taskDef = taskGroups.flatMap((group) => group.tasks).find((task) => task.id === activeTask);
     const chatResumeId = activeTask === resumeTaskId ? resumeSession : undefined;
     return (
       <div className="h-full flex flex-col">
@@ -153,7 +162,7 @@ export function TaskLauncherPage() {
             title={taskDef?.title ?? 'Live agent'}
             description={taskDef?.description ?? ''}
             examples={taskDef?.examples ?? []}
-            placeholder={livePlaceholders[liveAgent]}
+            placeholder={livePlaceholders[agentMode][liveAgent]}
           />
         </div>
       </div>

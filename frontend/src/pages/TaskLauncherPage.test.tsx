@@ -48,7 +48,7 @@ afterEach(() => {
 describe('TaskLauncherPage task picker', () => {
   it('lists only the groups whose tasks open a live agent', () => {
     renderPage();
-    expect(screen.getByText('Landscape Analysis')).toBeTruthy();
+    expect(screen.getByText('Evidence Landscape Analysis')).toBeTruthy();
     expect(screen.getByText('Research and Drafting')).toBeTruthy();
     expect(screen.getByText('Run a Pipeline')).toBeTruthy();
     // Groups that only ever opened a mock chat are gone entirely.
@@ -70,7 +70,7 @@ describe('TaskLauncherPage task picker', () => {
   it('collapses the five old drafting tasks into one "Draft a document" task', () => {
     renderPage();
     fireEvent.click(screen.getByText('Research and Drafting'));
-    expect(screen.getByText('Draft a document')).toBeTruthy();
+    expect(screen.getByText('Draft a scientific document')).toBeTruthy();
     expect(screen.queryByText('Draft a grant')).toBeNull();
     expect(screen.queryByText('Draft a VC pitch')).toBeNull();
     expect(screen.queryByText('Draft a journal article')).toBeNull();
@@ -98,7 +98,7 @@ describe('selecting a live task', () => {
   it('opens the one drafting task without a document_type prop', () => {
     renderPage();
     fireEvent.click(screen.getByText('Research and Drafting'));
-    fireEvent.click(screen.getByText('Draft a document'));
+    fireEvent.click(screen.getByText('Draft a scientific document'));
     expect(screen.getByTestId('live-agent-chat').textContent).toBe('live-drafting');
     const props = mocks.liveAgentChat.mock.calls.at(-1)![0] as Record<string, unknown>;
     expect(props.agent).toBe('drafting');
@@ -108,7 +108,7 @@ describe('selecting a live task', () => {
   it('opens the research chat task', () => {
     renderPage();
     fireEvent.click(screen.getByText('Research and Drafting'));
-    fireEvent.click(screen.getByText('Research chat'));
+    fireEvent.click(screen.getByText('Research a scientific question'));
     const props = mocks.liveAgentChat.mock.calls.at(-1)![0] as Record<string, unknown>;
     expect(props.agent).toBe('research');
     expect(props.threadKey).toBe('live-research');
