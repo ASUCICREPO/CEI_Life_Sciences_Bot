@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import ValidationError
 
-from shared.presenters.markdown import render_section_markdown
+from shared.presenters.markdown import render_document_markdown, render_section_markdown
 from shared.schemas.response_blocks import (
     ArtifactBlock,
     Block,
@@ -37,9 +37,9 @@ from shared.schemas.cei_ui import (
     ComparisonComponent,
     ComparisonCriterion,
     EvidencePanelComponent,
+    ExportFileComponent,
     GraphComponent,
     GraphSeries,
-    ListComponent,
     MarkdownComponent,
     MAX_ARTIFACTS_PER_SURFACE,
     Metric,
@@ -632,42 +632,57 @@ def _build_research_legacy_surface(text: str, surface_id: str, evidence_componen
 
 
 # ── Drafting surface ─────────────────────────────────────────────────────────
+#
+# ADR: the completed-turn surface shows a short summary + Files list, never the full draft text
+# (the chat body is not a document viewer); the full draft stays in graph state and its `md` export.
 
 
-def _chart_spec_to_graph(component_id: str, spec: Mapping[str, object]) -> GraphComponent | None:
-    data = spec.get("data")
-    if not isinstance(data, Mapping):
-        return None
-    categories = data.get("x")
-    if not isinstance(categories, list) or not categories:
-        return None
-    try:
-        series_items = [
-            GraphSeries(name=str(name), values=[float(v) for v in values])
-            for name, values in data.items()
-            if name != "x" and isinstance(values, list) and values
-        ]
-        if not series_items:
-            return None
-        chart_type = str(spec.get("chart_type", "bar"))
-        graph_type = "bar-vertical" if chart_type == "bar" else chart_type
-        return GraphComponent(
-            id=component_id,
-            graph_type=graph_type,
-            title=str(spec.get("title", "Chart")),
-            categories=[str(c) for c in categories],
-            series=series_items,
-            x_label=_optional_text(spec.get("x_label")) or None,
-            y_label=_optional_text(spec.get("y_label")) or None,
-        )
-    except (ValidationError, TypeError, ValueError):
-        return None
+def _drafting_summary_markdown(
+    text: str,
+    document: ResponseDocument | None,
+    chart_specs: Sequence[Mapping[str, object]],
+    chart_instructions: str | None,
+) -> str:
+    if document is not None:
+        title = document.title
+        summary = (document.summary or "").strip()
+        section_headings = [section.heading for section in document.sections]
+        full_text = render_document_markdown(document)
+    else:
+        sections = split_markdown_sections(text)
+        title = sections[0][0] if sections and sections[0][0] not in ("Overview", "Answer") else "Document"
+        section_headings = [heading for heading, _ in sections]
+        summary = _fallback_summary(text)
+        full_text = text
 
-
-def _format_fields(value: Mapping[str, object], fields: Sequence[str]) -> str:
-    return "\n".join(
-        f"{field.replace('_', ' ').title()}: {value[field]}" for field in fields if field in value
+    source_count = len(
+        {
+            source_id.strip()
+            for group in _BRACKET_RE.findall(full_text)
+            for source_id in re.split(r"[,;]", group)
+            if source_id.strip()
+        }
     )
+
+    lines = [f"# {title}", "", summary or "No summary is available."]
+    if section_headings:
+        lines += ["", "**Sections:** " + ", ".join(section_headings)]
+    lines += ["", f"**Sources cited:** {source_count}"]
+    if chart_specs:
+        titles = [str(spec.get("title", "Chart")) for spec in chart_specs]
+        lines += ["", "**Charts:** " + ", ".join(titles)]
+    if chart_instructions:
+        lines += ["", f"_{chart_instructions}_"]
+    return "\n".join(lines)
+
+
+def _fallback_summary(text: str, *, max_chars: int = 400) -> str:
+    """A short summary for the legacy (non-structured) draft path, with no extra model call."""
+    for heading, content in split_markdown_sections(text):
+        paragraph = next((p.strip() for p in content.split("\n\n") if p.strip()), "")
+        if paragraph:
+            return paragraph[:max_chars] + ("…" if len(paragraph) > max_chars else "")
+    return ""
 
 
 def build_drafting_surface(
@@ -679,247 +694,34 @@ def build_drafting_surface(
     chart_instructions: str | None,
     document: ResponseDocument | None = None,
 ) -> CEIUISurface:
-    """Build a drafting surface without private export or chart fields."""
-    deliverables_components = _build_deliverables_components(exports, chart_specs, chart_instructions)
+    """Build the short drafting summary surface: title + summary + sections + sources, then Files."""
+    summary_markdown = _drafting_summary_markdown(text, document, chart_specs, chart_instructions)
 
-    if document is not None:
+    export_components: list[ExportFileComponent] = []
+    for index, export_item in enumerate(exports):
         try:
-            return _build_drafting_document_surface(
-                surface_id, document, chart_specs, chart_instructions, deliverables_components
+            export_components.append(
+                ExportFileComponent(
+                    id=f"export-{index}",
+                    export_id=str(export_item.get("export_id", "")),
+                    filename=str(export_item.get("filename", "")),
+                    format=export_item.get("format", "md"),
+                    byte_size=int(export_item.get("byte_size", 0) or 0),
+                )
             )
         except ValidationError:
-            logger.warning({"event": "drafting_document_surface_fallback"})
+            logger.warning({"event": "export_file_degraded"})
 
-    return _build_drafting_legacy_surface(text, surface_id, chart_specs, chart_instructions, deliverables_components)
-
-
-def _build_deliverables_components(
-    exports: Sequence[Mapping[str, object]],
-    chart_specs: Sequence[Mapping[str, object]],
-    chart_instructions: str | None,
-) -> list[object]:
-    safe_exports = [
-        {key: export_item[key] for key in ("format", "filename", "byte_size") if key in export_item}
-        for export_item in exports
+    components: list[object] = [
+        MarkdownComponent(id="summary", content=summary_markdown),
+        TextComponent(id="files-heading", content="Files", variant="h2"),
     ]
-    safe_charts = [
-        {
-            key: chart[key]
-            for key in ("title", "chart_type", "x_label", "y_label", "section")
-            if key in chart
-        }
-        for chart in chart_specs
-    ]
-    export_ids = [f"export-{index}" for index in range(len(safe_exports))]
-    chart_ids = [f"chart-{index}" for index in range(len(safe_charts))]
-    return [
-        TextComponent(
-            id="status-text",
-            content=chart_instructions or "All requested chart data is available.",
-        ),
-        TextComponent(id="exports-heading", content=f"Exports ({len(safe_exports)})", variant="h2"),
-        ListComponent(id="export-list", children=export_ids),
-        TextComponent(id="charts-heading", content=f"Charts ({len(safe_charts)})", variant="h2"),
-        ListComponent(id="chart-list", children=chart_ids),
-        *[
-            CardComponent(
-                id=component_id,
-                title=str(export_item.get("filename", "Export")),
-                body=_format_fields(export_item, ("format", "byte_size")),
-            )
-            for component_id, export_item in zip(export_ids, safe_exports, strict=True)
-        ],
-        *[
-            CardComponent(
-                id=component_id,
-                title=str(chart.get("title", "Chart")),
-                body="\n".join(
-                    filter(
-                        None,
-                        [_format_fields(chart, ("chart_type", "section", "x_label", "y_label")), "Shown in preview"],
-                    )
-                ),
-            )
-            for component_id, chart in zip(chart_ids, safe_charts, strict=True)
-        ],
-        ColumnComponent(
-            id="deliverables-column",
-            children=[
-                "status-text",
-                "exports-heading",
-                "export-list",
-                "charts-heading",
-                "chart-list",
-            ],
-        ),
-    ]
+    if export_components:
+        components.extend(export_components)
+        files_children = [component.id for component in export_components]
+    else:
+        components.append(TextComponent(id="files-empty", content="No files were generated for this turn."))
+        files_children = ["files-empty"]
 
-
-def _build_drafting_document_surface(
-    surface_id: str,
-    document: ResponseDocument,
-    chart_specs: Sequence[Mapping[str, object]],
-    chart_instructions: str | None,
-    deliverables_components: list[object],
-) -> CEIUISurface:
-    doc_chart_titles = {
-        block.title.strip().lower()
-        for section in document.sections
-        for block in section.blocks
-        if isinstance(block, ChartBlock)
-    }
-
-    header_children = ["header-summary"]
-    components: list[object] = [MarkdownComponent(id="header-summary", content=document.summary)]
-    if document.key_metrics:
-        header_children.append("header-metrics")
-        components.append(
-            StatGridComponent(
-                id="header-metrics", metrics=[_metric_to_stat(metric) for metric in document.key_metrics]
-            )
-        )
-    components.append(CardComponent(id="header-card", title=document.title, children=header_children))
-
-    reserved = len(components) + len(deliverables_components)
-    section_components, section_card_ids = _build_document_sections(document, set(), {}, reserved)
-    components.extend(section_components)
-    section_by_heading = {
-        _norm_heading(section.heading): card_id
-        for section, card_id in zip(document.sections, section_card_ids, strict=True)
-    }
-
-    figures_children: list[str] = []
-    for index, spec in enumerate(chart_specs):
-        title = str(spec.get("title", "")).strip().lower()
-        if title in doc_chart_titles:
-            continue
-        graph = _chart_spec_to_graph(f"draft-chart-{index}", spec)
-        if graph is None:
-            continue
-        components.append(graph)
-        target_card_id = section_by_heading.get(_norm_heading(str(spec.get("section", ""))))
-        if target_card_id is not None:
-            _append_child(components, target_card_id, graph.id)
-        else:
-            figures_children.append(graph.id)
-
-    if figures_children:
-        components.append(CardComponent(id="figures-card", title="Figures", children=figures_children))
-        section_card_ids.append("figures-card")
-
-    answer_children = ["header-card", *section_card_ids]
-    if chart_instructions:
-        components.append(_build_chart_instructions_callout(chart_instructions))
-        answer_children.append("chart-instructions-callout")
-
-    components.append(ColumnComponent(id="document-col", children=answer_children))
-    components.append(
-        TabsComponent(
-            id="root",
-            tabs=[
-                TabDescriptor(label="Preview", child_id="document-col"),
-                TabDescriptor(label="Deliverables", child_id="deliverables-column"),
-            ],
-        )
-    )
-    components.extend(deliverables_components)
-    return CEIUISurface(surface_id=surface_id, root_id="root", components=components)
-
-
-def _build_chart_instructions_callout(chart_instructions: str) -> CalloutComponent:
-    return CalloutComponent(
-        id="chart-instructions-callout",
-        tone="warning",
-        title="Chart data needed",
-        content=chart_instructions,
-    )
-
-
-def _append_child(components: list[object], card_id: str, child_id: str) -> None:
-    for index, component in enumerate(components):
-        if getattr(component, "id", None) == card_id:
-            components[index] = component.model_copy(update={"children": [*component.children, child_id]})
-            return
-
-
-def _build_drafting_legacy_surface(
-    text: str,
-    surface_id: str,
-    chart_specs: Sequence[Mapping[str, object]],
-    chart_instructions: str | None,
-    deliverables_components: list[object],
-) -> CEIUISurface:
-    sections = split_markdown_sections(text)
-    graphs = [
-        (str(spec.get("section", "")), graph)
-        for index, spec in enumerate(chart_specs)
-        if (graph := _chart_spec_to_graph(f"draft-chart-{index}", spec)) is not None
-    ]
-
-    if len(sections) <= 1:
-        figures_children = [graph.id for _, graph in graphs]
-        components: list[object] = [
-            CardComponent(id="document-card", title="Document", children=["document-text"]),
-            MarkdownComponent(id="document-text", content=text),
-            *[graph for _, graph in graphs],
-        ]
-        answer_children = ["document-card"]
-        if figures_children:
-            components.append(CardComponent(id="figures-card", title="Figures", children=figures_children))
-            answer_children.append("figures-card")
-        if chart_instructions:
-            components.append(_build_chart_instructions_callout(chart_instructions))
-            answer_children.append("chart-instructions-callout")
-        components.append(ColumnComponent(id="document-col", children=answer_children))
-        components.append(
-            TabsComponent(
-                id="root",
-                tabs=[
-                    TabDescriptor(label="Preview", child_id="document-col"),
-                    TabDescriptor(label="Deliverables", child_id="deliverables-column"),
-                ],
-            )
-        )
-        components.extend(deliverables_components)
-        return CEIUISurface(surface_id=surface_id, root_id="root", components=components)
-
-    section_card_ids: list[str] = []
-    section_by_heading: dict[str, str] = {}
-    components = []
-    for index, (heading, content) in enumerate(sections):
-        markdown_id = f"legacy-s{index}-markdown"
-        card_id = f"legacy-s{index}-card"
-        components.append(MarkdownComponent(id=markdown_id, content=content))
-        components.append(CardComponent(id=card_id, title=heading, children=[markdown_id]))
-        section_card_ids.append(card_id)
-        section_by_heading[_norm_heading(heading)] = card_id
-
-    figures_children = []
-    for wanted_heading, graph in graphs:
-        components.append(graph)
-        target_card_id = section_by_heading.get(_norm_heading(wanted_heading))
-        if target_card_id is not None:
-            _append_child(components, target_card_id, graph.id)
-        else:
-            figures_children.append(graph.id)
-
-    if figures_children:
-        components.append(CardComponent(id="figures-card", title="Figures", children=figures_children))
-        section_card_ids.append("figures-card")
-
-    if chart_instructions:
-        components.append(_build_chart_instructions_callout(chart_instructions))
-        section_card_ids.append("chart-instructions-callout")
-
-    components.append(ColumnComponent(id="document-col", children=section_card_ids))
-    components.append(
-        TabsComponent(
-            id="root",
-            tabs=[
-                TabDescriptor(label="Preview", child_id="document-col"),
-                TabDescriptor(label="Deliverables", child_id="deliverables-column"),
-            ],
-        )
-    )
-    components.extend(deliverables_components)
+    components.append(ColumnComponent(id="root", children=["summary", "files-heading", *files_children]))
     return CEIUISurface(surface_id=surface_id, root_id="root", components=components)
