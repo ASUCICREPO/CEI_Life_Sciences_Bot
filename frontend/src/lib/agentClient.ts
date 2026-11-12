@@ -2,6 +2,8 @@ import { safeParseCEIUISurface, type ActionRequest, type ActionResponse, type CE
 import { actionResponseMatchesRequest } from './cei-ui/action-correlation';
 import { getLoadedRuntimeConfig } from './auth/config';
 import { reportClientFailure } from './clientDiagnostics';
+import { consumeEventStream } from './stream/openStream';
+import type { StreamEvent } from './stream/events';
 
 export type AgentName = 'research' | 'drafting' | 'analysis' | 'pipeline';
 
@@ -9,26 +11,23 @@ export type AgentMode = 'science' | 'business';
 
 export type AnalysisType = 'competitor' | 'market' | 'legal_landscape';
 
-/** Mirrors backend/agents/drafting/state.py DocumentType; the Drafting runtime rejects any other value. */
-export type DocumentType = 'grant' | 'vc_pitch' | 'journal' | 'whitepaper' | 'latex';
-
 export type AgentStatus = 'completed' | 'awaiting_input' | 'running' | 'stale' | 'rejected';
 
 export interface AgentRunPayload {
   prompt: string;
   mode: AgentMode;
   analysis_type?: AnalysisType;
-  document_type?: DocumentType;
 }
 
+// ADR: never send document_type | the Drafting runtime now infers the document type (and file formats)
+// from the prompt itself, so the frontend has nothing to pick or persist.
 /** Builds a run payload carrying only the turn context the target agent understands. */
 export function buildRunPayload(
   agent: AgentName,
-  input: { prompt: string; mode: AgentMode; analysisType?: AnalysisType; documentType?: DocumentType },
+  input: { prompt: string; mode: AgentMode; analysisType?: AnalysisType },
 ): AgentRunPayload {
   const payload: AgentRunPayload = { prompt: input.prompt, mode: input.mode };
   if (agent === 'analysis' && input.analysisType) payload.analysis_type = input.analysisType;
-  if (agent === 'drafting' && input.documentType) payload.document_type = input.documentType;
   return payload;
 }
 
@@ -99,15 +98,19 @@ interface PostTarget {
   url?: string;
   /** The AgentCore session header; the API Gateway CORS allowlist does not include it, so /ui-actions omits it. */
   sessionHeader?: boolean;
+  /** Overrides the default `application/json` Accept header (e.g. to request SSE on a drafting action). */
+  accept?: string;
 }
 
-async function postInvocation(
+// ADR: fetch + auth + status handling factored out of postInvocation | sendActionExpectingStream needs the raw
+// Response (to read its Content-Type) before deciding whether to parse JSON or consume an event stream.
+async function performRequest(
   agent: AgentName,
   body: unknown,
   sessionId: string,
   timeoutMs: number,
   target: PostTarget = {},
-): Promise<unknown> {
+): Promise<Response> {
   let token: string | null;
   try { token = tokenProvider ? await tokenProvider() : null; }
   catch (error) { reportClientFailure('auth', 'auth_error'); throw error; }
@@ -123,7 +126,7 @@ async function postInvocation(
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        accept: 'application/json',
+        accept: target.accept ?? 'application/json',
         ...(target.sessionHeader === false ? {} : { [SESSION_HEADER]: sessionId }),
         authorization: `Bearer ${token}`,
       },
@@ -164,6 +167,17 @@ async function postInvocation(
     throw new AgentClientError(`The ${agent} agent returned an error (HTTP ${response.status}).`);
   }
 
+  return response;
+}
+
+async function postInvocation(
+  agent: AgentName,
+  body: unknown,
+  sessionId: string,
+  timeoutMs: number,
+  target: PostTarget = {},
+): Promise<unknown> {
+  const response = await performRequest(agent, body, sessionId, timeoutMs, target);
   const parsed: unknown = await response.json().catch((error: unknown) => {
     reportClientFailure('agent', 'invalid_response');
     throw new AgentClientError('The agent service returned an invalid response.', error);
@@ -217,6 +231,40 @@ export async function sendAction(agent: AgentName, action: ActionRequest, sessio
     throw new AgentClientError('The action response did not match the request.');
   }
   return envelope;
+}
+
+export type ActionDispatchResult =
+  | { kind: 'envelope'; envelope: AgentEnvelope }
+  | { kind: 'stream'; events: AsyncIterable<StreamEvent> };
+
+// ADR: a drafting action may answer over SSE instead of JSON | the outline-approval action starts the full
+// draft; the backend decides per-response (Content-Type), so this only exists where /ui-actions is reachable
+// (deployed builds) and the caller opts in (LiveAgentChat gates this to drafting chats with streaming on).
+export async function sendActionExpectingStream(agent: AgentName, action: ActionRequest, sessionId: string): Promise<ActionDispatchResult> {
+  const apiBaseUrl = getLoadedRuntimeConfig()?.apiBaseUrl;
+  if (!apiBaseUrl) {
+    // The local agent-proxy demo has no /ui-actions endpoint and never streams an action response.
+    return { kind: 'envelope', envelope: await sendAction(agent, action, sessionId) };
+  }
+  const response = await performRequest(agent, action, sessionId, RUN_TIMEOUT_MS, {
+    url: `${apiBaseUrl}/ui-actions`,
+    sessionHeader: false,
+    accept: 'text/event-stream, application/json',
+  });
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType.includes('text/event-stream') && response.body) {
+    return { kind: 'stream', events: consumeEventStream(response) };
+  }
+  const raw: unknown = await response.json().catch((error: unknown) => {
+    reportClientFailure('agent', 'invalid_response');
+    throw new AgentClientError('The agent service returned an invalid response.', error);
+  });
+  const envelope = toAgentEnvelope(raw);
+  if (envelope.action_response && !actionResponseMatchesRequest(action, envelope.action_response)) {
+    reportClientFailure('agent', 'invalid_response');
+    throw new AgentClientError('The action response did not match the request.');
+  }
+  return { kind: 'envelope', envelope };
 }
 
 export async function getJob(jobId: string, sessionId: string): Promise<JobEnvelope> {

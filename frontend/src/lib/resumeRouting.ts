@@ -1,4 +1,4 @@
-import type { AgentName, AnalysisType, DocumentType } from './agentClient';
+import type { AgentName, AnalysisType } from './agentClient';
 
 // ADR: one pure module owns task <-> agent routing | Rationale: resuming a chat must reopen the runtime that
 // owns its session (checkpoint + thread); guessing from the task (e.g. "not analysis => pipeline") silently sent
@@ -6,6 +6,10 @@ import type { AgentName, AnalysisType, DocumentType } from './agentClient';
 
 export const liveResearchTaskId = 'live-research';
 export const livePipelineTaskId = 'run-pipeline';
+// ADR: one drafting task for every document type | the backend now infers the document type (and file
+// formats) itself, so the frontend no longer needs a task per type, and a saved session with any
+// (or no) stored document_type always reopens here.
+export const liveDraftingTaskId = 'live-drafting';
 
 export const liveAnalysisTaskIds: Readonly<Record<string, AnalysisType>> = {
   'analysis-competitor': 'competitor',
@@ -13,20 +17,12 @@ export const liveAnalysisTaskIds: Readonly<Record<string, AnalysisType>> = {
   'analysis-legal': 'legal_landscape',
 };
 
-export const liveDraftingTaskIds: Readonly<Record<string, DocumentType>> = {
-  'drafting-grant': 'grant',
-  'drafting-vc-pitch': 'vc_pitch',
-  'drafting-journal': 'journal',
-  'drafting-whitepaper': 'whitepaper',
-  'drafting-latex': 'latex',
-};
-
 /** Analysis chats saved before analysis_type was stored reopen in the competitor task. */
 export const defaultAnalysisTaskId = 'analysis-competitor';
 
 export const liveTaskIds: ReadonlySet<string> = new Set([
   liveResearchTaskId,
-  ...Object.keys(liveDraftingTaskIds),
+  liveDraftingTaskId,
   ...Object.keys(liveAnalysisTaskIds),
   livePipelineTaskId,
 ]);
@@ -51,7 +47,7 @@ function taskFor<T>(table: Readonly<Record<string, T>>, value: string | null | u
 /** The agent a live task talks to, or null for a mock (non-live) task. */
 export function agentForTask(taskId: string): AgentName | null {
   if (taskId === liveResearchTaskId) return 'research';
-  if (own(liveDraftingTaskIds, taskId)) return 'drafting';
+  if (taskId === liveDraftingTaskId) return 'drafting';
   if (own(liveAnalysisTaskIds, taskId)) return 'analysis';
   if (taskId === livePipelineTaskId) return 'pipeline';
   return null;
@@ -89,11 +85,9 @@ export function resolveResumeTarget(state: ResumeRouteState | null | undefined):
       return { kind: 'resume', taskId: livePipelineTaskId, agent };
     case 'analysis':
       return { kind: 'resume', taskId: taskFor(liveAnalysisTaskIds, state?.analysisType) ?? defaultAnalysisTaskId, agent };
-    case 'drafting': {
-      // The Drafting runtime rejects turns without a valid document_type, so there is no safe default.
-      const taskId = taskFor(liveDraftingTaskIds, state?.documentType);
-      if (taskId) return { kind: 'resume', taskId, agent };
-      return { kind: 'unresumable', agentType, reason: "This drafting chat doesn't record its document type." };
-    }
+    case 'drafting':
+      // The backend infers the document type itself, so every drafting chat reopens in the one
+      // drafting task regardless of (or missing) stored document_type.
+      return { kind: 'resume', taskId: liveDraftingTaskId, agent };
   }
 }

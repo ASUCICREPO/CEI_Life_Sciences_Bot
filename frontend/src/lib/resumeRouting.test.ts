@@ -3,7 +3,7 @@ import {
   agentForAgentType,
   agentForTask,
   liveAnalysisTaskIds,
-  liveDraftingTaskIds,
+  liveDraftingTaskId,
   livePipelineTaskId,
   liveResearchTaskId,
   liveTaskIds,
@@ -23,7 +23,7 @@ describe('resumeRouting', () => {
 
   it('maps every live task to its agent and mock tasks to null', () => {
     expect(agentForTask(liveResearchTaskId)).toBe('research');
-    for (const taskId of Object.keys(liveDraftingTaskIds)) expect(agentForTask(taskId)).toBe('drafting');
+    expect(agentForTask(liveDraftingTaskId)).toBe('drafting');
     for (const taskId of Object.keys(liveAnalysisTaskIds)) expect(agentForTask(taskId)).toBe('analysis');
     expect(agentForTask(livePipelineTaskId)).toBe('pipeline');
     expect(agentForTask('research-question')).toBeNull();
@@ -45,14 +45,10 @@ describe('resumeRouting', () => {
     });
   });
 
-  it.each(Object.entries(liveDraftingTaskIds))('resumes drafting task %s from its stored document_type', (taskId, documentType) => {
-    expect(resolveResumeTarget({ agentType: 'drafting', documentType })).toEqual({ kind: 'resume', taskId, agent: 'drafting' });
-  });
-
-  it.each([null, undefined, 'bogus'])('cannot resume a drafting chat with document_type %s', (documentType) => {
-    const target = resolveResumeTarget({ agentType: 'drafting', documentType });
-    expect(target.kind).toBe('unresumable');
-    expect(target).toMatchObject({ agentType: 'drafting' });
+  it.each([null, undefined, 'bogus', 'grant'])('resumes any drafting chat in the one drafting task regardless of document_type %s', (documentType) => {
+    expect(resolveResumeTarget({ agentType: 'drafting', documentType })).toEqual({
+      kind: 'resume', taskId: liveDraftingTaskId, agent: 'drafting',
+    });
   });
 
   it.each([null, undefined, '', 'foo', 'pipeline'])('treats agent_type %s as unresumable, never the pipeline', (agentType) => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SseParser, frameToRawEvent } from './sseParser';
-import { openStream, StreamError } from './openStream';
+import { consumeEventStream, openStream, StreamError } from './openStream';
 import { parseStreamEvent, type StreamEvent } from './events';
 import { configureClientDiagnostics } from '../clientDiagnostics';
 
@@ -185,5 +185,25 @@ describe('openStream', () => {
       controller.abort();
     }
     expect(events).toHaveLength(1);
+  });
+});
+
+describe('consumeEventStream', () => {
+  it('yields every event up to and including the first terminal one, then stops', async () => {
+    const response = new Response(streamOf([BEGIN, ROOT, END, sse(3, 'usage', { input_tokens: 1, output_tokens: 1 })]));
+    const events = await collect(consumeEventStream(response));
+    expect(events.map((event) => event.type)).toEqual(['surface_begin', 'component_add', 'surface_end']);
+  });
+
+  it('returns nothing for a response with no body', async () => {
+    const response = new Response(null, { status: 204 });
+    const events = await collect(consumeEventStream(response));
+    expect(events).toEqual([]);
+  });
+
+  it('skips frames that do not parse as a known event', async () => {
+    const response = new Response(streamOf([BEGIN, 'id: 9\nevent: nonsense\ndata: {}\n\n', END]));
+    const events = await collect(consumeEventStream(response));
+    expect(events.map((event) => event.type)).toEqual(['surface_begin', 'surface_end']);
   });
 });

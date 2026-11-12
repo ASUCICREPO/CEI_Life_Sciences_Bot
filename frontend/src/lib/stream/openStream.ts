@@ -150,3 +150,32 @@ export async function* openStream(options: OpenStreamOptions): AsyncGenerator<St
     await sleep(backoff(attempt), options.signal);
   }
 }
+
+// ADR: a one-shot consumer for an already-opened SSE Response | used for a POST /ui-actions response that
+// came back as text/event-stream (a drafting outline approval starting the full draft) instead of JSON.
+// Unlike openStream above, there is nothing to resume: the request already happened exactly once.
+export async function* consumeEventStream(
+  response: Response,
+  now: () => string = () => new Date().toISOString(),
+): AsyncGenerator<StreamEvent, void, undefined> {
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const parser = new SseParser();
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      for (const frame of parser.push(decoder.decode(value, { stream: true }))) {
+        const raw = frameToRawEvent(frame, now);
+        const event = parseStreamEvent(raw);
+        if (!event) continue;
+        yield event;
+        if (TERMINAL_EVENT_TYPES.has(event.type)) return;
+      }
+    }
+  } finally {
+    parser.flush();
+    await reader.cancel().catch(() => undefined);
+  }
+}

@@ -81,6 +81,34 @@ describe('Research chat transport', () => {
   });
 });
 
+describe('Drafting chat transport', () => {
+  it('streams a drafting turn over /chat/stream with task_type live-drafting, never document_type', async () => {
+    mocks.createSession.mockResolvedValue({ session_id: 'server-session' });
+    render(<MemoryRouter><LiveAgentChat agent="drafting" mode="science" threadKey="live-drafting"
+      title="Drafting" description="Drafting" examples={[]} placeholder="Ask" /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Ask'), { target: { value: 'Draft a grant outline' } });
+    fireEvent.submit(screen.getByLabelText('Ask').closest('form')!);
+    await waitFor(() => expect(mocks.streamProps).toHaveBeenCalled());
+    const props = mocks.streamProps.mock.calls.at(-1)![0] as { body: Record<string, unknown> };
+    expect(props.body).toMatchObject({ task_type: 'live-drafting', message: 'Draft a grant outline' });
+    expect(props.body).not.toHaveProperty('document_type');
+    expect(mocks.invokeAgent).not.toHaveBeenCalled();
+  });
+
+  it('keeps the buffered agent-proxy fallback for drafting when streaming is off', async () => {
+    mocks.streaming = false;
+    mocks.invokeAgent.mockResolvedValue({ text: 'Result' });
+    render(<MemoryRouter><LiveAgentChat agent="drafting" mode="science" threadKey="live-drafting"
+      title="Drafting" description="Drafting" examples={[]} placeholder="Ask" /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Ask'), { target: { value: 'Draft a grant outline' } });
+    fireEvent.submit(screen.getByLabelText('Ask').closest('form')!);
+    await waitFor(() => expect(mocks.invokeAgent).toHaveBeenCalledTimes(1));
+    const payload = mocks.invokeAgent.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('document_type');
+    expect(mocks.streamProps).not.toHaveBeenCalled();
+  });
+});
+
 describe('model picker', () => {
   it('hides the picker until the model list loads', async () => {
     mocks.modelsClient.listModels.mockResolvedValue([{ model_id: 'us.anthropic.claude-sonnet-4-5', label: 'Claude Sonnet' }]);

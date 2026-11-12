@@ -5,24 +5,36 @@ import {
   invokeAgent,
   isSessionUuid,
   sendAction,
+  sendActionExpectingStream,
   setAgentTokenProvider,
   startNewSessionId,
 } from './agentClient';
 import { loadRuntimeConfig, resetRuntimeConfigForTests } from './auth/config';
 
-describe('buildRunPayload', () => {
-  const input = { prompt: 'p', mode: 'science' as const, analysisType: 'market' as const, documentType: 'grant' as const };
+function sse(seq: number, type: string, data: Record<string, unknown>): string {
+  return `id: ${seq}\nevent: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+}
 
-  it('sends document_type only to drafting', () => {
-    expect(buildRunPayload('drafting', input)).toEqual({ prompt: 'p', mode: 'science', document_type: 'grant' });
+function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (index < chunks.length) controller.enqueue(encoder.encode(chunks[index++]));
+      else controller.close();
+    },
   });
+}
+
+describe('buildRunPayload', () => {
+  const input = { prompt: 'p', mode: 'science' as const, analysisType: 'market' as const };
 
   it('sends analysis_type only to analysis', () => {
     expect(buildRunPayload('analysis', input)).toEqual({ prompt: 'p', mode: 'science', analysis_type: 'market' });
   });
 
-  it('sends neither to research or pipeline', () => {
-    for (const agent of ['research', 'pipeline'] as const) {
+  it('never sends document_type: the backend infers the document type itself', () => {
+    for (const agent of ['research', 'drafting', 'pipeline'] as const) {
       expect(Object.keys(buildRunPayload(agent, input)).sort()).toEqual(['mode', 'prompt']);
     }
   });
@@ -139,6 +151,56 @@ describe('agentClient', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('/api/agents/analysis');
     expect(JSON.parse(String(init.body))).toEqual({ op: 'resume', action: ACTION });
+  });
+
+  async function withApiBaseUrl() {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      region: 'us-east-1', userPoolId: 'us-east-1_abc', userPoolClientId: 'client123',
+      cognitoDomain: 'https://cei-ls-1.auth.us-east-1.amazoncognito.com',
+      apiBaseUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/v1',
+    }), { status: 200 })));
+    await loadRuntimeConfig();
+  }
+
+  describe('sendActionExpectingStream', () => {
+    it('sends an SSE Accept header and consumes an event-stream response', async () => {
+      await withApiBaseUrl();
+      const fetchMock = vi.fn(async () => new Response(
+        streamOf([sse(0, 'surface_begin', { surface_id: 's', root_id: 'root' }), sse(1, 'surface_end', {})]),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ));
+      vi.stubGlobal('fetch', fetchMock);
+      setAgentTokenProvider(async () => 'tok-abc');
+      const result = await sendActionExpectingStream('drafting', ACTION, 'sess-1');
+      expect(result.kind).toBe('stream');
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect((init.headers as Record<string, string>).accept).toContain('text/event-stream');
+      if (result.kind !== 'stream') throw new Error('expected a stream result');
+      const types: string[] = [];
+      for await (const event of result.events) types.push(event.type);
+      expect(types).toEqual(['surface_begin', 'surface_end']);
+    });
+
+    it('returns the JSON envelope when the response is not an event stream', async () => {
+      await withApiBaseUrl();
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ text: 'ok', status: 'completed' }), { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+      setAgentTokenProvider(async () => 'tok-abc');
+      const result = await sendActionExpectingStream('drafting', ACTION, 'sess-1');
+      expect(result.kind).toBe('envelope');
+      if (result.kind !== 'envelope') throw new Error('expected an envelope result');
+      expect(result.envelope.text).toBe('ok');
+    });
+
+    it('falls back to the agent proxy JSON envelope when no API is configured (local demo)', async () => {
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ text: 'ok', status: 'completed' }), { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+      setAgentTokenProvider(async () => 'tok-abc');
+      const result = await sendActionExpectingStream('drafting', ACTION, 'sess-1');
+      expect(result.kind).toBe('envelope');
+      const [url] = fetchMock.mock.calls[0] as unknown as [string];
+      expect(url).toBe('/api/agents/drafting');
+    });
   });
 
   it('maps proxy 401 / 429 / 504 to actionable messages', async () => {

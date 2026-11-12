@@ -9,6 +9,8 @@ import { ThinkingBlock } from './ThinkingBlock';
 
 /** Called when a stream `hitl_request` card is answered; `seq` identifies which interaction. */
 export type StreamInteractionAction = (seq: number, envelope: AgentEnvelope) => void;
+/** Called when a stream `hitl_request` card's action answers over SSE instead of JSON (a drafting chat). */
+export type StreamInteractionStreamAction = (seq: number, events: AsyncIterable<StreamEvent>) => void;
 
 export type StreamingSurfaceProps = {
   sessionId: string;
@@ -28,6 +30,8 @@ export type StreamingSurfaceProps = {
   answeredInteractions?: ReadonlySet<number>;
   /** Called when a hitl interaction card is answered via POST /ui-actions. */
   onInteractionAction?: StreamInteractionAction;
+  /** Called when a hitl interaction card's action answers over SSE instead of JSON. */
+  onInteractionStreamAction?: StreamInteractionStreamAction;
 };
 
 const PROGRESS_LABEL: Record<NonNullable<StreamState['progress']>['status'], string> = {
@@ -37,7 +41,7 @@ const PROGRESS_LABEL: Record<NonNullable<StreamState['progress']>['status'], str
   finalizing: 'Finalizing',
 };
 
-export function StreamingSurface({ sessionId, agent, body, url, messageId, onStateChange, onFinished, openStreamImpl, answeredInteractions, onInteractionAction }: StreamingSurfaceProps) {
+export function StreamingSurface({ sessionId, agent, body, url, messageId, onStateChange, onFinished, openStreamImpl, answeredInteractions, onInteractionAction, onInteractionStreamAction }: StreamingSurfaceProps) {
   const { getAccessToken } = useAuth();
   const [state, dispatch] = useReducer(reduceEvent, initialStreamState);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -94,12 +98,13 @@ export function StreamingSurface({ sessionId, agent, body, url, messageId, onSta
       messageId={messageId}
       answeredInteractions={answeredInteractions}
       onInteractionAction={onInteractionAction}
+      onInteractionStreamAction={onInteractionStreamAction}
     />
   );
 }
 
 /** Render a saved stream state without opening another network request. */
-export function StreamView({ state, connectionError, sessionId, agent, messageId, answeredInteractions, onInteractionAction }: {
+export function StreamView({ state, connectionError, sessionId, agent, messageId, answeredInteractions, onInteractionAction, onInteractionStreamAction }: {
   state: StreamState;
   connectionError?: string | null;
   sessionId: string;
@@ -107,6 +112,7 @@ export function StreamView({ state, connectionError, sessionId, agent, messageId
   messageId?: string;
   answeredInteractions?: ReadonlySet<number>;
   onInteractionAction?: StreamInteractionAction;
+  onInteractionStreamAction?: StreamInteractionStreamAction;
 }) {
   const tree = selectTree(state);
   const pendingGrounding = Object.values(state.grounding).filter((detail) => detail.status === 'pending').length;
@@ -138,6 +144,7 @@ export function StreamView({ state, connectionError, sessionId, agent, messageId
           sessionId={sessionId}
           answered={answeredInteractions?.has(interaction.seq) ?? false}
           onAction={onInteractionAction}
+          onStreamAction={onInteractionStreamAction}
         />
       ))}
       {state.error && (
@@ -156,12 +163,14 @@ export function StreamView({ state, connectionError, sessionId, agent, messageId
 
 // ADR: hitl_request cards post through /ui-actions, like the buffered path | job_handoff
 // stays render-only here (no polling); the chat navigates to /pipeline on the resumed envelope's job_id.
-function InteractionCard({ interaction, agent, sessionId, answered, onAction }: {
+// A drafting card accepts an SSE response (the outline approval starting the full draft stream).
+function InteractionCard({ interaction, agent, sessionId, answered, onAction, onStreamAction }: {
   interaction: StreamInteraction;
   agent: AgentName;
   sessionId: string;
   answered: boolean;
   onAction?: StreamInteractionAction;
+  onStreamAction?: StreamInteractionStreamAction;
 }) {
   if (interaction.kind === 'hitl') {
     return (
@@ -172,7 +181,9 @@ function InteractionCard({ interaction, agent, sessionId, answered, onAction }: 
           agent={agent}
           sessionId={sessionId}
           disabled={answered}
+          streamActions={agent === 'drafting'}
           onAction={onAction ? (envelope) => onAction(interaction.seq, envelope) : undefined}
+          onStreamAction={onStreamAction ? (events) => onStreamAction(interaction.seq, events) : undefined}
         />
       </section>
     );

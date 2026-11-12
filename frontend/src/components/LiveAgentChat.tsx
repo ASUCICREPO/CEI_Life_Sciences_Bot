@@ -15,7 +15,6 @@ import {
   type AgentMode,
   type AgentName,
   type AnalysisType,
-  type DocumentType,
 } from '../lib/agentClient';
 import type { CEIUISurface as CEIUISurfaceType } from '../lib/cei-ui/schema';
 import { SessionsClientError, type HistoryMessage } from '../lib/sessionsClient';
@@ -27,6 +26,7 @@ import { StreamingSurface, StreamView } from './streaming/StreamingSurface';
 import { ThinkingBlock } from './streaming/ThinkingBlock';
 import { ReportExports } from './ReportExports';
 import type { StreamState } from '../lib/stream/reducer';
+import type { StreamEvent } from '../lib/stream/events';
 import { agentForAgentType } from '../lib/resumeRouting';
 
 interface LiveMessage {
@@ -61,8 +61,6 @@ interface LiveAgentChatProps {
   agent?: AgentName;
   mode: AgentMode;
   analysisType?: AnalysisType;
-  /** Drafting only: the document type every turn carries (the runtime requires it). */
-  documentType?: DocumentType;
   threadKey: string;
   /** Existing backend session to continue (e.g. opened from History); its history is loaded on mount. */
   resumeSessionId?: string;
@@ -92,19 +90,18 @@ function toLiveMessages(items: HistoryMessage[]): LiveMessage[] {
     }));
 }
 
-// ADR: a dedicated live chat for the Research, Drafting, Analysis and Pipeline tasks | the mock task
-// chat (ChatResponse/taskConversations) stays untouched; this component talks
+// ADR: a dedicated live chat for the Research, Drafting, Analysis and Pipeline tasks | this component talks
 // to the AgentCore runtimes through agentClient and reads history via sessionsClient.
-export function LiveAgentChat({ agent, mode, analysisType, documentType, threadKey, resumeSessionId, title, description, examples, placeholder, autoSendPrompt }: LiveAgentChatProps) {
+export function LiveAgentChat({ agent, mode, analysisType, threadKey, resumeSessionId, title, description, examples, placeholder, autoSendPrompt }: LiveAgentChatProps) {
   const navigate = useNavigate();
   const sessionsClient = useSessionsClient();
   const modelsClient = useModelsClient();
   const { config } = useAuth();
   const streamingAvailable = config?.researchStreamingEnabled === true;
   // F9: a free-text turn (no agent prop) is always classified by the Session Router through /chat/stream
-  // (Drafting/Analysis/Pipeline Manager arrive as adapted SSE); an explicit task page keeps Research-only
-  // streaming unchanged (api.md, F09 "Implementation notes").
-  const useChatStream = streamingAvailable && (agent === 'research' || agent === undefined);
+  // (Analysis/Pipeline Manager arrive as adapted SSE); an explicit Research or Drafting task page also
+  // streams every turn (api.md, F09 "Implementation notes").
+  const useChatStream = streamingAvailable && (agent === 'research' || agent === 'drafting' || agent === undefined);
   const routerMode = agent === undefined;
   const routerDisabled = routerMode && !streamingAvailable;
   // ADR: fallback label for CEI UI dispatch before an agent is known | the owning agent for /ui-actions
@@ -115,7 +112,9 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
   // Lazy state so the id is fixed for this chat's lifetime; the parent remounts via `key`.
   const [sessionId, setSessionId] = useState(() => resumeSessionId ?? startNewSessionId(threadKey));
   const createdSessionId = useRef<string | undefined>(resumeSessionId);
-  const [activeStream, setActiveStream] = useState<{ sessionId: string; body: Record<string, unknown> } | null>(null);
+  // `events` is set when this stream started from a ui-action's SSE response (e.g. a drafting outline
+  // approval) instead of a fresh POST /chat/stream; openStreamImpl then hands it straight to the reducer.
+  const [activeStream, setActiveStream] = useState<{ sessionId: string; body: Record<string, unknown>; events?: AsyncIterable<StreamEvent> } | null>(null);
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isRunning, setIsRunning] = useState(false);
@@ -314,7 +313,7 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
         return;
       }
       if (!agent) return; // routerDisabled already blocks this when streaming is unavailable
-      const payload = buildRunPayload(agent, { prompt: trimmed, mode: chatMode, analysisType, documentType });
+      const payload = buildRunPayload(agent, { prompt: trimmed, mode: chatMode, analysisType });
       const envelope = await invokeAgent(agent, payload, sessionId);
       createdSessionId.current = sessionId;
       appendFromEnvelope(envelope);
@@ -351,6 +350,23 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
       ? { ...message, answeredInteractions: new Set([...(message.answeredInteractions ?? []), seq]) }
       : message)));
     appendFromEnvelope(envelope);
+  }
+
+  // Mirrors handleAction, but the action answered over SSE (a drafting outline approval starting the
+  // full draft): render a new live streaming assistant turn instead of appending a finished envelope.
+  function handleActionStream(messageId: string, events: AsyncIterable<StreamEvent>) {
+    setMessages((prev) => prev.map((message) => (message.id === messageId ? { ...message, answered: true } : message)));
+    setIsRunning(true);
+    setActiveStream({ sessionId, body: {}, events });
+  }
+
+  // Mirrors handleStreamInteractionAction for the SSE case.
+  function handleStreamInteractionActionStream(messageId: string, seq: number, events: AsyncIterable<StreamEvent>) {
+    setMessages((prev) => prev.map((message) => (message.id === messageId
+      ? { ...message, answeredInteractions: new Set([...(message.answeredInteractions ?? []), seq]) }
+      : message)));
+    setIsRunning(true);
+    setActiveStream({ sessionId, body: {}, events });
   }
 
   const handleSend = (event: React.FormEvent) => {
@@ -402,6 +418,7 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
                 agent={effectiveAgent}
                 answeredInteractions={message.answeredInteractions}
                 onInteractionAction={(seq, envelope) => handleStreamInteractionAction(message.id, seq, envelope)}
+                onInteractionStreamAction={(seq, events) => handleStreamInteractionActionStream(message.id, seq, events)}
               />
             ) : message.surface ? (
               <CEIUISurface
@@ -410,7 +427,9 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
                 sessionId={sessionId}
                 fallbackText={message.text}
                 disabled={message.answered}
+                streamActions={streamingAvailable && (message.routedAgent ?? effectiveAgent) === 'drafting'}
                 onAction={(envelope) => handleAction(message.id, envelope)}
+                onStreamAction={(events) => handleActionStream(message.id, events)}
               />
             ) : (
               <SafeMarkdown content={message.text ?? ''} />
@@ -528,7 +547,13 @@ export function LiveAgentChat({ agent, mode, analysisType, documentType, threadK
               <Bot size={12} className="text-white" />
             </div>
             <div className="flex-1 min-w-0 max-w-3xl">
-              <StreamingSurface sessionId={activeStream.sessionId} agent={effectiveAgent} body={activeStream.body} onFinished={finishStream} />
+              <StreamingSurface
+                sessionId={activeStream.sessionId}
+                agent={effectiveAgent}
+                body={activeStream.body}
+                openStreamImpl={activeStream.events ? () => activeStream.events as AsyncIterable<StreamEvent> : undefined}
+                onFinished={finishStream}
+              />
             </div>
           </div>
         )}
