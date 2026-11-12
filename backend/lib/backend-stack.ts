@@ -257,13 +257,17 @@ export class BackendStack extends cdk.Stack {
     // AWS::Lambda::Url, and that resource's CORS origin is this distribution, so naming the exact host here would
     // create a Distribution -> ResponseHeadersPolicy -> Url -> Distribution cycle | Alternative: exact host rejected (cycle)
     const agentProxyOriginPattern = `https://*.lambda-url.${this.region}.on.aws`;
+    // ADR: S3 bucket in CSP for presigned uploads | Rationale: the SPA uploads attachments directly to S3
+    // using presigned URLs; the bucket domain must be in connect-src to allow fetch/XHR | Alternative: proxy
+    // uploads through API Gateway rejected — larger payloads, higher latency, no streaming, Lambda timeout risk
+    const attachmentsBucketOrigin = `https://${attachmentsBucket.bucketDomainName}`;
     const contentSecurityPolicy = [
       "default-src 'self'",
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
       "font-src 'self'",
       "img-src 'self' data: https:",
-      `connect-src 'self' https://${cognitoIdpHost} ${cognitoDomainUrl} ${apiOrigin} ${agentProxyOriginPattern}`,
+      `connect-src 'self' https://${cognitoIdpHost} ${cognitoDomainUrl} ${apiOrigin} ${agentProxyOriginPattern} ${attachmentsBucketOrigin}`,
       "frame-ancestors 'none'",
       "object-src 'none'",
       "base-uri 'self'",
@@ -1139,9 +1143,11 @@ export class BackendStack extends cdk.Stack {
         AttachmentPresign: attachmentPresign.fn, AttachmentProcessor: attachmentProcessor,
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) => [`Source${name}`, fn])),
       },
-      tables: { ChatMetadata: chatMetadataTable, ChatHistory: chatHistoryTable, ActiveRuns: activeRunsTable,
+      tables: {
+        ChatMetadata: chatMetadataTable, ChatHistory: chatHistoryTable, ActiveRuns: activeRunsTable,
         Exports: exportsTable, NcbiRateLimiter: gateway.ncbiRateTable, JobIdStore: backgroundJobs.table,
-        UserMetadata: modelSettings.table, Attachments: attachmentsTable },
+        UserMetadata: modelSettings.table, Attachments: attachmentsTable
+      },
       signupLogs: preSignUpLogGroup,
       gatewayLogs: gateway.gatewayLogGroup,
       clientLogs: clientDiagnostics.fn.logGroup,
