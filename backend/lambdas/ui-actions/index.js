@@ -92,6 +92,14 @@ class RequestError extends Error {
   }
 }
 
+// live-drafting: a Drafting resume streams SSE only when the client asks for it (Accept: text/event-stream);
+// every other resume (and every route-choice start) keeps today's single buffered JSON body.
+function wantsEventStream(event) {
+  const headers = event.headers && typeof event.headers === 'object' ? event.headers : {};
+  const accept = Object.entries(headers).find(([key]) => key.toLowerCase() === 'accept')?.[1];
+  return typeof accept === 'string' && accept.toLowerCase().includes('text/event-stream');
+}
+
 function validateRequest(event) {
   const sub = event?.requestContext?.authorizer?.claims?.sub;
   if (typeof sub !== 'string' || !sub.trim()) throw new RequestError(401, 'unauthorized', 'Sign in again to continue.');
@@ -154,6 +162,23 @@ function createHandler(responseFrom, deps) {
       if (agentType === null) throw new RequestError(404, 'not_found', 'The session was not found.');
       const agent = RESUMABLE[agentType];
       if (!agent) throw new RequestError(400, 'invalid_request', 'This chat is not waiting for input.');
+      if (agent === 'drafting' && wantsEventStream(event)) {
+        // live-drafting: the same validation/gate checks above apply; only the runtime call and the
+        // response transport differ. No replay/sequence tracking here -- a one-shot SSE passthrough,
+        // same as the buffered envelope below is a one-shot JSON body.
+        stage = 'resume_stream';
+        const upstream = await deps.resumeStream(agent, parsed);
+        const stream = responseFrom(rawStream, { statusCode: 200, headers: deps.headers(event, true) });
+        stage = 'stream_pipe';
+        try {
+          for await (const chunk of upstream) stream.write(chunk);
+          log('info', 'streamed');
+        } catch (error) {
+          log('error', 'stream_failed', error);
+        }
+        stream.end();
+        return;
+      }
       stage = 'resume';
       const envelope = await deps.resume(agent, parsed);
       if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope) || !ENVELOPE_STATUSES.has(envelope.status)) {
@@ -189,9 +214,9 @@ function productionDependencies() {
     return value;
   }
   return {
-    headers(event) {
+    headers(event, sse = false) {
       const origin = Object.entries(event.headers || {}).find(([k]) => k.toLowerCase() === 'origin')?.[1];
-      return { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...(allowedOrigins.has(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}) };
+      return { 'Content-Type': sse ? 'text/event-stream' : 'application/json', 'Cache-Control': sse ? 'no-cache, no-transform' : 'no-store', ...(allowedOrigins.has(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}) };
     },
     async accountDeleting(userId) { return isAccountDeleting(db, userMetadata, userId, GetItemCommand); },
     async sessionAgent(userId, sessionId) {
@@ -211,6 +236,22 @@ function productionDependencies() {
       if (response.status === 401 || response.status === 403) throw new RequestError(401, 'unauthorized', 'Sign in again to continue.');
       if (!response.ok) throw new Error('runtime unavailable');
       return response.json();
+    },
+    // live-drafting: same resume call as resume() above, but asks the runtime to stream (Accept +
+    // body.stream, matching session-runner's op:run SSE contract) and returns the raw response body for
+    // byte-for-byte passthrough; this handler never parses or re-frames the events.
+    async resumeStream(agent, parsed) {
+      const url = new URL(agentUrls[agent]);
+      if (url.protocol !== 'https:' || !/^bedrock-agentcore\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/.test(url.hostname) || url.port || url.username || url.password || !/^\/runtimes\/[^/]+\/invocations$/.test(url.pathname) || url.search !== '?qualifier=DEFAULT') throw new Error('invalid runtime URL');
+      const response = await fetch(url, {
+        method: 'POST', redirect: 'error',
+        headers: { Authorization: `Bearer ${parsed.bearerToken}`, 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': parsed.action.session_id, Accept: 'text/event-stream', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: 'resume', action: parsed.action, stream: true }),
+        signal: AbortSignal.timeout(RUNTIME_TIMEOUT_MS),
+      });
+      if (response.status === 401 || response.status === 403) throw new RequestError(401, 'unauthorized', 'Sign in again to continue.');
+      if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new Error('runtime unavailable');
+      return response.body;
     },
     newRunId() { return crypto.randomUUID(); },
     // F9: route_choice records live in the Active-Run table (handler.py's store_pending_choice), the same
@@ -264,3 +305,4 @@ exports.ROUTE_CHOICE_COMPONENT_ID = ROUTE_CHOICE_COMPONENT_ID;
 exports.ROUTE_CHOICE_ACTION_ID = ROUTE_CHOICE_ACTION_ID;
 exports.mapRouterError = mapRouterError;
 exports.agentRunBodyFor = agentRunBodyFor;
+exports.wantsEventStream = wantsEventStream;

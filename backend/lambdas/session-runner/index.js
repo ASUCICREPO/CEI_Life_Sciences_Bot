@@ -3,6 +3,8 @@
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_EVENT_BYTES = 300 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// F9/B15/live-drafting: the two deterministic dashboard tasks (both are streaming agents, see STREAMING_AGENTS).
+const DASHBOARD_TASK_TYPES = new Set(['live-research', 'live-drafting']);
 const TYPES = new Set(['surface_begin', 'component_add', 'text_delta', 'component_update', 'grounding_update', 'trace_event', 'progress', 'usage', 'surface_end', 'error', 'hitl_request', 'job_handoff']);
 const TERMINAL = new Set(['surface_end', 'error', 'hitl_request', 'job_handoff']);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -32,11 +34,11 @@ function validateRequest(event) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new RequestError(400, 'invalid_request', 'The request body is invalid.');
   if (!UUID.test(input.session_id || '') || !UUID.test(input.run_id || '')) throw new RequestError(400, 'invalid_request', 'A valid session and run are required.');
   if (input.resume_from_seq !== undefined && (!Number.isSafeInteger(input.resume_from_seq) || input.resume_from_seq < 0)) throw new RequestError(400, 'invalid_request', 'The replay position is invalid.');
-  // F9/B15: task_type "live-research" is today's only dashboard task (deterministic, unchanged); an absent
-  // task_type is free text, routed by the Session Router's classifier. Any other value is still invalid.
+  // F9/B15: "live-research" and "live-drafting" are today's deterministic dashboard tasks (unchanged); an
+  // absent task_type is free text, routed by the Session Router's classifier. Any other value is invalid.
   const taskType = input.task_type;
   if (typeof input.message !== 'string' || !input.message.trim() || input.message.length > 16000
-      || (taskType !== undefined && taskType !== 'live-research') || !['science', 'business'].includes(input.mode)) {
+      || (taskType !== undefined && !DASHBOARD_TASK_TYPES.has(taskType)) || !['science', 'business'].includes(input.mode)) {
     throw new RequestError(400, 'invalid_request', 'The chat request is invalid.');
   }
   return { userId: sub, bearerToken: match[1], request: { session_id: input.session_id, run_id: input.run_id, message: input.message.trim(), task_type: taskType, mode: input.mode, ...(input.resume_from_seq !== undefined ? { resume_from_seq: input.resume_from_seq } : {}) } };
@@ -131,7 +133,12 @@ function choiceRequiredEvents(surfaceId) {
 
 async function* fromArray(items) { for (const item of items) yield item; }
 
-/** Per-agent request body for the AgentCore `op: run` default; Research is never built here (it always streams). */
+// ADR: Drafting now streams like Research (op: run, body {prompt, mode, stream:true}) | Rationale: the
+// Drafting runtime (drafting_main.py) renders its own live surface (traces/components/HITL outline) the
+// same way Research does; Analysis and Pipeline Manager remain single buffered envelopes (requestBodyFor).
+const STREAMING_AGENTS = new Set(['research', 'drafting']);
+
+/** Per-agent request body for the AgentCore `op: run` default; streaming agents are never built here. */
 function requestBodyFor(agent, parsed) {
   // ADR: free-text drafting carries no document_type | drafting_main.py now defaults to "whitepaper" itself.
   return { prompt: parsed.request.message, mode: parsed.request.mode };
@@ -228,12 +235,14 @@ function createHandler(responseFrom, deps) {
       let seq = -1, terminal = false;
       try {
         stage = 'runtime_open';
-        // F9: a ChoicePicker turn is a fixed two-event stream; Research always streams live; every other
-        // agent returns one buffered JSON envelope, adapted into the same SSE contract (bufferedToEvents).
-        const isResearch = !route.choice_required && (!route.agent || route.agent === 'research');
+        // F9/live-drafting: a ChoicePicker turn is a fixed two-event stream; Research and Drafting always
+        // stream live; every other agent returns one buffered JSON envelope, adapted into the same SSE
+        // contract (bufferedToEvents). Streaming is keyed on the routed agent, not task_type: a free-text
+        // route to drafting streams the same way the deterministic live-drafting task does.
+        const isStreaming = !route.choice_required && (!route.agent || STREAMING_AGENTS.has(route.agent));
         const source = route.choice_required
           ? fromArray(choiceRequiredEvents(route.surface_id))
-          : isResearch
+          : isStreaming
             ? parseEvents(await deps.open(route, parsed))
             : fromArray(bufferedToEvents(await deps.invokeBuffered(route, parsed)));
         stage = 'runtime_stream';
@@ -328,12 +337,15 @@ function productionDependencies() {
     async open(route, parsed) {
       const url = new URL(route.runtime_url);
       if (url.protocol !== 'https:' || !/^bedrock-agentcore\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/.test(url.hostname) || url.port || url.username || url.password || !/^\/runtimes\/[^/]+\/invocations$/.test(url.pathname) || url.search !== '?qualifier=DEFAULT') throw new Error('invalid runtime URL');
-      const response = await fetch(url, { method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${parsed.bearerToken}`, 'X-Cei-Gateway-Token': route.gateway_token, 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': parsed.request.session_id, ...(process.env._X_AMZN_TRACE_ID ? { 'X-Amzn-Trace-Id': process.env._X_AMZN_TRACE_ID } : {}), Accept: 'text/event-stream', 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: parsed.request.message, mode: parsed.request.mode, stream: true }), signal: AbortSignal.timeout(850000) });
+      // ADR: X-Cei-Gateway-Token only when the route provides one | Rationale: only Research's runtime
+      // allowlists this header (agent-runtimes.ts configureResearchGateway); Drafting now streams through
+      // this same fetch but has no Gateway wiring, so the header must be omitted rather than sent empty.
+      const response = await fetch(url, { method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${parsed.bearerToken}`, ...(route.gateway_token && route.agent !== 'drafting' ? { 'X-Cei-Gateway-Token': route.gateway_token } : {}), 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': parsed.request.session_id, ...(process.env._X_AMZN_TRACE_ID ? { 'X-Amzn-Trace-Id': process.env._X_AMZN_TRACE_ID } : {}), Accept: 'text/event-stream', 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: parsed.request.message, mode: parsed.request.mode, stream: true }), signal: AbortSignal.timeout(850000) });
       if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new Error('runtime unavailable');
       return response.body;
     },
-    // F9: Drafting/Analysis/Pipeline Manager's `op: run` (default) is always a single buffered JSON envelope,
-    // never SSE (only the Research runtime streams). Same URL-shape guard as open() above.
+    // F9/live-drafting: Analysis/Pipeline Manager's `op: run` (default) is always a single buffered JSON
+    // envelope, never SSE (Research and Drafting stream instead, via open() above). Same URL-shape guard.
     async invokeBuffered(route, parsed) {
       const url = new URL(route.runtime_url);
       if (url.protocol !== 'https:' || !/^bedrock-agentcore\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/.test(url.hostname) || url.port || url.username || url.password || !/^\/runtimes\/[^/]+\/invocations$/.test(url.pathname) || url.search !== '?qualifier=DEFAULT') throw new Error('invalid runtime URL');
@@ -357,3 +369,5 @@ exports.bufferedToEvents = bufferedToEvents;
 exports.choiceRequiredEvents = choiceRequiredEvents;
 exports.requestBodyFor = requestBodyFor;
 exports.walkComponents = walkComponents;
+exports.STREAMING_AGENTS = STREAMING_AGENTS;
+exports.DASHBOARD_TASK_TYPES = DASHBOARD_TASK_TYPES;

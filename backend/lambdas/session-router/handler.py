@@ -38,8 +38,10 @@ _RUN_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# F9/B15: task_type "live-research" is the only dashboard task deterministic lookup today (F5); absent means
-# free text, routed by the classifier. handler.py's env-var naming for each routed agent's runtime URL.
+# F9/B15/live-drafting: "live-research" and "live-drafting" are today's deterministic dashboard task lookups
+# (F5); absent means free text, routed by the classifier. handler.py's env-var naming for each routed agent's
+# runtime URL.
+_DASHBOARD_TASK_AGENTS = {"live-research": "research", "live-drafting": "drafting"}
 _RUNTIME_URL_ENV = {
     "research": "RESEARCH_RUNTIME_URL",
     "drafting": "DRAFTING_RUNTIME_URL",
@@ -166,9 +168,9 @@ def handler(event: Any, _context: Any) -> dict[str, Any]:
                 or not message.strip() or len(message) > 16000):
             return {"status": 400, "code": "invalid_request", "message": "Invalid request."}
         mode = request["mode"]
-        # F5: today's only dashboard task type, deterministic, unchanged. F9: absent means free text --
-        # classified below. Anything else is not a route this Lambda knows about.
-        if task_type is not None and task_type != "live-research":
+        # F5/live-drafting: today's deterministic dashboard task types, unchanged. F9: absent means free text
+        # -- classified below. Anything else is not a route this Lambda knows about.
+        if task_type is not None and task_type not in _DASHBOARD_TASK_AGENTS:
             return {"status": 400, "code": "invalid_request", "message": "Invalid request."}
         # Fail before the Runner opens SSE. The runtime repeats the check because
         # settings can change after this owner-scoped, strongly consistent read.
@@ -186,8 +188,8 @@ def handler(event: Any, _context: Any) -> dict[str, Any]:
         if not scopes or any(not s.startswith("cei-tools/") for s in scopes):
             raise ValueError("invalid scope configuration")
 
-        if task_type == "live-research":
-            agent = "research"
+        if task_type in _DASHBOARD_TASK_AGENTS:
+            agent = _DASHBOARD_TASK_AGENTS[task_type]
         else:
             # F9/B15: free text. `route_agent` is never accepted from a browser request -- only UiActions
             # sends it, after it has itself verified ownership and the stored pending choice (CLASSIFIER.md

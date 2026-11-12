@@ -1,23 +1,30 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createHandler, validateRequest, isRouteChoice, actionResponse, mapRouterError, agentRunBodyFor, ROUTE_CHOICE_INTERACTION_ID, ROUTE_CHOICE_COMPONENT_ID, ROUTE_CHOICE_ACTION_ID } = require('./index');
+const { createHandler, validateRequest, isRouteChoice, actionResponse, mapRouterError, agentRunBodyFor, wantsEventStream, ROUTE_CHOICE_INTERACTION_ID, ROUTE_CHOICE_COMPONENT_ID, ROUTE_CHOICE_ACTION_ID } = require('./index');
 
 const SESSION = '6f1c2d3e-0000-4000-8000-000000000001';
 const ACTION = { request_id: 'r1', session_id: SESSION, surface_id: 'analysis-scope', revision: 1, interaction_id: 'i-1', component_id: 'c-1', action_id: 'approve-scope', value: null };
 
-function request(body = ACTION, { sub = 'user-1', auth = 'Bearer token' } = {}) {
-  return { requestContext: { requestId: 'req-1', authorizer: { claims: { sub } } }, headers: { Authorization: auth }, body: JSON.stringify(body) };
+function request(body = ACTION, { sub = 'user-1', auth = 'Bearer token', accept } = {}) {
+  return { requestContext: { requestId: 'req-1', authorizer: { claims: { sub } } }, headers: { Authorization: auth, ...(accept ? { Accept: accept } : {}) }, body: JSON.stringify(body) };
 }
 
-function harness({ agent = 'analysis', envelope = { status: 'completed', text: 'done' }, fail, routeChoice = {}, deleting = false } = {}) {
+function harness({ agent = 'analysis', envelope = { status: 'completed', text: 'done' }, fail, routeChoice = {}, deleting = false, streamChunks, streamFail } = {}) {
   const calls = [];
   const out = { chunks: [], metadata: null, ended: false };
   const deps = {
-    headers: () => ({ 'Content-Type': 'application/json' }),
+    headers: (_event, sse) => ({ 'Content-Type': sse ? 'text/event-stream' : 'application/json' }),
     accountDeleting: async () => deleting,
     sessionAgent: async (user, session) => (user === 'user-1' && session === SESSION ? agent : null),
     resume: async (target, parsed) => { calls.push({ target, parsed }); if (fail) throw fail; return envelope; },
+    // live-drafting: streamed drafting resume only (gated on Accept: text/event-stream in the request).
+    resumeStream: async (target, parsed) => {
+      calls.push({ target: `${target}Stream`, parsed });
+      if (streamFail) throw streamFail;
+      const chunks = streamChunks ?? [Buffer.from('id: 0\nevent: surface_begin\ndata: {}\n\nid: 1\nevent: surface_end\ndata: {}\n\n')];
+      return (async function* () { for (const chunk of chunks) yield chunk; })();
+    },
     // F9: route-choice-only deps; each test below overrides only what it exercises.
     newRunId: () => 'new-run-id',
     pendingChoice: async () => routeChoice.pending ?? null,
@@ -76,6 +83,54 @@ test('drafting chats resume the drafting runtime', async () => {
   const h = harness({ agent: 'drafting' });
   await h.handler(request(), {});
   assert.equal(h.calls[0].target, 'drafting');
+});
+
+// live-drafting: a drafting resume streams only when the client sends Accept: text/event-stream.
+test('a drafting resume with Accept: text/event-stream pipes SSE bytes through unchanged', async () => {
+  const h = harness({ agent: 'drafting' });
+  await h.handler(request(ACTION, { accept: 'text/event-stream' }), {});
+  assert.equal(h.calls[0].target, 'draftingStream');
+  assert.equal(h.out.metadata.statusCode, 200);
+  assert.equal(h.out.metadata.headers['Content-Type'], 'text/event-stream');
+  assert.equal(h.out.chunks.join(''), 'id: 0\nevent: surface_begin\ndata: {}\n\nid: 1\nevent: surface_end\ndata: {}\n\n');
+  assert.ok(h.out.ended);
+});
+
+test('a drafting resume without Accept: text/event-stream still returns one buffered JSON body', async () => {
+  const h = harness({ agent: 'drafting' });
+  await h.handler(request(), {});
+  assert.equal(h.calls[0].target, 'drafting');
+  assert.equal(h.out.metadata.headers['Content-Type'], 'application/json');
+  assert.deepEqual(h.body(), { status: 'completed', text: 'done' });
+});
+
+test('a non-drafting resume ignores Accept: text/event-stream and stays buffered', async () => {
+  const h = harness({ agent: 'analysis' });
+  await h.handler(request(ACTION, { accept: 'text/event-stream' }), {});
+  assert.equal(h.calls[0].target, 'analysis');
+  assert.equal(h.out.metadata.headers['Content-Type'], 'application/json');
+});
+
+test('a failed drafting stream call is a retriable 503 before any bytes are sent', async () => {
+  const h = harness({ agent: 'drafting', streamFail: new Error('upstream body with secrets') });
+  await h.handler(request(ACTION, { accept: 'text/event-stream' }), {});
+  assert.equal(h.out.metadata.statusCode, 503);
+  assert.equal(h.body().error.retriable, true);
+  assert.ok(!h.out.chunks.join('').includes('secrets'));
+});
+
+test('B109: a deleting account cannot stream a drafting resume either', async () => {
+  const h = harness({ agent: 'drafting', deleting: true });
+  await h.handler(request(ACTION, { accept: 'text/event-stream' }), {});
+  assert.equal(h.out.metadata.statusCode, 403);
+  assert.equal(h.calls.length, 0);
+});
+
+test('wantsEventStream matches Accept headers case-insensitively, including a header-name case variant', () => {
+  assert.equal(wantsEventStream({ headers: { Accept: 'text/event-stream' } }), true);
+  assert.equal(wantsEventStream({ headers: { accept: 'TEXT/EVENT-STREAM' } }), true);
+  assert.equal(wantsEventStream({ headers: { Accept: 'application/json' } }), false);
+  assert.equal(wantsEventStream({ headers: {} }), false);
 });
 
 test('agentRunBodyFor sends no document_type for a free-text route-choice pick', () => {

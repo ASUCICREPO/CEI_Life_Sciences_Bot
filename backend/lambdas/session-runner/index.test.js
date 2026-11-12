@@ -183,6 +183,12 @@ test('validateRequest accepts a free-text request (no task_type) and rejects an 
   assert.throws(() => validateRequest(request({ task_type: 'not-a-real-task' })), { statusCode: 400 });
 });
 
+// live-drafting: the second deterministic dashboard task, alongside live-research.
+test('validateRequest accepts task_type live-drafting', () => {
+  const parsed = validateRequest(request({ task_type: 'live-drafting' }));
+  assert.equal(parsed.request.task_type, 'live-drafting');
+});
+
 test('requestBodyFor sends no document_type for free text, drafting included', () => {
   const parsed = { request: { message: 'hello', mode: 'science' } };
   assert.deepEqual(requestBodyFor('analysis', parsed), { prompt: 'hello', mode: 'science' });
@@ -247,13 +253,24 @@ test('a free-text choice_required route emits only a surface_begin/hitl_request 
   assert.equal(opened, false);
 });
 
-test('a free-text route to a non-Research agent is adapted from one buffered envelope', async () => {
+test('a free-text route to a buffered specialist (analysis) is adapted from one buffered envelope', async () => {
   const h = harness();
-  h.deps.start = async () => ({ user_id: 'user-1', session_id: session, run_id: run, gateway_token: 'secret', agent: 'drafting', runtime_url: 'https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/x/invocations?qualifier=DEFAULT' });
+  h.deps.start = async () => ({ user_id: 'user-1', session_id: session, run_id: run, gateway_token: 'secret', agent: 'analysis', runtime_url: 'https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/x/invocations?qualifier=DEFAULT' });
   let capturedBody;
-  h.deps.invokeBuffered = async (_route, parsed) => { capturedBody = parsed.request.message; return { status: 'completed', text: 'done', ui: { content_type: 'application/vnd.cei.ui+json', protocol: 'cei-ui', version: '1.1', surface_id: 'drafting-final', revision: 1, root_id: 'root', components: [{ id: 'root', type: 'Text', content: 'done' }] } }; };
+  h.deps.invokeBuffered = async (_route, parsed) => { capturedBody = parsed.request.message; return { status: 'completed', text: 'done', ui: { content_type: 'application/vnd.cei.ui+json', protocol: 'cei-ui', version: '1.1', surface_id: 'analysis-final', revision: 1, root_id: 'root', components: [{ id: 'root', type: 'Text', content: 'done' }] } }; };
   const response = await h.invoke(request({ task_type: undefined }));
   assert.equal(response.metadata.statusCode, 200);
   assert.match(response.text, /event: surface_begin/); assert.match(response.text, /event: component_add/); assert.match(response.text, /event: surface_end/);
   assert.equal(capturedBody, 'question');
+});
+
+// live-drafting: Drafting now streams exactly like Research, whether reached via the deterministic
+// task_type or a free-text classification to the "drafting" agent (session-runner only sees route.agent).
+test('a drafting route streams live via deps.open, not the buffered adapter', async () => {
+  const h = harness();
+  h.deps.start = async () => ({ user_id: 'user-1', session_id: session, run_id: run, gateway_token: 'secret', agent: 'drafting', runtime_url: 'https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/x/invocations?qualifier=DEFAULT' });
+  h.deps.invokeBuffered = async () => { throw new Error('must not buffer a drafting run'); };
+  const response = await h.invoke(request({ task_type: 'live-drafting' }));
+  assert.equal(response.metadata.statusCode, 200);
+  assert.match(response.text, /event: surface_end/);
 });

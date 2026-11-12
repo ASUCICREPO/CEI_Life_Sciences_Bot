@@ -47,9 +47,11 @@ def deps(monkeypatch):
     return verifier, metadata, leases, issue
 
 
-def event():
-    return {"op": "start", "bearer_token": "jwt", "request": {"session_id": SESSION, "run_id": RUN,
-        "message": "question", "task_type": "live-research", "mode": "science", "user_id": "mallory"}}
+def event(**overrides):
+    request = {"session_id": SESSION, "run_id": RUN, "message": "question", "task_type": "live-research",
+               "mode": "science", "user_id": "mallory"}
+    request.update(overrides)
+    return {"op": "start", "bearer_token": "jwt", "request": request}
 
 
 def free_text_event(**overrides):
@@ -237,6 +239,19 @@ def test_route_agent_hint_skips_reclassification(deps, monkeypatch):
 def test_route_agent_hint_rejects_an_unknown_agent(deps):
     reply = router.handler(free_text_event(route_agent="not-a-real-agent"), None)
     assert reply["status"] == 400 and reply["code"] == "invalid_request"
+
+
+def test_live_drafting_routes_deterministically_without_classifying(deps, monkeypatch):
+    # live-drafting mirrors live-research (F5): a deterministic dashboard task, no classifier call.
+    classify = Mock()
+    monkeypatch.setattr(router, "classify", classify)
+    _, metadata, leases, issue = deps
+    reply = router.handler(event(task_type="live-drafting"), None)
+    assert reply["status"] == 200 and reply["agent"] == "drafting"
+    assert reply["runtime_url"] == "https://example.invalid/drafting"
+    classify.assert_not_called()
+    leases.acquire.assert_called_once_with("alice", SESSION, RUN, SCOPES)
+    issue.assert_called_once_with("alice", SESSION, SCOPES)
 
 
 def test_unknown_task_type_is_rejected_without_classifying(deps, monkeypatch):
