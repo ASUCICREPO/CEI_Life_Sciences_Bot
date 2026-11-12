@@ -18,12 +18,14 @@ import {
 import {
   Component,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
-import { dispatchCEIUIAction } from '../../lib/cei-ui/actions';
+import { Download, FileText } from 'lucide-react';
+import { dispatchCEIUIAction, dispatchCEIUIActionExpectingStream } from '../../lib/cei-ui/actions';
 import { reportClientFailure } from '../../lib/clientDiagnostics';
 import {
   MAX_COMPONENT_DEPTH,
@@ -32,6 +34,7 @@ import {
   type CEIUISurface,
   type ChoicePickerComponent,
   type CitationDescriptor,
+  type ExportFileComponent,
   type GraphComponent,
   type JsonValue,
   type ModalComponent,
@@ -40,6 +43,9 @@ import {
   type TextFieldComponent,
 } from '../../lib/cei-ui/schema';
 import type { AgentEnvelope, AgentName } from '../../lib/agentClient';
+import type { StreamEvent } from '../../lib/stream/events';
+import { useAuth } from '../../lib/auth/AuthProvider';
+import { createExportsClient } from '../../lib/exportsClient';
 import { CitationChip, toChipSourceType } from '../../design-system/CitationChip';
 import { ConfidenceBadge } from '../../design-system/ConfidenceBadge';
 import type { EvidenceStrengthType } from '../../design-system/tokens';
@@ -58,6 +64,9 @@ type CEIUISurfaceProps = {
   sessionId: string;
   fallbackText?: string;
   onAction?: (response: AgentEnvelope) => void;
+  /** When set, every action this surface sends accepts an SSE response (a drafting chat starting the full draft). */
+  streamActions?: boolean;
+  onStreamAction?: (events: AsyncIterable<StreamEvent>) => void;
   disabled?: boolean;
 };
 
@@ -68,6 +77,8 @@ type RenderContext = {
   sessionId: string;
   disabled: boolean;
   onAction?: (response: AgentEnvelope) => void;
+  streamActions: boolean;
+  onStreamAction?: (events: AsyncIterable<StreamEvent>) => void;
   renderId: (componentId: string, ancestors?: ReadonlySet<string>) => ReactNode;
 };
 
@@ -91,16 +102,25 @@ function scoreToEvidenceStrength(score: number): EvidenceStrengthType {
   return 'weak';
 }
 
-export function CEIUISurface({ surface, agent, sessionId, fallbackText, onAction, disabled }: CEIUISurfaceProps) {
+export function CEIUISurface({ surface, agent, sessionId, fallbackText, onAction, streamActions, onStreamAction, disabled }: CEIUISurfaceProps) {
   const resetToken = `${surface.surface_id}:${surface.revision}`;
   return (
     <CEIUIErrorBoundary fallbackText={fallbackText} resetToken={resetToken}>
-      <SurfaceTree key={resetToken} surface={surface} agent={agent} sessionId={sessionId} onAction={onAction} disabled={disabled ?? false} />
+      <SurfaceTree
+        key={resetToken}
+        surface={surface}
+        agent={agent}
+        sessionId={sessionId}
+        onAction={onAction}
+        streamActions={streamActions}
+        onStreamAction={onStreamAction}
+        disabled={disabled ?? false}
+      />
     </CEIUIErrorBoundary>
   );
 }
 
-function SurfaceTree({ surface, agent, sessionId, onAction, disabled }: Omit<CEIUISurfaceProps, 'fallbackText'>) {
+function SurfaceTree({ surface, agent, sessionId, onAction, streamActions, onStreamAction, disabled }: Omit<CEIUISurfaceProps, 'fallbackText'>) {
   const componentsById = new Map(surface.components.map((component) => [component.id, component]));
   const context = {} as RenderContext;
   context.surface = surface;
@@ -109,6 +129,8 @@ function SurfaceTree({ surface, agent, sessionId, onAction, disabled }: Omit<CEI
   context.sessionId = sessionId;
   context.disabled = disabled ?? false;
   context.onAction = onAction;
+  context.streamActions = streamActions ?? false;
+  context.onStreamAction = onStreamAction;
   context.renderId = (componentId, ancestors = new Set()) => {
     if (ancestors.has(componentId) || ancestors.size >= MAX_COMPONENT_DEPTH) {
       return <CEIUIFallback error="The CEI UI component graph cannot be rendered safely." />;
@@ -218,6 +240,8 @@ function ComponentRenderer({
       );
     case 'ReviewGate':
       return <ReviewGateView component={component} context={context} />;
+    case 'ExportFile':
+      return <ExportFileView component={component} />;
     default:
       return assertNever(component);
   }
@@ -511,34 +535,107 @@ function ReviewGateView({ component, context }: { component: ReviewGateComponent
   );
 }
 
+function envelopeActionState(envelope: AgentEnvelope): ActionState {
+  const actionStatus = envelope.action_response?.status;
+  const succeeded = actionStatus === 'accepted' || actionStatus === 'completed' || actionStatus === undefined;
+  return {
+    status: succeeded ? 'success' : 'error',
+    message: envelope.action_response?.message ?? (succeeded ? 'Action received.' : `Action ${actionStatus ?? 'failed'}.`),
+  };
+}
+
 function useComponentAction(componentId: string, context: RenderContext) {
   const [state, setState] = useState<ActionState>({ status: 'idle', message: '' });
   async function run(interactionId: string, descriptor: ActionDescriptor, value: JsonValue) {
     if (context.disabled) return;
     setState({ status: 'pending', message: 'Sending action.' });
+    const dispatchInput = {
+      agent: context.agent,
+      session_id: context.sessionId,
+      surface_id: context.surface.surface_id,
+      revision: context.surface.revision,
+      interaction_id: interactionId,
+      component_id: componentId,
+      action_id: descriptor.action_id,
+      value,
+    };
     try {
-      const response = await dispatchCEIUIAction({
-        agent: context.agent,
-        session_id: context.sessionId,
-        surface_id: context.surface.surface_id,
-        revision: context.surface.revision,
-        interaction_id: interactionId,
-        component_id: componentId,
-        action_id: descriptor.action_id,
-        value,
-      });
+      if (context.streamActions) {
+        const result = await dispatchCEIUIActionExpectingStream(dispatchInput);
+        if (result.kind === 'stream') {
+          context.onStreamAction?.(result.events);
+          setState({ status: 'success', message: 'Streaming the response.' });
+          return;
+        }
+        context.onAction?.(result.envelope);
+        setState(envelopeActionState(result.envelope));
+        return;
+      }
+      const response = await dispatchCEIUIAction(dispatchInput);
       context.onAction?.(response);
-      const actionStatus = response.action_response?.status;
-      const succeeded = actionStatus === 'accepted' || actionStatus === 'completed' || actionStatus === undefined;
-      setState({
-        status: succeeded ? 'success' : 'error',
-        message: response.action_response?.message ?? (succeeded ? 'Action received.' : `Action ${actionStatus ?? 'failed'}.`),
-      });
+      setState(envelopeActionState(response));
     } catch (error) {
       setState({ status: 'error', message: error instanceof Error ? error.message : 'The action could not be completed.' });
     }
   }
   return { state, run };
+}
+
+const EXPORT_FORMAT_LABELS: Record<ExportFileComponent['format'], string> = {
+  pdf: 'PDF', docx: 'Word', md: 'Markdown', txt: 'Text', latex: 'LaTeX', csv: 'CSV',
+};
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unitIndex]}`;
+}
+
+function ExportFileView({ component }: { component: ExportFileComponent }) {
+  const { getAccessToken, config } = useAuth();
+  const client = useMemo(() => createExportsClient(getAccessToken, config?.apiBaseUrl), [getAccessToken, config?.apiBaseUrl]);
+  const [status, setStatus] = useState<'idle' | 'pending' | 'error'>('idle');
+
+  async function download() {
+    setStatus('pending');
+    try {
+      const url = await client.download(component.export_id);
+      const link = document.createElement('a');
+      link.href = url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.click();
+      setStatus('idle');
+    } catch {
+      setStatus('error');
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface-elevated p-3">
+      <FileText size={18} className="shrink-0 text-text-tertiary" aria-hidden="true" />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-text-primary">{component.filename}</p>
+        <p className="text-xs text-text-tertiary">{EXPORT_FORMAT_LABELS[component.format]} &middot; {formatFileSize(component.byte_size)}</p>
+      </div>
+      <button
+        type="button"
+        disabled={status === 'pending'}
+        onClick={() => void download()}
+        className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-cei-blue hover:underline disabled:opacity-50"
+        aria-label={`Download ${component.filename}`}
+      >
+        <Download size={14} aria-hidden="true" /> {status === 'pending' ? 'Preparing…' : 'Download'}
+      </button>
+      {status === 'error' && <p role="alert" className="text-xs text-evidence-weak">Could not download this file.</p>}
+    </div>
+  );
 }
 
 function ActionFeedback({ state }: { state: ActionState }) {

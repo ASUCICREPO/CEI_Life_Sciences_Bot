@@ -3,8 +3,8 @@ import {
   type ActionRequest,
   type JsonValue,
 } from './schema';
-import type { AgentEnvelope, AgentName } from '../agentClient';
-import { sendAction } from '../agentClient';
+import type { ActionDispatchResult, AgentEnvelope, AgentName } from '../agentClient';
+import { sendAction, sendActionExpectingStream } from '../agentClient';
 
 export type DispatchCEIUIActionInput = {
   agent: AgentName;
@@ -17,16 +17,24 @@ export type DispatchCEIUIActionInput = {
   value?: JsonValue;
 };
 
-// ADR: dispatch goes through agentClient.sendAction, not a Next /api/ui-actions
-// route | the Vite SPA has no server routes, so the browser talks to the
-// agent runtime directly (via the dev proxy) using the same op:"resume" shape.
-export async function dispatchCEIUIAction(input: DispatchCEIUIActionInput): Promise<AgentEnvelope> {
-  const { agent, session_id, ...rest } = input;
-  const request: ActionRequest = ActionRequestSchema.parse({
+function toActionRequest(input: DispatchCEIUIActionInput): ActionRequest {
+  const { agent: _agent, session_id, ...rest } = input;
+  return ActionRequestSchema.parse({
     request_id: crypto.randomUUID(),
     session_id,
     ...rest,
     value: rest.value ?? null,
   });
-  return sendAction(agent, request, session_id);
+}
+
+// ADR: dispatch goes through agentClient.sendAction, not a Next /api/ui-actions
+// route | the Vite SPA has no server routes, so the browser talks to the
+// agent runtime directly (via the dev proxy) using the same op:"resume" shape.
+export async function dispatchCEIUIAction(input: DispatchCEIUIActionInput): Promise<AgentEnvelope> {
+  return sendAction(input.agent, toActionRequest(input), input.session_id);
+}
+
+/** Like dispatchCEIUIAction, but lets the caller (a drafting chat) accept an SSE response instead of JSON. */
+export async function dispatchCEIUIActionExpectingStream(input: DispatchCEIUIActionInput): Promise<ActionDispatchResult> {
+  return sendActionExpectingStream(input.agent, toActionRequest(input), input.session_id);
 }

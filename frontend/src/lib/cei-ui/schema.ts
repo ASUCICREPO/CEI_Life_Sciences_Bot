@@ -478,6 +478,19 @@ export const ArtifactComponentSchema = z.strictObject({
   }
 });
 
+// Matches the export the backend already created (POST /exports' shape); the frontend never derives
+// filename/format/size itself, it only renders what the agent names and downloads it via exportsClient.
+const EXPORT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[0-9a-f]{32}$/;
+
+export const ExportFileComponentSchema = z.strictObject({
+  ...componentBaseShape,
+  type: z.literal('ExportFile').default('ExportFile'),
+  export_id: z.string().regex(EXPORT_ID_PATTERN),
+  filename: z.string().min(1).max(255),
+  format: z.enum(['pdf', 'docx', 'md', 'txt', 'latex', 'csv']),
+  byte_size: z.int().min(0),
+});
+
 export const ComponentSchema = z.discriminatedUnion('type', [
   TextComponentSchema,
   ImageComponentSchema,
@@ -502,6 +515,7 @@ export const ComponentSchema = z.discriminatedUnion('type', [
   TimelineComponentSchema,
   ComparisonComponentSchema,
   ArtifactComponentSchema,
+  ExportFileComponentSchema,
 ]);
 
 export const CEIUISurfaceSchema = z.strictObject({
@@ -621,6 +635,7 @@ export type TimelineComponent = z.infer<typeof TimelineComponentSchema>;
 export type ComparisonCriterion = z.infer<typeof ComparisonCriterionSchema>;
 export type ComparisonComponent = z.infer<typeof ComparisonComponentSchema>;
 export type ArtifactComponent = z.infer<typeof ArtifactComponentSchema>;
+export type ExportFileComponent = z.infer<typeof ExportFileComponentSchema>;
 export type CEIUIComponent = z.infer<typeof ComponentSchema>;
 export type CEIUISurface = z.infer<typeof CEIUISurfaceSchema>;
 export type ActionRequest = z.infer<typeof ActionRequestSchema>;
