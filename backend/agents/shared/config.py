@@ -57,6 +57,10 @@ class AgentConfig(BaseSettings):
     code_interpreter_id: str = "aws.codeinterpreter.v1"
     packages_s3_bucket: str = ""
     packages_s3_key: str = "life-sciences-packages.tar.gz"
+    # Drafting export persistence (shared/persistence/exports.py). Empty => not deployed/local dev;
+    # drafting/nodes.py export_documents then skips persistence and says so in a trace entry.
+    export_metadata_table: str = ""
+    export_bucket: str = ""
     # Browser CORS allowlist for the runtime container (shared/runtime/app_factory.py). Comma-separated explicit
     # origins (CEI_ALLOWED_ORIGINS), never "*". Empty => no CORS middleware (local, Vite-proxied runs).
     allowed_origins: str = ""

@@ -157,6 +157,11 @@ def test_plan_visuals_builds_specs_from_document_without_llm_call(monkeypatch) -
 
 
 def test_export_documents_text_has_no_base64_when_document_exists(monkeypatch) -> None:
+    """File generation is back (858bb1a reverted, product decision): export_documents renders
+    files for the requested formats; with no export storage configured (local dev), the files
+    are generated but not persisted, and a note says so."""
+    from shared.tools.export import ExportArtifact
+
     doc = _sample_document(title="Report")
     monkeypatch.setattr(
         "drafting.nodes.document_sections_for_export",
@@ -166,9 +171,18 @@ def test_export_documents_text_has_no_base64_when_document_exists(monkeypatch) -
         "drafting.nodes.render_document_markdown",
         lambda d, **kw: f"# {d.title}\n\nRevenue grew.\n\n| Year | USD |\n|---|---|\n| 2023 | 1 |\n",
     )
-    def reject_generation(*args, **kwargs):
-        raise AssertionError("unreviewed drafts must not be rendered")
-    monkeypatch.setattr("shared.tools.export.ExportTool.generate", reject_generation)
+    monkeypatch.setattr("drafting.nodes.ChartTool", lambda _ci: Mock(render=Mock(return_value=None)))
+
+    generated_formats = []
+
+    def fake_generate(self, *, title, sections, charts, formats, output_dir, chart_sections=None):
+        generated_formats.append(list(formats))
+        path = output_dir / "report.md"
+        path.write_text("# Report\n\nRevenue grew.\n", encoding="utf-8")
+        return [ExportArtifact(format="md", filename=path.name, local_path=str(path), byte_size=path.stat().st_size)]
+
+    monkeypatch.setattr("shared.tools.export.ExportTool.generate", fake_generate)
+    monkeypatch.setattr("drafting.nodes._export_repository", lambda: None)
 
     state = {
         "export_formats": ["md"],
@@ -183,14 +197,71 @@ def test_export_documents_text_has_no_base64_when_document_exists(monkeypatch) -
             "data": {"x": ["2023", "2024"], "USD": [1.0, 2.0]},
         }],
         "document_type": DocumentType.WHITEPAPER,
-        "reviewed": True,  # Untrusted graph state cannot grant review approval.
     }
 
     result = export_documents(state)
 
     text = result["messages"][-1].content
     assert "data:image/png;base64" not in text
+    assert generated_formats == [["md"]]
     assert result["exports"] == []
+    assert "not configured" in (result["chart_instructions"] or "")
+
+
+def test_export_documents_persists_exports_with_moto(monkeypatch) -> None:
+    """Exports persist via `ExportRepository` when export storage is configured (moto)."""
+    import boto3
+    from moto import mock_aws
+    from shared.config import config
+    from shared.persistence.exports import _EXPORT_ID
+    from shared.tools.export import ExportArtifact
+
+    doc = _sample_document(title="Report")
+    monkeypatch.setattr(
+        "drafting.nodes.document_sections_for_export",
+        lambda _d: [{"heading": "Overview", "content": "Revenue grew.", "order": 0}],
+    )
+    monkeypatch.setattr("drafting.nodes.render_document_markdown", lambda d, **kw: f"# {d.title}\n\nRevenue grew.\n")
+
+    def fake_generate(self, *, title, sections, charts, formats, output_dir, chart_sections=None):
+        path = output_dir / "report.md"
+        path.write_text("# Report\n\nRevenue grew.\n", encoding="utf-8")
+        return [ExportArtifact(format="md", filename=path.name, local_path=str(path), byte_size=path.stat().st_size)]
+
+    monkeypatch.setattr("shared.tools.export.ExportTool.generate", fake_generate)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+
+    with mock_aws():
+        ddb = boto3.resource("dynamodb", region_name="us-east-1")
+        ddb.create_table(
+            TableName="exports-table", BillingMode="PAY_PER_REQUEST",
+            KeySchema=[{"AttributeName": "user_id", "KeyType": "HASH"}, {"AttributeName": "export_id", "KeyType": "RANGE"}],
+            AttributeDefinitions=[{"AttributeName": "user_id", "AttributeType": "S"}, {"AttributeName": "export_id", "AttributeType": "S"}],
+        )
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="exports-bucket")
+        monkeypatch.setattr(config, "export_metadata_table", "exports-table")
+        monkeypatch.setattr(config, "export_bucket", "exports-bucket")
+
+        state = {
+            "export_formats": ["md"],
+            "draft_document": doc,
+            "draft": "",
+            "chart_specs": [],
+            "document_type": DocumentType.WHITEPAPER,
+            "user_id": "alice",
+            "session_id": "6f1c2d3e-0000-4000-8000-000000000001",
+            "export_turn_id": "turn-1",
+        }
+
+        result = export_documents(state)
+
+    assert len(result["exports"]) == 1
+    export_item = result["exports"][0]
+    assert export_item["format"] == "md"
+    assert export_item["filename"] == "report.md"
+    assert _EXPORT_ID.fullmatch(export_item["export_id"])
 
 
 def test_export_documents_legacy_path_has_no_base64_in_text() -> None:

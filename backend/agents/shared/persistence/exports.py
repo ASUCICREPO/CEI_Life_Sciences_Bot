@@ -107,6 +107,10 @@ class ExportRepository:
         return Page(items=[from_dynamo(item) for item in result.get("Items", [])],
                     next_key=result.get("LastEvaluatedKey"))
 
+    def download_bytes(self, item: dict[str, Any]) -> bytes:
+        """Server-side read-back (e.g. drafting's cold-thread carry-forward), not a client download link."""
+        return self._s3.get_object(Bucket=self._bucket, Key=item["s3_key"])["Body"].read()
+
     def download_url(self, item: dict[str, Any]) -> str:
         filename = item.get("filename")
         if not isinstance(filename, str) or not 1 <= len(filename) <= 255 or any(ord(char) < 32 or ord(char) == 127 for char in filename):

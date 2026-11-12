@@ -4,15 +4,19 @@ import json
 import logging
 import os
 import re
+import uuid
 from pathlib import Path
-from typing import Any
+from tempfile import TemporaryDirectory
+from typing import Any, Literal
 
 from langchain_core.messages import AIMessage
 from langgraph.types import interrupt
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from drafting.state import DocumentType, DraftingState, Guideline
+from shared.config import config
 from shared.grounding import build_corpus, ground_document, is_grounded
+from shared.persistence.exports import ExportRepository
 from shared.presenters.markdown import document_sections_for_export, render_document_markdown
 from shared.prompts.loader import PromptLoader
 from shared.schemas.citation import Citation, SourceType
@@ -32,11 +36,15 @@ from shared.schemas.response_blocks import ResponseDocument
 from shared.state import TraceEntry
 from shared.structured import invoke_structured
 from shared.tools.attachments_kb import retrieve_attachments
-from shared.tools.chart import place_charts
+from shared.tools.chart import CHART_FORMATS, ChartSpec, ChartTool, place_charts
+from shared.tools.code_interpreter import CodeInterpreterTool
 from shared.tools.data_sources import ALL_DATA_SOURCE_TOOLS
+from shared.tools.export import ExportTool
 from shared.utils import extract_tokens, get_model, last_human_message
 
 logger = logging.getLogger(__name__)
+
+_VALID_EXPORT_FORMATS = {"pdf", "docx", "md", "latex", "csv", "txt"}
 
 _DRAFTING_TEMPLATES_DIR = Path(__file__).parent / "prompts" / "templates"
 
@@ -80,6 +88,259 @@ _PLOT_CODE_BLOCK = re.compile(
 def _strip_plot_code(text: str) -> str:
     """Remove fenced code blocks that contain plotting code; charts are rendered by the export step."""
     return _PLOT_CODE_BLOCK.sub("", text)
+
+
+def _invoke_with_optional_stream(model: Any, messages: list[dict[str, str]], state: DraftingState) -> tuple[str, Any]:
+    """Plain (non-structured) model call; emits `prose_delta` custom events when `state["stream"]` is true.
+
+    Mirrors research's structured `on_prose_delta` streaming (shared/structured.py), for the drafting
+    nodes (outline, chat_answer) whose output is plain text rather than a `ResponseDocument`.
+    """
+    if not state.get("stream"):
+        response = model.invoke(messages)
+        return str(response.content), response
+    from langgraph.config import get_stream_writer
+
+    writer = get_stream_writer()
+    accumulated = None
+    for chunk in model.stream(messages):
+        delta = str(getattr(chunk, "content", "") or "")
+        if delta:
+            writer({"type": "prose_delta", "delta": delta})
+        accumulated = chunk if accumulated is None else accumulated + chunk
+    if accumulated is None:
+        return "", None
+    return str(accumulated.content), accumulated
+
+
+# ── route_request: entry node, decides intent/doc type/formats/outline need for this turn ──────
+
+
+class RouteDecision(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    intent: Literal["new_document", "revise", "export", "approve_outline", "chat"]
+    document_type: DocumentType
+    export_formats: list[str] = Field(default_factory=list)
+    needs_outline_approval: bool = False
+    # Only meaningful when intent == "approve_outline": null approves the pending outline as-is,
+    # non-null is the requested change (re-run the outline node instead of drafting).
+    outline_feedback: str | None = None
+    reasoning: str
+
+
+_ROUTE_SYSTEM = """\
+You are the request router for a life sciences document drafting bot. Classify the user's \
+latest message and decide what the drafting pipeline should do next.
+
+Current state:
+{state_summary}
+
+Decide:
+- intent: one of
+  - "new_document": the user wants to start a new document (no draft exists yet, or they are
+    clearly starting over on a different document)
+  - "revise": the user wants a change to the existing draft (wording, content, structure, a
+    correction)
+  - "export": the user wants the existing draft delivered in one or more file formats, with no
+    content change
+  - "approve_outline": an outline is pending approval from the last turn (see above) and this
+    message is a reply to it, either approving it or asking for a change
+  - "chat": a question or remark about the draft or topic that needs a short answer, not a
+    document change
+- document_type: grant, vc_pitch, journal, whitepaper, or latex. Keep the current document type \
+for a follow-up unless the user clearly asks for a different kind of document.
+- export_formats: file formats the user explicitly asked for, from pdf, docx, md, latex, csv, \
+txt. Leave this empty when they did not ask for specific formats.
+- needs_outline_approval: true only for a new, multi-section document where the user did not \
+already give you the structure and did not say to skip the outline. Never true for a revision, \
+a small edit, a follow-up question, a format/export request, or a short single-section piece.
+- outline_feedback: only set when intent is "approve_outline". Leave it null when the user is \
+approving the outline as-is ("looks good", "go ahead", "approved"). Set it to their requested \
+change when they ask for a different outline.
+- reasoning: one brief sentence."""
+
+
+def _route_state_summary(state: DraftingState) -> tuple[str, bool]:
+    has_draft = bool(state.get("draft"))
+    doc_type = state.get("document_type", DocumentType.WHITEPAPER)
+    outline_text = state.get("outline", "")
+    outline_pending = bool(outline_text) and not state.get("outline_approved", False)
+
+    lines = [f"- A draft already exists: {has_draft}", f"- Current document type: {doc_type.value}"]
+    if outline_pending:
+        lines += ["- An outline is pending approval from the last turn:", outline_text]
+    else:
+        lines.append("- No outline is pending approval.")
+    return "\n".join(lines), outline_pending
+
+
+def _plan_export_formats(document_type: DocumentType, requested: list[str]) -> list[str]:
+    """md is always included; latex documents default to latex, everything else to docx.
+
+    Explicitly requesting pdf/docx/latex opts out of the other default extra format.
+    """
+    formats = {"md", *requested}
+    if document_type is DocumentType.LATEX:
+        formats.add("latex")
+    elif not formats & {"docx", "latex", "pdf"}:
+        formats.add("docx")
+    return sorted(formats)
+
+
+_NEW_DOCUMENT_RESET: dict[str, Any] = {
+    "outline": "",
+    "outline_revision": 0,
+    "outline_approved": False,
+    "outline_correction": None,
+    "guidelines": [],
+    "research_questions": [],
+    "research_findings": [],
+    "draft": "",
+    "draft_document": None,
+    "chart_specs": [],
+    "chart_data": {},
+    "chart_instructions": None,
+    "exports": [],
+}
+
+
+def route_request(state: DraftingState) -> dict[str, Any]:
+    """Classify this turn's message and decide intent, document type, formats, and outline need."""
+    has_draft = bool(state.get("draft"))
+    if state.get("skip_outline_approval") and not has_draft:
+        # ADR: non-interactive caller (Pipeline dispatcher) | always a fresh document with the
+        # caller's own document_type; skip the LLM classification call entirely.
+        doc_type = state.get("document_type", DocumentType.WHITEPAPER)
+        return {
+            **_NEW_DOCUMENT_RESET,
+            "intent": "new_document",
+            "document_type": doc_type,
+            "needs_outline_approval": False,
+            "export_turn_id": state.get("export_turn_id") or uuid.uuid4().hex,
+            "export_formats": _plan_export_formats(doc_type, state.get("export_formats") or []),
+            "trace": [TraceEntry(stage="ROUTE_REQUEST", detail=f"doc_type={doc_type.value} | non-interactive caller")],
+        }
+
+    query = last_human_message(state)
+    state_summary, outline_pending = _route_state_summary(state)
+
+    model = get_model().with_structured_output(RouteDecision, include_raw=True)
+    raw = model.invoke(
+        [
+            {"role": "system", "content": _ROUTE_SYSTEM.format(state_summary=state_summary)},
+            {"role": "user", "content": user_turn(query, before="User message: ")},
+        ]
+    )
+    decision: RouteDecision = raw["parsed"]
+    in_tok, out_tok = extract_tokens(raw["raw"])
+
+    document_type = decision.document_type
+    payload_doc_type = state.get("payload_document_type")
+    if payload_doc_type:
+        try:
+            document_type = DocumentType(payload_doc_type)
+        except ValueError:
+            pass
+
+    intent = decision.intent
+    if intent in ("revise", "export") and not has_draft:
+        # ADR: no prior draft to revise/export | fall back to starting a new document
+        intent = "new_document"
+    if intent == "approve_outline" and not outline_pending:
+        intent = "new_document"
+
+    requested_formats = [f for f in decision.export_formats if f in _VALID_EXPORT_FORMATS]
+    payload_formats = [f for f in (state.get("payload_export_formats") or []) if f in _VALID_EXPORT_FORMATS]
+    combined_formats = sorted(set(requested_formats) | set(payload_formats))
+
+    result: dict[str, Any] = {
+        "intent": intent,
+        "document_type": document_type,
+        "export_turn_id": state.get("export_turn_id") or uuid.uuid4().hex,
+        "trace": [
+            TraceEntry(
+                stage="ROUTE_REQUEST",
+                detail=(
+                    f"intent={intent} | doc_type={document_type.value} | "
+                    f"needs_outline_approval={decision.needs_outline_approval} | reasoning={decision.reasoning}"
+                ),
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+            )
+        ],
+    }
+    if intent == "new_document" or combined_formats:
+        result["export_formats"] = _plan_export_formats(document_type, combined_formats)
+
+    if intent == "new_document":
+        result.update(_NEW_DOCUMENT_RESET)
+        result["needs_outline_approval"] = decision.needs_outline_approval
+    elif intent == "approve_outline":
+        if decision.outline_feedback:
+            result.update({"outline_correction": decision.outline_feedback, "outline_approved": False})
+        else:
+            result.update({"outline_approved": True, "outline_correction": None})
+    elif intent == "revise":
+        result["revision_feedback"] = query
+
+    logger.info({"event": "route_request_complete", "intent": intent, "doc_type": document_type.value})
+    return result
+
+
+def route_after_request(state: DraftingState) -> str:
+    """Send this turn to the node that matches `route_request`'s decision."""
+    intent = state.get("intent", "new_document")
+    if intent == "approve_outline":
+        if state.get("outline_approved"):
+            return "draft"
+        if state.get("outline_correction"):
+            return "outline"
+        return "research"  # safety net: should not be reachable from route_request's own logic
+    if intent == "revise":
+        return "revise"
+    if intent == "export":
+        return "export"
+    if intent == "chat":
+        return "chat"
+    return "research"
+
+
+_CHAT_ANSWER_SYSTEM = """\
+You are a drafting assistant for a life sciences document. Answer the user's question or \
+remark about the current draft or topic in 2 to 4 sentences. Do not rewrite the draft and do \
+not propose file changes."""
+
+
+def chat_answer(state: DraftingState) -> dict[str, Any]:
+    """A short answer about the draft/topic (B1xx intent=chat): no draft change, no files."""
+    query = last_human_message(state)
+    draft = state.get("draft", "")
+    doc_type = state.get("document_type", DocumentType.WHITEPAPER)
+    context = (
+        f"Document type: {doc_type.value}\n\nCurrent draft (for reference only):\n{draft[:4000]}"
+        if draft
+        else f"Document type: {doc_type.value}. No draft has been written yet."
+    )
+    model = get_model()
+    content, response = _invoke_with_optional_stream(
+        model,
+        [
+            {"role": "system", "content": _CHAT_ANSWER_SYSTEM},
+            {"role": "user", "content": user_turn(query, before=f"{context}\n\nUser message: ")},
+        ],
+        state,
+    )
+    answer = content.strip()
+    in_tok, out_tok = extract_tokens(response)
+    logger.info({"event": "chat_answer_complete", "length": len(answer)})
+    return {
+        "messages": [AIMessage(content=answer)],
+        "trace": [
+            TraceEntry(
+                stage="CHAT_ANSWER", detail=f"length={len(answer)}", input_tokens=in_tok, output_tokens=out_tok
+            )
+        ],
+    }
 
 
 class GuidelinePlan(BaseModel):
@@ -440,13 +701,15 @@ def outline(state: DraftingState) -> dict[str, Any]:
         user_segments.append(Guarded(correction))
 
     model = get_model()
-    response = model.invoke(
+    content, response = _invoke_with_optional_stream(
+        model,
         [
             {"role": "system", "content": _OUTLINE_SYSTEM.format(doc_type=doc_type.value)},
             {"role": "user", "content": content_blocks(*user_segments)},
-        ]
+        ],
+        state,
     )
-    outline_text = str(response.content).strip()
+    outline_text = content.strip()
     in_tok, out_tok = extract_tokens(response)
     revision = state.get("outline_revision", 0) + 1
 
@@ -466,23 +729,33 @@ def outline(state: DraftingState) -> dict[str, Any]:
     }
 
 
-def _build_outline_approval_surface(outline_text: str, *, revision: int) -> dict[str, Any]:
+def _build_outline_approval_surface(
+    outline_text: str,
+    *,
+    revision: int,
+    document_type: DocumentType | None = None,
+    export_formats: list[str] | None = None,
+) -> dict[str, Any]:
     """ReviewGate approve/reject + TextField edit, modelled on analysis's `build_scope_confirmation_surface`."""
     lines = [line.strip(" -*\t") for line in outline_text.splitlines() if line.strip()]
     steps = [
         PlanStep(step_id=f"outline-{index}", title=line)
         for index, line in enumerate((lines or ["Outline"])[:MAX_PLAN_STEPS], start=1)
     ]
+    doc_type_label = document_type.value.replace("_", " ") if document_type is not None else "document"
+    formats_label = ", ".join(export_formats) if export_formats else "md, docx"
+    intro = (
+        f"Review the proposed outline for this {doc_type_label} document "
+        f"(planned file formats: {formats_label}) before the full draft is written, or edit it "
+        "below to change the structure, document type, or formats."
+    )
     surface = CEIUISurface(
         surface_id="drafting-outline",
         revision=revision,
         root_id="outline-root",
         components=[
             ColumnComponent(id="outline-root", children=["outline-intro", "outline-review", "outline-edit"]),
-            TextComponent(
-                id="outline-intro",
-                content="Review the proposed outline before the full draft is written, or edit it below.",
-            ),
+            TextComponent(id="outline-intro", content=intro),
             ReviewGateComponent(
                 id="outline-review",
                 interaction_id="drafting-outline-review",
@@ -510,9 +783,17 @@ def approve_outline(state: DraftingState) -> dict[str, Any]:
     if state.get("skip_outline_approval"):
         # ADR: skip B72's outline pause | non-interactive in-process run, no checkpointer to pause against
         return {"outline_approved": True, "trace": [TraceEntry(stage="OUTLINE_APPROVE", detail="skipped: non-interactive")]}
+    if not state.get("needs_outline_approval", True):
+        # route_request decided this turn does not need a HITL pause (revision, short piece, etc.)
+        return {"outline_approved": True, "trace": [TraceEntry(stage="OUTLINE_APPROVE", detail="skipped: not needed")]}
     outline_text = state.get("outline", "")
     revision = state.get("outline_revision", 1)
-    surface = _build_outline_approval_surface(outline_text, revision=revision)
+    surface = _build_outline_approval_surface(
+        outline_text,
+        revision=revision,
+        document_type=state.get("document_type"),
+        export_formats=state.get("export_formats"),
+    )
     decision = interrupt(surface)
     action_id = decision.get("action_id") if isinstance(decision, dict) else None
 
@@ -523,6 +804,7 @@ def approve_outline(state: DraftingState) -> dict[str, Any]:
     if action_id == "reject-outline":
         logger.info({"event": "outline_rejected"})
         return {
+            "outline": "",  # ADR: clear it | otherwise a carried-forward outline looks "pending" forever
             "outline_approved": False,
             "outline_correction": None,
             "messages": [AIMessage(content="Drafting cancelled at the user's request.")],
@@ -671,6 +953,12 @@ def draft(state: DraftingState) -> dict[str, Any]:
         guidelines=guidelines,
         structured_blocks=True,
     ) + memory_rule
+    on_prose_delta = None
+    if state.get("stream"):
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+        on_prose_delta = lambda delta: writer({"type": "prose_delta", "delta": delta})
     parsed, raw, error = invoke_structured(
         get_model(max_tokens=_DRAFT_MAX_TOKENS),
         ResponseDocument,
@@ -678,6 +966,7 @@ def draft(state: DraftingState) -> dict[str, Any]:
             {"role": "system", "content": structured_system_prompt},
             {"role": "user", "content": user_content},
         ],
+        **({"on_prose_delta": on_prose_delta} if on_prose_delta is not None else {}),
     )
 
     trace_entries: list[TraceEntry] = []
@@ -791,6 +1080,12 @@ def revise(state: DraftingState) -> dict[str, Any]:
         guidelines=guidelines,
         structured_blocks=True,
     )
+    on_prose_delta = None
+    if state.get("stream"):
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+        on_prose_delta = lambda delta: writer({"type": "prose_delta", "delta": delta})
     parsed, raw, error = invoke_structured(
         get_model(max_tokens=_DRAFT_MAX_TOKENS),
         ResponseDocument,
@@ -798,6 +1093,7 @@ def revise(state: DraftingState) -> dict[str, Any]:
             {"role": "system", "content": structured_system_prompt},
             {"role": "user", "content": user_content},
         ],
+        **({"on_prose_delta": on_prose_delta} if on_prose_delta is not None else {}),
     )
 
     trace_entries: list[TraceEntry] = []
@@ -1141,58 +1437,78 @@ def _fetch_chart_data_from_tools(data_needed: str, tool_map: dict) -> dict[str, 
     return None
 
 
-def export_documents(state: DraftingState) -> dict[str, Any]:
-    """Present the draft; exports require a separate authenticated review action.
+def _sections_from_draft_text(draft_text: str, doc_type_str: str) -> tuple[str, list[dict]]:
+    """Title + ordered sections parsed from a legacy (non-structured) markdown draft."""
+    title_match = re.search(r"^#\s+(.+)$", draft_text, re.MULTILINE)
+    title = title_match.group(1).strip() if title_match else f"{doc_type_str}_document"
 
-    Agent state and payload fields cannot prove a user reviewed the completed
-    response. Do not render files or publish export records from this node.
+    sections: list[dict] = []
+    current_heading = ""
+    current_content_lines: list[str] = []
+    order = 0
+    for line in draft_text.splitlines():
+        if line.startswith("## "):
+            if current_content_lines:
+                sections.append(
+                    {"heading": current_heading, "content": "\n".join(current_content_lines).strip(), "order": order}
+                )
+                order += 1
+                current_content_lines = []
+            current_heading = line[3:].strip()
+        elif line.startswith("# "):
+            pass  # Skip document title line
+        else:
+            current_content_lines.append(line)
+    if current_content_lines:
+        sections.append({"heading": current_heading, "content": "\n".join(current_content_lines).strip(), "order": order})
+    return title, sections
+
+
+def _export_repository() -> ExportRepository | None:
+    """None when export storage is not configured (local dev) - callers must skip persistence."""
+    if not config.export_metadata_table or not config.export_bucket:
+        return None
+    try:
+        return ExportRepository(config.export_metadata_table, config.export_bucket)
+    except Exception as exc:  # ADR: never fail the turn over export storage | B51a-style graceful skip
+        logger.error({"event": "export_repository_unavailable", "error_type": type(exc).__name__})
+        return None
+
+
+def _code_interpreter_for_export() -> CodeInterpreterTool | None:
+    try:
+        return CodeInterpreterTool(
+            region=config.aws_region,
+            code_interpreter_id=config.code_interpreter_id,
+            packages_s3_bucket=config.packages_s3_bucket,
+            packages_s3_key=config.packages_s3_key,
+        )
+    except Exception as exc:
+        logger.error({"event": "code_interpreter_unavailable", "error_type": type(exc).__name__})
+        return None
+
+
+def export_documents(state: DraftingState) -> dict[str, Any]:
+    """Render the draft to its requested export formats and persist them for this turn.
+
+    ADR: exports persist directly here, no separate review action | restoring file generation
+    (removed in 858bb1a) was an explicit product decision; this agent's own completed turn is
+    the user's review of its own output. `ExportRepository.save` still requires `reviewed=True`.
     """
     document: ResponseDocument | None = state.get("draft_document")
     draft_text = state.get("draft", "")
     chart_specs_raw: list[dict] = state.get("chart_specs", [])
-    doc_type = state.get("document_type", "document")
+    doc_type = state.get("document_type", DocumentType.WHITEPAPER)
     doc_type_str = doc_type.value if hasattr(doc_type, "value") else str(doc_type)
+    export_formats = [f for f in state.get("export_formats") or [] if f in _VALID_EXPORT_FORMATS] or _plan_export_formats(
+        doc_type, []
+    )
 
     if document is not None:
         title = document.title
         sections: list[dict] = document_sections_for_export(document)
     else:
-        # Derive title from first heading in draft or fallback
-        import re
-
-        title_match = re.search(r"^#\s+(.+)$", draft_text, re.MULTILINE)
-        title = title_match.group(1).strip() if title_match else f"{doc_type_str}_document"
-
-        # Build sections from draft headings
-        sections = []
-        current_heading = ""
-        current_content_lines: list[str] = []
-        order = 0
-        for line in draft_text.splitlines():
-            if line.startswith("## "):
-                if current_content_lines:
-                    sections.append(
-                        {
-                            "heading": current_heading,
-                            "content": "\n".join(current_content_lines).strip(),
-                            "order": order,
-                        }
-                    )
-                    order += 1
-                    current_content_lines = []
-                current_heading = line[3:].strip()
-            elif line.startswith("# "):
-                pass  # Skip document title line
-            else:
-                current_content_lines.append(line)
-        if current_content_lines:
-            sections.append(
-                {
-                    "heading": current_heading,
-                    "content": "\n".join(current_content_lines).strip(),
-                    "order": order,
-                }
-            )
+        title, sections = _sections_from_draft_text(draft_text, doc_type_str)
 
     chart_sections = {sd["title"]: sd.get("section", "") for sd in chart_specs_raw if isinstance(sd.get("title"), str)}
     if document is not None:
@@ -1200,8 +1516,81 @@ def export_documents(state: DraftingState) -> dict[str, Any]:
     else:
         final_text = _render_sections_text(title, sections, list(chart_sections), chart_sections)
 
+    trace_entries: list[TraceEntry] = []
+    notes: list[str] = []
+
+    wants_rendered_charts = bool(chart_specs_raw) and bool(CHART_FORMATS.intersection(export_formats))
+    needs_ci = wants_rendered_charts or any(f in {"pdf", "docx"} for f in export_formats)
+    ci_tool = _code_interpreter_for_export() if needs_ci else None
+    if needs_ci and ci_tool is None:
+        notes.append("The code sandbox is unavailable, so charts and PDF/DOCX files were skipped.")
+
+    rendered_charts: dict[str, bytes] = {}
+    if wants_rendered_charts and ci_tool is not None:
+        chart_tool = ChartTool(ci_tool)
+        for spec_dict in chart_specs_raw:
+            try:
+                spec = ChartSpec(**spec_dict)
+                png_bytes = chart_tool.render(spec)
+                if png_bytes:
+                    rendered_charts[spec.title] = png_bytes
+                    trace_entries.append(TraceEntry(stage="CHART_RENDER", detail=f"'{spec.title}' - {len(png_bytes)} bytes"))
+                else:
+                    trace_entries.append(TraceEntry(stage="CHART_RENDER", detail=f"'{spec.title}' - failed"))
+            except Exception as exc:
+                logger.error({"event": "chart_render_error", "error_type": type(exc).__name__})
+
+    user_id = state.get("user_id", "")
+    session_id = state.get("session_id", "")
+    turn_id = state.get("export_turn_id") or uuid.uuid4().hex
+    repository = _export_repository()
+
+    exports: list[dict[str, Any]] = []
+    with TemporaryDirectory(prefix="cei-drafting-export-") as directory:
+        output_dir = Path(directory)
+        export_tool = ExportTool(code_interpreter=ci_tool, doc_type=doc_type_str)
+        artifacts = export_tool.generate(
+            title=title, sections=sections, charts=rendered_charts, chart_sections=chart_sections,
+            formats=export_formats, output_dir=output_dir,
+        )
+        produced_formats = {artifact.format for artifact in artifacts}
+        for fmt in export_formats:
+            if fmt in {"pdf", "docx"} and fmt not in produced_formats and ci_tool is not None:
+                notes.append(f"The {fmt.upper()} file could not be generated.")
+
+        if repository is None:
+            notes.append("Export storage is not configured; files were generated but not saved.")
+            for artifact in artifacts:
+                trace_entries.append(
+                    TraceEntry(stage="EXPORT", detail=f"{artifact.format.upper()} -> {artifact.filename} ({artifact.byte_size} bytes), not persisted")
+                )
+        else:
+            for artifact in artifacts:
+                try:
+                    path = Path(artifact.local_path)
+                    saved = repository.save(
+                        user_id=user_id, session_id=session_id, turn_id=turn_id,
+                        filename=artifact.filename, format=artifact.format,
+                        data=path.read_bytes(), reviewed=True,
+                    )
+                    exports.append({
+                        "export_id": saved["export_id"], "format": artifact.format,
+                        "filename": artifact.filename, "byte_size": artifact.byte_size,
+                    })
+                    trace_entries.append(
+                        TraceEntry(stage="EXPORT", detail=f"{artifact.format.upper()} -> {artifact.filename} ({artifact.byte_size} bytes)")
+                    )
+                except Exception as exc:
+                    logger.error({"event": "export_persist_error", "format": artifact.format, "error_type": type(exc).__name__})
+                    notes.append(f"The {artifact.format.upper()} file was generated but could not be saved.")
+
+    logger.info({"event": "export_documents_complete", "exports": len(exports)})
+    chart_instructions = state.get("chart_instructions")
+    if notes:
+        chart_instructions = "\n".join(([chart_instructions] if chart_instructions else []) + notes)
     return {
         "messages": [AIMessage(content=final_text)],
-        "exports": [],
-        "trace": [],
+        "exports": exports,
+        "chart_instructions": chart_instructions,
+        "trace": trace_entries,
     }
