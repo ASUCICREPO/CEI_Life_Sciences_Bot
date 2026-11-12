@@ -61,9 +61,9 @@ export class SessionRouter extends Construct {
     // F9: the same table also holds the short-lived route_choice (B80 ChoicePicker) record UiActions reads.
     props.role.addToPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'], resources: [props.activeRunsTable.tableArn] }));
     if (props.routerModelId) {
-      // F9/B17: bedrock:InvokeModel scoped to the one fixed classifier model, never a wildcard.
+      // F9/B17: bedrock:InvokeModel and Converse scoped to the one fixed classifier model, never a wildcard.
       props.role.addToPolicy(new iam.PolicyStatement({
-        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:Converse'],
         resources: [
           `arn:${stack.partition}:bedrock:${stack.region}:${stack.account}:inference-profile/${props.routerModelId}`,
           `arn:${stack.partition}:bedrock:*::foundation-model/${props.routerModelId}`,
