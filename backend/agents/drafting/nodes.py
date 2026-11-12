@@ -279,11 +279,11 @@ class _ResearchPlan(BaseModel):
 
 def plan_research(state: DraftingState) -> dict[str, Any]:
     """Decide if the document needs evidence from the Research Agent, and what to ask it."""
-    from research.nodes import _SOURCE_DESCRIPTIONS
+    from research.nodes import _source_descriptions
 
     query = last_human_message(state)
     doc_type = state["document_type"]
-    sources = "\n".join(f"- {v}" for v in _SOURCE_DESCRIPTIONS.values())
+    sources = "\n".join(f"- {v}" for v in _source_descriptions().values())
 
     model = get_model().with_structured_output(_ResearchPlan, include_raw=True)
     raw = model.invoke(

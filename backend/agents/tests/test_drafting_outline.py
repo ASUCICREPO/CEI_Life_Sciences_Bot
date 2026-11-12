@@ -10,7 +10,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 import drafting_main
-from drafting.nodes import approve_outline, outline, route_after_outline_approval
+from drafting.nodes import _ResearchPlan, approve_outline, outline, plan_research, route_after_outline_approval
 from drafting.state import DocumentType, DraftingState
 from shared.schemas.cei_ui import CEIUISurface
 
@@ -36,6 +36,22 @@ def _base_state(**overrides) -> dict:
 
 
 # ── outline node ─────────────────────────────────────────────────────────────
+
+
+def test_plan_research_uses_available_research_sources(monkeypatch):
+    structured = Mock()
+    structured.invoke.return_value = {
+        "parsed": _ResearchPlan(needs_research=True, questions=["What is the evidence?"], reasoning="Evidence needed"),
+        "raw": AIMessage(content=""),
+    }
+    model = Mock()
+    model.with_structured_output.return_value = structured
+    monkeypatch.setattr("drafting.nodes.get_model", lambda: model)
+
+    result = plan_research(_base_state())
+
+    assert result["research_questions"] == ["What is the evidence?"]
+    assert "PubMed" in structured.invoke.call_args.args[0][0]["content"]
 
 
 def test_outline_generates_text_and_bumps_revision(monkeypatch):
