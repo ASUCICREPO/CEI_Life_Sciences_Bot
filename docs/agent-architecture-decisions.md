@@ -6,7 +6,7 @@ Decisions made during the planning phase for the CEI Life Sciences Bot AgentCore
 
 ## D1: Agent Topology — Multi-Agent with Manager
 
-**Partly superseded by B15, B17, B80 (see `.agents/decision-log.md`).** Routing for dashboard tasks (Goals 1–3) is unchanged (deterministic lookup, no model call). Free-text chat is new: it goes to a Session Router classifier call that can pick any of the four agents (B15/B17), which D1's "already classified in the task launcher UI" wording did not cover. When that classifier's confidence is low, the Router asks the user to pick one of the four agents with a `ChoicePicker` instead of guessing (B80). B21/B26/B27/B29/B30 also add a fifth runtime — 11 single-source tool agents — alongside the four agents below.
+**Partly superseded by B15, B17, B80 (see `.agents/decision-log.md`).** Routing for dashboard tasks (Goals 1–3) is unchanged (deterministic lookup, no model call). Free-text chat is new: it goes to a Session Router classifier call that can pick any of the four agents (B15/B17), which D1's "already classified in the task launcher UI" wording did not cover. When that classifier's confidence is low, the Router asks the user to pick one of the four agents with a `ChoicePicker` instead of guessing (B80). B21/B26/B27/B29/B30 also add a fifth runtime — 11 single-source tool agents — alongside the four agents below. Status at this commit: the Session Router now calls an LLM classifier for free text (F9, backend built). A turn with `task_type: live-research` still uses the deterministic lookup, with no model call. A turn with no `task_type` goes to one fixed classifier model (`CEI_ROUTER_MODEL_ID`, Converse with the Guardrail). At confidence 0.7 or more, the Router routes to that agent. Below 0.7, it returns the B80 `ChoicePicker`, and `POST /ui-actions` (`route-choice`) starts the chosen agent. The free-text input in the SPA is in progress. Live AWS verification is still necessary. The tool-agent runtime (F15) is not built.
 
 **Decision:** Multiple specialized AgentCore agents coordinated by a manager.
 
@@ -133,7 +133,7 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 
 ## D6: Agent-to-UI Protocol - CEI UI
 
-**Extended by B60 (see `.agents/decision-log.md`).** CEI UI 1.2 adds progressive SSE patch events on top of the same 1.1 component contract described below — a transport change only, not a new component catalog. See `docs/cei-ui-protocol.md` "Planned: CEI UI 1.2 progressive streaming".
+**Extended by B60 (see `.agents/decision-log.md`).** CEI UI 1.2 adds progressive SSE patch events on top of the same 1.1 component contract described below — a transport change only, not a new component catalog. See `docs/cei-ui-protocol.md` "CEI UI 1.2 progressive streaming".
 
 **Decision:** Use the custom CEI UI protocol for rich agent responses. The content type is `application/vnd.cei.ui+json`, the protocol ID is `cei-ui`, and the response field is `ui`. The protocol is now at version 1.1.
 
@@ -142,11 +142,11 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 - Deterministic presenters create CEI UI from typed agent state. Models do not create component records, arbitrary UI, or JavaScript. The one exception is `Artifact.html`, which is model-authored but never executes outside a sandboxed iframe (see the "Sandboxed model-authored artifacts" ADR below).
 - The first transport is completed JSON. Typed POST actions are part of the contract.
 - Final SSE surfaces and progressive patches are deferred.
-- Plain text is required as a fallback: when `ui` fails validation, the client drops it and shows `text` with a notice, and the local proxy omits `ui` and sets `ui_error`.
+- Plain text is required as a fallback: when `ui` fails validation, the client drops it, shows `text` with a notice, and sets `ui_error` (`frontend/src/lib/agentClient.ts`).
 
 **1.1 addition:** Six new leaf components — `Table`, `StatGrid`, `Callout`, `Timeline`, `Comparison`, `Artifact` — so research and drafting answers can be rendered as tables, metric tiles, comparisons, timelines, callouts, and sandboxed interactive artifacts instead of one Markdown block. 1.1 is additive: servers emit `"1.1"`; clients and stored chat history continue to accept `"1.0"`.
 
-**Current status:** CEI UI 1.1 schemas, deterministic presenters, completed response surfaces, frontend validation and rendering, and local typed action dispatch are implemented. The local Next.js proxy routes are disabled unless `CEI_ENABLE_LOCAL_PROXY=true`. They are for preview only because the production frontend target is a static S3 and CloudFront deployment. Production authentication, Session Runner routing, SSE delivery, and graph resume are not implemented.
+**Current status:** CEI UI 1.1 schemas, deterministic presenters, completed response surfaces, and frontend validation and rendering (Vite SPA) are implemented. Cognito authentication, the Session Runner (`POST /chat/stream`), and `POST /ui-actions` exist. Research streams CEI UI 1.2 over SSE. Graph resume works for Analysis and Pipeline Manager only. The Next.js preview proxies are archived in `archive/frontend-next/` and are not deployed.
 
 **Rationale:** A small CEI-owned contract gives the application a stable allowlist, direct validation, typed actions, and no dependency on executable model-generated UI beyond the sandboxed artifact exception. See [CEI UI Protocol 1.1](./cei-ui-protocol.md).
 
@@ -181,7 +181,7 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 4. The server validates the action and returns `accepted`, `completed`, `stale`, `rejected`, or `error`.
 5. When pause and resume support exists, the server resumes the saved graph with the validated value.
 
-**Current limitation:** The current helpers return HITL UI data, and the local preview can submit and validate typed actions through its opt-in proxy. The repository has no production action endpoint, Session Runner, or actual LangGraph pause and resume flow.
+**Current status (F13, built; live AWS verification still necessary):** `POST /ui-actions` resumes the owning agent and returns one JSON envelope, not SSE. Research (clarifying question), Drafting (outline approval), Analysis (scope confirmation), and Pipeline Manager (plan approval) pause with a LangGraph `interrupt`. The inline tools above now really pause too (`shared/tools/hitl/inline_functions.py`). On `/chat/stream`, a Research clarify pause ends the stream with a terminal `hitl_request`. **Limitation:** the B72 Drafting revision-request interrupt is not built. A revision is a new chat turn. Pipeline in-process sub-runs skip the Research and Drafting pauses (`clarified`, `skip_outline_approval`).
 
 ---
 
@@ -239,7 +239,7 @@ Each specialist agent has two system prompt variants. The mode is passed as meta
 
 ## D12: Session Persistence — Indefinite
 
-**Pagination TBD resolved by B59 (see `.agents/decision-log.md`).** B59 fixes the pagination strategy this record left open: cursor pages of turns (for example the last 20, older turns loading on scroll-up via the DynamoDB `LastEvaluatedKey`), with the trace of a turn loading only when its thinking block is expanded, rendered in a virtualized list. B58 also fixes what "indefinite" means: retained until the user deletes the chat or the account.
+**Pagination TBD resolved by B59 (see `.agents/decision-log.md`).** B59 fixes the pagination strategy this record left open: cursor pages of turns (for example the last 20, older turns loading on scroll-up via the DynamoDB `LastEvaluatedKey`), with the trace of a turn loading only when its thinking block is expanded, rendered in a virtualized list. B58 also fixes what "indefinite" means: retained until the user deletes the account. There is no per-chat delete (B104 supersedes the chat-delete part of B58).
 
 **Decision:** Sessions persist indefinitely until the user deletes them. No TTL. Chat History Store in DynamoDB. Lazy loading required on the frontend to prevent browser crashes on large histories (pagination strategy TBD).
 

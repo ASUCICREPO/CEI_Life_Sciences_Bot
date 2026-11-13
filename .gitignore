@@ -25,6 +25,10 @@ out/
 # Compiled JavaScript files
 *.js
 !jest.config.js
+!backend/lambdas/session-runner/*.js
+!backend/lambdas/ui-actions/*.js
+!backend/lambdas/spike-streaming-runner/*.js
+!backend/lambdas/shared/*.js
 *.d.ts
 
 # TypeScript cache
@@ -68,3 +72,13 @@ CLAUDE.md
 .venv/
 __pycache__/
 *.py[ocd]
+
+# deploy.sh-generated deployment config (F1, B47) — environment-specific, regenerated per run
+backend/cei.deploy.json
+
+# Frontend production build + local runtime config (F2, B1/B66) — built/generated, not committed
+frontend/dist/
+frontend/public/config.json
+.playwright-mcp/
+.cloudforge/
+.codex/

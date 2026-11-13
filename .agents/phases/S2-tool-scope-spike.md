@@ -1,6 +1,6 @@
 # S2 — Tool scope spike
 
-Status: not started | Depends on: — | Decisions: B29, B30, B69, B70 | Specs: [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) (full), [`../specs/tools.md`](../specs/tools.md) §1, [`../specs/security.md`](../specs/security.md) (T3)
+Status: in progress (ENFORCE run passed 2026-10-28, all five questions answered; task 5 LOG_ONLY pass remains; spike stack kept deployed) | Depends on: — | Decisions: B29, B30, B69, B70 | Specs: [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) (full), [`../specs/tools.md`](../specs/tools.md) §1, [`../specs/security.md`](../specs/security.md) (T3)
 
 ## Goal
 
@@ -21,16 +21,16 @@ Prove that Policy in AgentCore (Cedar, GA 2026-03) can enforce per-source, per-c
 
 ## Tasks
 
-- [ ] 1. Create the Cognito resource server (e.g. `cei-tools-spike`) with two scopes, `cei-tools-spike/target-a` and `cei-tools-spike/target-b`, and confirm neither scope name is a substring of the other (B69/the `like`-matching collision rule in `auth-and-tool-scope.md` §3).
-- [ ] 2. Create the M2M app client and confirm only a designated test-runner IAM identity can read its client secret from Secrets Manager (proves the IAM-boundary pattern B30 asks F4 to enforce for the real Router).
-- [ ] 3. Deploy the AgentCore Gateway with the two echo targets.
-- [ ] 4. Write the Cedar policy set: default deny, permit `initialize`/`tools/list` unconditionally, permit each target's action(s) only when the token's scope claim contains that target's scope — write it at **one permit per target** (all of a target's tools share the target-level scope), per B69.
-- [ ] 5. Start the policy set in `LOG_ONLY`. Confirm denies are logged, not blocked, and that a token with no scopes can still call both targets while `LOG_ONLY`.
-- [ ] 6. Flip to `ENFORCE`. Confirm a token scoped to only `target-a` can call target A, is denied calling target B, and that `tools/list` for that token returns only target A's tools.
-- [ ] 7. Confirm the shared-scope pattern from B70 (one scope shared by every caller by default) by adding a third always-granted scope and target, and confirming a caller with only `target-a` still reaches it without an explicit grant.
-- [ ] 8. Deliberately trigger a denied call from inside a trivial LangGraph node (or a plain Python script simulating one) and record the exact error shape the Gateway/Policy engine returns, to inform the "denied-call error shape inside LangGraph" open item.
-- [ ] 9. Test token TTL: request a 1-hour token (per B67), let it approach expiry mid-"run" (a sleep loop is fine for the spike), and confirm the internal token-refresh pattern described in B67 is technically reachable (an IAM-authenticated internal endpoint call that returns a fresh token with the same scopes) — a stub refresh endpoint is acceptable for this spike; F4 builds the real one.
-- [ ] 10. Write the findings note covering all four B30 prototype items plus the B67/B69/B70 checks above.
+- [x] 1. Create the Cognito resource server (e.g. `cei-tools-spike`) with two scopes, `cei-tools-spike/target-a` and `cei-tools-spike/target-b`, and confirm neither scope name is a substring of the other (B69/the `like`-matching collision rule in `auth-and-tool-scope.md` §3). *(Code done: also `shared` and an unreferenced `probe` scope; Jest checks the substring rule.)*
+- [x] 2. Create the M2M app client and confirm only a designated test-runner IAM identity can read its client secret from Secrets Manager (proves the IAM-boundary pattern B30 asks F4 to enforce for the real Router). *(Code done; the AccessDenied check runs in `s2_scope_test.py` after deploy.)*
+- [x] 3. Deploy the AgentCore Gateway with the two echo targets. *(Deployed as `ToolScopeSpikeStack`, us-east-2.)*
+- [x] 4. Write the Cedar policy set: default deny, permit `initialize`/`tools/list` unconditionally, permit each target's action(s) only when the token's scope claim contains that target's scope — write it at **one permit per target** (all of a target's tools share the target-level scope), per B69. *(Code done; the Cedar shape differs from the spec examples, see findings/S2.md.)*
+- [ ] 5. Start the policy set in `LOG_ONLY`. Confirm denies are logged, not blocked, and that a token with no scopes can still call both targets while `LOG_ONLY`. *(Not run: stack was already in `ENFORCE`; needs `./deploy.sh --spike tool-scope`. The ENFORCE run found no Cedar decisions in the Gateway log group.)*
+- [x] 6. Flip to `ENFORCE`. Confirm a token scoped to only `target-a` can call target A, is denied calling target B, and that `tools/list` for that token returns only target A's tools.
+- [x] 7. Confirm the shared-scope pattern from B70 (one scope shared by every caller by default) by adding a third always-granted scope and target, and confirming a caller with only `target-a` still reaches it without an explicit grant.
+- [x] 8. Deliberately trigger a denied call from inside a trivial LangGraph node (or a plain Python script simulating one) and record the exact error shape the Gateway/Policy engine returns, to inform the "denied-call error shape inside LangGraph" open item.
+- [x] 9. Test token TTL: request a 1-hour token (per B67), let it approach expiry mid-"run" (a sleep loop is fine for the spike), and confirm the internal token-refresh pattern described in B67 is technically reachable (an IAM-authenticated internal endpoint call that returns a fresh token with the same scopes) — a stub refresh endpoint is acceptable for this spike; F4 builds the real one.
+- [x] 10. Write the findings note covering all four B30 prototype items plus the B67/B69/B70 checks above.
 
 ## Acceptance criteria
 

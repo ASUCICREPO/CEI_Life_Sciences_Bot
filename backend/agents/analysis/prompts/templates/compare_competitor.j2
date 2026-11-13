@@ -1,0 +1,21 @@
+Build a fixed-framework competitor comparison matrix from the findings below. Compare these entities, in this order: {{ options | join(', ') }}.
+
+Use exactly these dimensions, in this order:
+1. Modality / mechanism
+2. Lead indication
+3. Development stage
+4. Trial activity
+5. Approvals
+6. Patent position
+7. Differentiation
+{% if mode == "business" %}8. SWOT ({{ focal_entity or options[0] }})
+{% endif %}
+
+For each dimension, give one short finding per entity, in the same order as the entities above. If evidence is missing for an entity on a dimension, say "Not found in evidence." Cite source IDs in square brackets, for example [PMID:123].
+
+Respond ONLY with valid JSON matching this schema:
+{
+  "comparisons": [
+    {"dimension": "...", "findings": ["...", "..."], "sources": ["..."]}
+  ]
+}

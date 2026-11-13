@@ -1,0 +1,60 @@
+version: 0.2
+
+# CEI Life Sciences Bot deployment pipeline (F1, B47). Started by deploy.sh
+# via `aws codebuild start-build` on the cei-life-sciences-deploy project.
+#
+# ADR: every command below cd's into "$CODEBUILD_SRC_DIR/backend" | Rationale: buildspec 0.2
+# runs every command in one persistent shell (a "cd" does carry over), but the build starts
+# in $CODEBUILD_SRC_DIR, not backend/; the explicit absolute cd on each line is defensive and
+# keeps every command correct on its own regardless of ordering.
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm ci
+      # ADR: frontend build dependencies installed here too (F2, B1/B66) | Rationale: BackendStack's BucketDeployment needs a built frontend/dist before `cdk deploy`
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm ci
+      # ADR: uv on the build host | Rationale: AgentRuntimes bundles the agent CodeZip locally from backend/agents/uv.lock (aarch64 wheels); without uv CDK falls back to Docker bundling
+      - python3 -m pip install --quiet uv
+  pre_build:
+    commands:
+      - echo "$CEI_DEPLOY_CONFIG" | base64 -d > "$CODEBUILD_SRC_DIR/backend/cei.deploy.json"
+      # ADR: pre-flight runs only in CodeBuild, never locally in deploy.sh | Rationale: every build step (including this one) belongs in CodeBuild; this is the only place Region drift between a prior local run and this build gets caught
+      - cd "$CODEBUILD_SRC_DIR/backend" && npx ts-node scripts/preflight.ts --config cei.deploy.json --write
+  build:
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm test
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm run build
+      # ADR: cdk bootstrap runs here, after the frontend build | Rationale: `cdk synth` (which
+      # bootstrap also triggers) throws if frontend/dist is missing; bootstrap must also run before
+      # `cdk deploy`, so this is the earliest point in the build where both constraints are satisfied
+      - |
+        cd "$CODEBUILD_SRC_DIR/backend"
+        ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+        DEPLOY_REGION="$(node -p "require('./cei.deploy.json').region")"
+        BOOTSTRAP_REGIONS="$DEPLOY_REGION"
+        if [ "$DEPLOY_REGION" != "us-east-1" ]; then
+          # ADR: also bootstrap us-east-1 | Rationale: B88 — EdgeWafStack (the CLOUDFRONT-scope WAF web ACL) always deploys to us-east-1 regardless of the chosen Region
+          BOOTSTRAP_REGIONS="$BOOTSTRAP_REGIONS us-east-1"
+        fi
+        for region in $BOOTSTRAP_REGIONS; do
+          if aws cloudformation describe-stacks --stack-name CDKToolkit --region "$region" >/dev/null 2>&1; then
+            echo "CDKToolkit already present in $region."
+          else
+            echo "CDKToolkit not found in $region — bootstrapping..."
+            # ADR: --bootstrap-kms-key-id AWS_MANAGED_KEY | Rationale: skips creating a customer-managed KMS key for the assets bucket, so the CodeBuild role's bootstrap policy (deploy.sh) needs no KMS permissions
+            npx cdk bootstrap "aws://$ACCOUNT_ID/$region" --bootstrap-kms-key-id AWS_MANAGED_KEY -c ceiConfigFile=cei.deploy.json
+          fi
+        done
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm test
+      # FIXME: remove after S2 validation (B92)
+      # ADR: spike context flags added only when set | Rationale: B92 — empty CEI_SPIKES means a normal deploy, unchanged | Alternative: always pass empty -c values (rejected: an empty ceiSpikes key is still a set context key)
+      - |
+        cd "$CODEBUILD_SRC_DIR/backend"
+        SPIKE_ARGS=""
+        if [ -n "${CEI_SPIKES:-}" ]; then SPIKE_ARGS="$SPIKE_ARGS -c ceiSpikes=$CEI_SPIKES"; fi
+        if [ -n "${CEI_SPIKE_POLICY_MODE:-}" ]; then SPIKE_ARGS="$SPIKE_ARGS -c ceiSpikePolicyMode=$CEI_SPIKE_POLICY_MODE"; fi
+        npx cdk deploy --all --require-approval never -c ceiConfigFile=cei.deploy.json $SPIKE_ARGS

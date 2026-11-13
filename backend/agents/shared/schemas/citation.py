@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class SourceType(StrEnum):
@@ -17,6 +17,17 @@ class SourceType(StrEnum):
     ICD10 = "icd10"
     NPI_REGISTRY = "npi_registry"
     PUBCHEM = "pubchem"
+    OPENFDA = "openfda"
+    PATENTSVIEW = "patentsview"
+    # B44: AgentCore Web Search built-in connector -- no author/year metadata, snippet-only citation.
+    WEB = "web"
+    # B110: per-chat attachment chunks from the Managed Knowledge Base -- no author/year metadata,
+    # filename-only citation, no external URL.
+    ATTACHMENTS = "attachments"
+
+
+# B44/B110: neither the web search connector nor attachment chunks carry author/year metadata.
+_NO_AUTHORS_YEAR = frozenset({SourceType.WEB, SourceType.ATTACHMENTS})
 
 
 class Citation(BaseModel):
@@ -26,7 +37,18 @@ class Citation(BaseModel):
     source_type: SourceType
     url: str
     title: str
-    authors: list[str]
-    year: int
+    # ADR: optional for SourceType.WEB only | Rationale: B44 -- the web search connector returns no
+    # author/year metadata; every other source keeps these required (enforced below)
+    authors: list[str] | None = None
+    year: int | None = None
     relevant_passage: str
     retrieved_at: datetime
+    # B44: the cited snippet text for a web search result; never the full result list.
+    snippet: str | None = None
+
+    @model_validator(mode="after")
+    def _require_authors_and_year_unless_web(self) -> Citation:
+        if self.source_type not in _NO_AUTHORS_YEAR:
+            if self.authors is None or self.year is None:
+                raise ValueError("authors and year are required for all source types except web/attachments (B44/B110)")
+        return self

@@ -4,11 +4,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
 from pydantic import BaseModel, Field
 
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, DataSourceTool
+from shared.tools import retrying_http as http
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +30,10 @@ class BioRxivTool(DataSourceTool):
     def _build_payload(self, query: str, max_results: int = 10) -> dict[str, Any]:
         return {"query": query, "max_results": max_results}
 
-    def _direct_invoke(self, query: str, max_results: int = 10, **_: Any) -> DataSourceResult:
+    def fetch(self, query: str, max_results: int = 10, **_: Any) -> DataSourceResult:
         retrieved_at = datetime.now(timezone.utc)
         try:
-            resp = requests.get(
+            resp = http.get(
                 _EPMC,
                 params={
                     "query": f"{query} SRC:PPR PUBLISHER:bioRxiv",
@@ -82,5 +82,5 @@ class BioRxivTool(DataSourceTool):
                 query_metadata={"query": query, "total": len(results)},
             )
         except Exception as exc:
-            logger.error({"event": "biorxiv_direct_invoke_error", "error": str(exc)})
+            logger.error({"event": "biorxiv_fetch_error", "error_type": type(exc).__name__})
             return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": str(exc)})

@@ -1,0 +1,223 @@
+@import "tailwindcss";
+
+/* === CEI Founder AI Science Dashboard — Design Tokens === */
+
+@theme {
+  /* Brand Colors (from CEI Gateway) */
+  --color-cei-blue: #1b4f72;
+  --color-cei-blue-light: #2980b9;
+  --color-cei-navy: #0f2b46;
+  --color-cei-gold: #d4a843;
+  --color-cei-gold-light: #f0d78c;
+
+  /* Evidence Strength */
+  --color-evidence-strong: #0f766e;
+  --color-evidence-strong-bg: #f0fdfa;
+  --color-evidence-moderate: #d97706;
+  --color-evidence-moderate-bg: #fffbeb;
+  --color-evidence-weak: #dc2626;
+  --color-evidence-weak-bg: #fef2f2;
+  --color-evidence-conflict: #7c3aed;
+  --color-evidence-conflict-bg: #f5f3ff;
+  --color-evidence-missing: #6b7280;
+  --color-evidence-missing-bg: #f9fafb;
+
+  /* Status */
+  --color-review-required: #ea580c;
+  --color-review-required-bg: #fff7ed;
+  --color-confidential: #4338ca;
+  --color-confidential-bg: #eef2ff;
+  --color-success: #059669;
+  --color-success-bg: #ecfdf5;
+
+  /* Surfaces */
+  --color-surface-primary: #fafbfc;
+  --color-surface-elevated: #ffffff;
+  --color-surface-panel: #f8f7f6;
+  --color-surface-rail: #f1f3f5;
+  --color-border-subtle: #e5e7eb;
+  --color-border-default: #d1d5db;
+
+  /* Text */
+  --color-text-primary: #1a1a2e;
+  --color-text-secondary: #4a5568;
+  --color-text-tertiary: #9ca3af;
+  --color-text-inverse: #ffffff;
+
+  /* Custom spacing (use via arbitrary values, not overriding Tailwind's spacing) */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md:
+    0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --shadow-lg:
+    0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+
+  /* Font families */
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+}
+
+/* Base styles */
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-surface-primary);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-default);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
+
+/* Focus styles */
+*:focus-visible {
+  outline: 2px solid var(--color-cei-blue-light);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Transitions */
+.transition-panel {
+  transition:
+    transform 200ms ease,
+    opacity 200ms ease;
+}
+
+/* Guided product tour */
+.tour-scrim {
+  background: rgb(15 23 42 / 0.58);
+  transition:
+    top 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    left 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tour-spotlight {
+  border-color: white;
+  box-shadow:
+    0 0 0 4px rgb(41 128 185 / 0.32),
+    0 12px 32px rgb(15 43 70 / 0.18);
+  transition:
+    left 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    top 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+  animation: tour-spotlight-breathe 1.8s ease-in-out infinite;
+}
+
+.tour-spotlight-success {
+  border-color: var(--color-success);
+  box-shadow:
+    0 0 0 5px rgb(5 150 105 / 0.26),
+    0 12px 32px rgb(5 150 105 / 0.16);
+  animation: none;
+}
+
+.tour-coachmark {
+  animation: tour-coachmark-enter 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition:
+    top 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    left 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tour-action-pulse {
+  box-shadow: 0 0 0 0 rgb(27 79 114 / 0.35);
+  animation: tour-action-pulse 1.5s ease-out infinite;
+}
+
+@keyframes tour-coachmark-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes tour-spotlight-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 4px rgb(41 128 185 / 0.24),
+      0 12px 32px rgb(15 43 70 / 0.14);
+  }
+  50% {
+    box-shadow:
+      0 0 0 7px rgb(41 128 185 / 0.36),
+      0 12px 36px rgb(15 43 70 / 0.2);
+  }
+}
+
+@keyframes tour-action-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(27 79 114 / 0.38);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px rgb(27 79 114 / 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-scrim,
+  .tour-spotlight,
+  .tour-coachmark {
+    animation: none;
+    transition: none;
+  }
+
+  .tour-action-pulse {
+    animation: none;
+  }
+}
+
+/* NCBI tool: indeterminate progress sweep while a query runs */
+@keyframes ncbi-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[ncbi-sweep_1\.4s_ease-in-out_infinite\] {
+    animation: none;
+  }
+}

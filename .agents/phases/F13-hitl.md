@@ -1,5 +1,5 @@
 # F13 — HITL
-Status: not started | Depends on: F6, S4 | Decisions: B28, B56, B57, B60, B72, B82 | Specs: ../specs/agents.md, ../specs/streaming-protocol.md, ../specs/api.md
+Status: partial (`POST /ui-actions` built; inline tools, Research clarify, Drafting outline approval, Analysis, and Pipeline pause and resume; stream HITL card answerable; durable checkpoints for non-Research agents and the revise interrupt not built; not verified on AWS; see "Implementation status") | Depends on: F6, S4 | Decisions: B28, B56, B57, B60, B72, B82 | Specs: ../specs/agents.md, ../specs/streaming-protocol.md, ../specs/api.md
 
 ## Goal
 Make the four inline HITL tools (`ask_user_question`, `present_alternatives`, `request_plan_approval`, `get_user_input`) really pause a running agent and really resume it later, using a LangGraph `interrupt` and an `AgentCoreMemorySaver` checkpoint, with a very long but not infinite wait (B56, B57, refined by B82: the wait lasts up to AgentCore Memory's maximum short-term event expiry, expected 365 days — verify the real value — after which the checkpoint is gone and a resume attempt must show "expired, start again"). Add the production `POST /ui-actions` endpoint that resumes a paused run.
@@ -59,6 +59,30 @@ Make the four inline HITL tools (`ask_user_question`, `present_alternatives`, `r
 - AgentCore Memory short-term event expiry maximum is set by B82 to the maximum available value (expected 365 days) — verify the real number during implementation. If the real value is shorter than expected, the "expired, start again" UI (B82) is the accepted fallback, not a sign that B56/B57's design needs to change.
 - Denied-call behavior inside LangGraph when a Gateway call is Cedar-denied mid-run is a separate open item (`auth-and-tool-scope.md` §8) — not this phase's problem, but a paused-then-resumed run could hit it on resume; note for F4/S2 follow-up.
 
-## Handoff notes
+## Implementation status (2026-11-10)
+Built on `complete-cei-workflows` (statically reviewed; Node tests pass locally, Python/Jest tests and deployment pending in CodeBuild):
+- `POST /ui-actions` (`lambdas/ui-actions/index.js`, Node, STREAM mode, 14 min): exact `ActionRequest` field check, session ownership and the owning agent from `ChatMetadataStore.agent_type` (never from the request), then `op: "resume"` to that runtime with the caller's own bearer token (B102). Only Analysis and Pipeline pause today, so other chats get `invalid_request`. STREAM mode because a resumed analysis runs longer than a buffered integration's 29 s.
+- Deployed SPA builds send actions there (`agentClient.sendAction` when `apiBaseUrl` is set); the local demo keeps the proxy `op: "resume"` path.
+- B82 expiry: a cold resume with no checkpoint answers `status: "rejected"`, `code: "expired"`, "This request has expired. Start again." (`ops.expired_envelope`); a duplicate against an existing checkpoint stays `stale`.
+Still open (as of the first pass above): tasks 1–4 (inline tools calling `interrupt()`, Research `clarify`, Drafting `approve_outline`/revise), `AgentCoreMemorySaver` for Analysis/Pipeline/Drafting (S4 unproven), and the two-process durability integration test.
+
+## Implementation status (2026-11-10, wave 1/2 update)
+- Inline tools: `shared/tools/hitl/inline_functions.py` now has pure surface builders plus LLM-facing tools that call `interrupt()`, so the graph really pauses.
+- Research: `TriagePlan.ambiguous` plus the `clarify` node (`research/nodes.py`). It asks once (`clarified`). It works on the buffered and the stream path. On the stream, `main.py` ends with a terminal `hitl_request` (no `surface_end`).
+- Drafting: `approve_outline` pauses after the outline. There is no draft-review pause. A revision stays a new chat turn (the B72 revise interrupt is not built).
+- Shared resume helper: `shared/runtime/hitl_turn.py` (`resolve_resume_action`), used by Research, Drafting, Analysis, and Pipeline.
+- `POST /ui-actions`: `RESUMABLE` now holds `research`, `drafting`, `analysis`, and `pipeline_manager`. A resume returns ONE JSON envelope, not SSE.
+- Frontend: the stream HITL card is answerable.
+- Pipeline in-process sub-runs skip these pauses (`clarified: True`, `skip_outline_approval: True` in `pipeline_manager/dispatcher.py`).
+- Still open: `AgentCoreMemorySaver` for Drafting/Analysis/Pipeline (they use `InMemorySaver` plus a ChatHistoryStore snapshot restore), the two-process durability test, and the B82 real expiry value.
+
+## Needs live AWS verification
+- A Research clarify pause on `/chat/stream` ends with `hitl_request`, and the answer through `/ui-actions` resumes the search.
+- A Drafting outline approval pauses, and approval resumes into the draft.
+- A cold resume (runtime restart) of a Research or Drafting pause restores the checkpoint, or returns `expired`.
+- A stale `revision` returns `status: stale` and does not resume.
+- A Pipeline run does not pause inside its research or drafting steps.
+
+
 - F14 (Analysis) and F17 (Pipeline Manager) must reuse this phase's `interrupt`-based pattern and the same `POST /ui-actions` endpoint — no new action endpoint should be built for them.
 - F16 (background jobs) needs this phase's checkpoint-based pause primitive as the foundation for its "checkpoint, stop the session, resume in a new session" async HITL behavior (B25).

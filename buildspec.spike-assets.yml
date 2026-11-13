@@ -1,0 +1,28 @@
+version: 0.2
+
+# Build, synthesize, and publish isolated spike assets only. This does not deploy.
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm ci
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm ci
+      - python3 -m pip install --quiet uv
+      - echo "$CEI_DEPLOY_CONFIG" | base64 -d > "$CODEBUILD_SRC_DIR/backend/cei.deploy.json"
+      - python3 -c "import boto3,json,os; assert os.environ.get('AWS_REGION') == 'us-east-1'; assert boto3.client('sts').get_caller_identity()['Account'] == '257137551728'; assert json.load(open(os.environ['CODEBUILD_SRC_DIR'] + '/backend/cei.deploy.json'))['region'] == 'us-east-1'"
+  build:
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm run build
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
+      - |
+        set -e
+        cd "$CODEBUILD_SRC_DIR/backend"
+        case "${CEI_SPIKE_TYPE:-durable}" in
+          durable) SPIKE_STACK=DurableSpikeStack ;;
+          identity) SPIKE_STACK=IdentitySpikeStack ;;
+          *) echo "Unknown spike type"; exit 1 ;;
+        esac
+        npx cdk synth "$SPIKE_STACK" --quiet --json -c ceiConfigFile=cei.deploy.json -c "ceiSpikes=${CEI_SPIKE_TYPE:-durable}"
+        npx cdk publish-assets "$SPIKE_STACK" --app cdk.out --unstable=publish-assets
+      - cd "$CODEBUILD_SRC_DIR/backend" && python3 scripts/publish_spike_template.py

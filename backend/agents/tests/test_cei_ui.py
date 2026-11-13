@@ -98,8 +98,11 @@ from shared.schemas.response_blocks import (
 )
 from shared.tools.hitl.inline_functions import (
     AlternativeInput,
-    InlineFunctionRegistry,
     PlanStepInput,
+    build_ask_user_question_surface,
+    build_get_user_input_surface,
+    build_plan_approval_surface,
+    build_present_alternatives_surface,
 )
 from shared.transport.sse import (
     EventType,
@@ -113,7 +116,7 @@ from shared.transport.sse import (
 )
 
 _GOLDEN_FIXTURE_PATH = (
-    Path(__file__).resolve().parents[3] / "frontend" / "scripts" / "fixtures" / "cei-ui-1.1-sample.json"
+    Path(__file__).resolve().parents[3] / "archive" / "frontend-next" / "scripts" / "fixtures" / "cei-ui-1.1-sample.json"
 )
 
 
@@ -449,11 +452,15 @@ def test_research_fallback_is_a_complete_surface() -> None:
 
 
 def test_drafting_surface_filters_private_export_and_chart_fields() -> None:
+    """The completed-turn surface is a short summary + Files list: no full draft text, no raw
+    chart/export fields, one `ExportFile` component per export (B1xx #3)."""
+    export_id = "6f1c2d3e-0000-4000-8000-000000000001_" + "a" * 32
     surface = build_drafting_surface(
         "Draft complete.",
         surface_id="drafting-final",
         exports=[
             {
+                "export_id": export_id,
                 "format": "pdf",
                 "filename": "brief.pdf",
                 "byte_size": 42,
@@ -475,6 +482,10 @@ def test_drafting_surface_filters_private_export_and_chart_fields() -> None:
     )
 
     payload = json.dumps(surface.model_dump(mode="json"))
+    export_files = [c for c in surface.components if c.type == "ExportFile"]
+    assert len(export_files) == 1
+    assert export_files[0].filename == "brief.pdf"
+    assert export_files[0].export_id == export_id
     assert "brief.pdf" in payload
     assert "Evidence by year" in payload
     assert "Provide 2027 evidence data." in payload
@@ -484,20 +495,19 @@ def test_drafting_surface_filters_private_export_and_chart_fields() -> None:
 
 
 def test_hitl_tools_return_complete_interactive_surfaces() -> None:
-    registry = InlineFunctionRegistry()
     payloads = [
-        registry._ask_user_question("Choose", ["One", "Two"]),
-        registry._present_alternatives(
+        build_ask_user_question_surface("Choose", ["One", "Two"]),
+        build_present_alternatives_surface(
             "Options",
             [
                 AlternativeInput(title="One", description="First"),
                 AlternativeInput(title="Two", description="Second"),
             ],
         ),
-        registry._request_plan_approval(
+        build_plan_approval_surface(
             "Plan", [PlanStepInput(title="Search"), PlanStepInput(title="Draft")]
         ),
-        registry._get_user_input("Describe the target"),
+        build_get_user_input_surface("Describe the target"),
     ]
 
     surfaces = [CEIUISurface.model_validate(payload) for payload in payloads]
@@ -919,7 +929,8 @@ def test_research_presenter_falls_back_to_legacy_on_invalid_document() -> None:
     assert any(component.type == "Markdown" for component in surface.components)
 
 
-def test_drafting_presenter_builds_graph_from_chart_specs_without_leaking_raw_fields() -> None:
+def test_drafting_presenter_notes_charts_without_leaking_raw_fields() -> None:
+    """Chart specs become a short note (title only), never a `Graph` component or raw data (B1xx #3)."""
     surface = build_drafting_surface(
         "Draft complete.",
         surface_id="drafting-final",
@@ -941,8 +952,8 @@ def test_drafting_presenter_builds_graph_from_chart_specs_without_leaking_raw_fi
     payload = json.dumps(surface.model_dump(mode="json"))
     graphs = [c for c in surface.components if c.type == "Graph"]
 
-    assert len(graphs) == 1
-    assert graphs[0].title == "Trend"
+    assert len(graphs) == 0
+    assert "Trend" in payload
     assert "local_path" not in payload
     assert "base64" not in payload
     assert '"data"' not in payload

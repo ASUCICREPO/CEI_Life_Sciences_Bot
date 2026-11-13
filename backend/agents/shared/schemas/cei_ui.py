@@ -78,6 +78,9 @@ _ARTIFACT_DENYLIST_RE = tuple(
     re.compile(pattern, re.IGNORECASE) for pattern in ARTIFACT_HTML_DENYLIST
 )
 
+# ADR: mirrors shared/persistence/exports.py's `_EXPORT_ID` | schemas must not import that module (boto3)
+_EXPORT_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[0-9a-f]{32}$")
+
 
 def validate_artifact_html(value: str) -> str:
     """Reject artifact HTML that matches a denylisted pattern."""
@@ -463,6 +466,21 @@ class ArtifactComponent(ComponentBase):
         return value
 
 
+class ExportFileComponent(ComponentBase):
+    type: Literal["ExportFile"] = "ExportFile"
+    export_id: Annotated[str, Field(min_length=1)]
+    filename: Annotated[str, Field(min_length=1, max_length=255)]
+    format: Literal["pdf", "docx", "md", "txt", "latex", "csv"]
+    byte_size: int = Field(ge=0)
+
+    @field_validator("export_id")
+    @classmethod
+    def validate_export_id(cls, value: str) -> str:
+        if not _EXPORT_ID_RE.fullmatch(value):
+            raise ValueError("export_id must be a valid export identifier")
+        return value
+
+
 Component = Annotated[
     TextComponent
     | ImageComponent
@@ -486,7 +504,8 @@ Component = Annotated[
     | CalloutComponent
     | TimelineComponent
     | ComparisonComponent
-    | ArtifactComponent,
+    | ArtifactComponent
+    | ExportFileComponent,
     Field(discriminator="type"),
 ]
 

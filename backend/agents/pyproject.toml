@@ -8,8 +8,10 @@ version = "0.1.0"
 description = "CEI Life Sciences Research Agent"
 requires-python = ">=3.12"
 dependencies = [
+    "aws-opentelemetry-distro>=0.18.0",
     "bedrock-agentcore",
     "boto3",
+    "cryptography",  # RS256 verification of Cognito access tokens (shared/runtime/identity.py)
     "jinja2",
     "langchain",
     "langchain-aws",
@@ -17,15 +19,17 @@ dependencies = [
     "langgraph-checkpoint-aws",
     "pydantic",
     "pydantic-settings",
+    "pyyaml",
     "requests",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["research", "drafting", "shared"]
+packages = ["research", "drafting", "analysis", "pipeline_manager", "tool_agent", "shared"]
 
 [tool.uv]
 dev-dependencies = [
     "pytest",
     "pytest-asyncio",
     "moto[all]",
+    "reportlab",  # tests/test_export_pdf_safety.py; the PDF script itself runs in Code Interpreter
 ]

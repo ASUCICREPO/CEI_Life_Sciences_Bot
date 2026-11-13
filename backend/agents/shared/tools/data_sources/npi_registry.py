@@ -4,11 +4,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
 from pydantic import BaseModel, Field
 
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, DataSourceTool
+from shared.tools import retrying_http as http
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class NPIRegistryTool(DataSourceTool):
     def _build_payload(self, name: str = "", npi: str = "", state: str = "", max_results: int = 10) -> dict[str, Any]:
         return {"name": name, "npi": npi, "state": state, "max_results": max_results}
 
-    def _direct_invoke(self, name: str = "", npi: str = "", state: str = "", max_results: int = 10, query: str = "", **_: Any) -> DataSourceResult:
+    def fetch(self, name: str = "", npi: str = "", state: str = "", max_results: int = 10, query: str = "", **_: Any) -> DataSourceResult:
         if not name and not npi and query:
             name = query
         retrieved_at = datetime.now(timezone.utc)
@@ -50,7 +50,7 @@ class NPIRegistryTool(DataSourceTool):
             if state:
                 params["state"] = state
 
-            resp = requests.get(_API, params=params, headers=_HEADERS, timeout=_TIMEOUT)
+            resp = http.get(_API, params=params, headers=_HEADERS, timeout=_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
 
@@ -94,5 +94,5 @@ class NPIRegistryTool(DataSourceTool):
                 query_metadata={"name": name, "npi": npi, "total": len(results)},
             )
         except Exception as exc:
-            logger.error({"event": "npi_registry_direct_invoke_error", "error": str(exc)})
+            logger.error({"event": "npi_registry_fetch_error", "error_type": type(exc).__name__})
             return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": str(exc)})

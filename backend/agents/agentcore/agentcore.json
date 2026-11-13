@@ -24,6 +24,24 @@
       "runtimeVersion": "PYTHON_3_12",
       "networkMode": "PUBLIC",
       "protocol": "HTTP"
+    },
+    {
+      "name": "CEIAnalysisAgent",
+      "build": "CodeZip",
+      "entrypoint": "analysis_main.py",
+      "codeLocation": ".",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP"
+    },
+    {
+      "name": "CEIPipelineManager",
+      "build": "CodeZip",
+      "entrypoint": "pipeline_main.py",
+      "codeLocation": ".",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP"
     }
   ],
   "memories": [],

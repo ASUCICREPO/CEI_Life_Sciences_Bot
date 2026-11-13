@@ -10,22 +10,52 @@ from shared.tools.data_sources.icd10 import ICD10Tool
 from shared.tools.data_sources.medrxiv import MedRxivTool
 from shared.tools.data_sources.npi_registry import NPIRegistryTool
 from shared.tools.data_sources.open_targets import OpenTargetsTool
+from shared.tools.data_sources.openfda import OpenFDATool
+from shared.tools.data_sources.patentsview import PatentsViewTool
 from shared.tools.data_sources.pubchem import PubChemTool
 from shared.tools.data_sources.pubmed import PubMedTool
 
+# F4: Gateway target id (also the `cei-tools/src.<id>` scope suffix) -> tool class. The single source of
+# truth for scripts/gen_tool_schemas.py and the data-source Lambda tests.
+TOOLS_BY_SOURCE_ID: dict[str, type[DataSourceTool]] = {
+    "pubmed": PubMedTool,
+    "clinicaltrials": ClinicalTrialsTool,
+    "biorxiv": BioRxivTool,
+    "medrxiv": MedRxivTool,
+    "chembl": ChEMBLTool,
+    "opentargets": OpenTargetsTool,
+    "cmscoverage": CMSCoverageTool,
+    "icd10": ICD10Tool,
+    "npi": NPIRegistryTool,
+    "pubchem": PubChemTool,
+    "openfda": OpenFDATool,
+    "patentsview": PatentsViewTool,
+}
+
 ALL_DATA_SOURCE_TOOLS: list[DataSourceTool] = [
-    PubMedTool(direct_mode=config.direct_mode),
-    ClinicalTrialsTool(direct_mode=config.direct_mode),
-    BioRxivTool(direct_mode=config.direct_mode),
-    MedRxivTool(direct_mode=config.direct_mode),
-    ChEMBLTool(direct_mode=config.direct_mode),
-    OpenTargetsTool(direct_mode=config.direct_mode),
-    CMSCoverageTool(direct_mode=config.direct_mode),
-    ICD10Tool(direct_mode=config.direct_mode),
-    NPIRegistryTool(direct_mode=config.direct_mode),
-    PubChemTool(direct_mode=config.direct_mode),
+    PubMedTool(direct_mode=config.data_sources_direct_invoke),
+    ClinicalTrialsTool(direct_mode=config.data_sources_direct_invoke),
+    BioRxivTool(direct_mode=config.data_sources_direct_invoke),
+    MedRxivTool(direct_mode=config.data_sources_direct_invoke),
+    ChEMBLTool(direct_mode=config.data_sources_direct_invoke),
+    OpenTargetsTool(direct_mode=config.data_sources_direct_invoke),
+    CMSCoverageTool(direct_mode=config.data_sources_direct_invoke),
+    ICD10Tool(direct_mode=config.data_sources_direct_invoke),
+    NPIRegistryTool(direct_mode=config.data_sources_direct_invoke),
+    PubChemTool(direct_mode=config.data_sources_direct_invoke),
+    OpenFDATool(direct_mode=config.data_sources_direct_invoke),
+    PatentsViewTool(direct_mode=config.data_sources_direct_invoke),
 ]
 
 
 def all_langchain_tools() -> list:
-    return [t.as_langchain_tool() for t in ALL_DATA_SOURCE_TOOLS]
+    tools = [t.as_langchain_tool() for t in ALL_DATA_SOURCE_TOOLS]
+    # B44/B86: Web Search is a Gateway built-in connector, not a DataSourceTool subclass (no
+    # upstream HTTP fetch of its own) -- added here only, gated on the CDK-set env flag, so this
+    # stays the single registry agents could bind from without a nodes.py/graph.py change.
+    from shared.tools.web_search import as_langchain_tool as web_search_tool
+    from shared.tools.web_search import web_search_enabled
+
+    if web_search_enabled():
+        tools.append(web_search_tool())
+    return tools

@@ -1,6 +1,6 @@
 # S1 — Streaming spike
 
-Status: not started | Depends on: — | Decisions: B2, B3, B4, B23/B79 (10-minute async threshold, decided), B68 | Specs: [`../specs/architecture.md`](../specs/architecture.md) §2.1, [`../specs/streaming-protocol.md`](../specs/streaming-protocol.md), [`../specs/api.md`](../specs/api.md) (`/chat/stream`), [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) §9
+Status: in progress (spike code prepared; build and deployed checks pending) | Depends on: — | Decisions: B2, B3, B4, B23/B79 (10-minute async threshold, decided), B68 | Specs: [`../specs/architecture.md`](../specs/architecture.md) §2.1, [`../specs/streaming-protocol.md`](../specs/streaming-protocol.md), [`../specs/api.md`](../specs/api.md) (`/chat/stream`), [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) §9
 
 ## Goal
 

@@ -233,13 +233,23 @@ For developers looking to extend or modify this project, see the [Modification G
 
 ### Frontend Can't Connect to Backend
 
-**Issue**: Frontend shows CORS errors or can't reach API
+**Issue**: Frontend shows CORS errors or can't reach the sessions API or the agents
+
+**How CORS is wired (deploy time)**: every layer uses one origin list built in `backend/lib/backend-stack.ts`: the `SiteUrl` output, plus `http://localhost:5173` only when `allowLocalhostCallback` is set.
+- **Sessions API** (`/sessions`, `/sessions/{id}`, `/sessions/{id}/history`): API Gateway answers the `OPTIONS` preflight (Authorization, Content-Type, Accept). The Lambdas echo the request origin from `ALLOWED_ORIGINS` on every response. Gateway errors (401/403/429/4xx/5xx) carry `Access-Control-Allow-Origin: <SiteUrl>`, so a localhost origin sees those specific errors as CORS failures.
+- **Agents** (browser → `AgentProxy` Lambda function URL → AgentCore runtime): the browser never calls `bedrock-agentcore.*` directly, because AgentCore documents no CORS support and its JWT authorizer would reject a preflight (preflights never carry `Authorization`). The SPA POSTs to `<AgentProxyUrl><agent>` (`research`, `drafting`, `analysis`, `pipeline`). The function URL's CORS (POST; authorization, content-type, accept, session-id header; no credentials; max-age 3600) is answered by the Lambda service itself. `backend/lambdas/agent-proxy/handler.py` checks for a bearer token and a valid session id, then forwards the caller's own token to the runtime, where AgentCore's Cognito authorizer and `identity.py` verify it. The proxy URLs reach the SPA through `/config.json` `agentUrls`, and the site CSP `connect-src` allows `https://*.lambda-url.<region>.on.aws`. The runtimes still get `CEI_ALLOWED_ORIGINS` (`app_factory.py`), which only matters if a browser ever calls them directly.
 
 **Solutions**:
-1. Verify API URL in frontend environment variables
-2. Check CORS configuration in Lambda Function URL or API Gateway
-3. Ensure Amplify app URL is in backend CORS allowed origins
-4. Test API endpoint directly with curl or Postman
+1. Check `/config.json` on the deployed site: it must contain `apiBaseUrl` and four `agentUrls` that start with the `AgentProxyUrl` stack output.
+2. In DevTools, check the `OPTIONS` request. It must return 200 with `Access-Control-Allow-Origin` equal to the site origin.
+3. If an agent call fails, check the `AgentProxyLogs` log group: each request logs the agent, status and duration (never the token, session id or body). A 401 there means AgentCore rejected the token; sign in again.
+4. Confirm the site origin matches `SiteUrl` exactly (scheme and host, no trailing slash).
+
+### Local development
+
+1. Copy `frontend/public/config.example.json` to `frontend/public/config.json` and fill in the Cognito values from the stack outputs. Keep `"apiBaseUrl": "/api"` and leave `agentUrls` out, so agent calls use the `/api/agents/*` dev proxy.
+2. Create `frontend/.env.local` with `CEI_API_BASE_URL=<ApiBaseUrl stack output>` (e.g. `https://<id>.execute-api.<region>.amazonaws.com/<stage>`). The dev server then proxies `/api/sessions/*` to the deployed API, so no CORS applies. Without it, `npm run dev` prints a warning, and chat history and resume will not work.
+3. Start the agents locally on ports 8080 (research), 8081 (drafting), 8083 (analysis) and 8084 (pipeline) via `CEI_RUNTIME_PORT`. Leave `CEI_ALLOWED_ORIGINS` unset; the requests are same-origin through the proxy.
 
 ### Security Scan Failures
 

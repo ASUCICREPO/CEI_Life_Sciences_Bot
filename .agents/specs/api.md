@@ -55,6 +55,7 @@ Request:
 ```json
 {
   "session_id": "session-123",
+  "run_id": "client-generated-uuid",
   "message": "Summarize the evidence for...",
   "attachment_ids": ["file-1"]
 }
@@ -62,17 +63,17 @@ Request:
 
 Response: `text/event-stream` body. Event framing and payloads are defined in `.agents/specs/streaming-protocol.md` (CEI UI 1.2). The Session Runner relays `InvokeAgentRuntime` chunks from the Session Router → AgentCore Runtime path; it does not itself decide the agent (B17).
 
-A run whose plan step estimates more than 10 minutes (B79 — resolves the B23 threshold TBD) does not stream to completion. This is decided once, from the plan step's own estimate, before any component streaming begins; there is no mid-run handoff to async (B79). It emits a `job_handoff` event (see streaming spec) and the client switches to the Jobs routes below.
+A run whose plan step estimates more than 10 minutes (B79) does not stream to completion. Before F16 provides jobs, return a recoverable background-processing-unavailable error instead of a job handoff (B100). This is decided before component streaming begins; there is no mid-run handoff.
 
 When the free-text classifier's confidence is low, the Session Router does not call `/chat/stream` against a chosen agent at all; it instead returns a `ChoicePicker` surface asking the user which of the 4 agents they want (B80). The user's answer (via `POST /ui-actions`) is what actually starts the run against the chosen agent.
 
 **Reconnect/resume (B68 — resolves the earlier resume-route proposal):** the same route, `POST /chat/stream`, takes an optional `resume_from_seq` field instead of a separate route:
 
 ```json
-{ "session_id": "session-123", "resume_from_seq": 12 }
+{ "session_id": "session-123", "run_id": "client-generated-uuid", "resume_from_seq": 12 }
 ```
 
-The Session Runner queries the Chat History Store for SSE-replay items (`.agents/specs/data-model.md`) with `sequence_number` greater than `resume_from_seq` for this `session_id`, replays them over the new connection, then continues live. See `.agents/specs/streaming-protocol.md` "Reconnect/resume behavior".
+The client generates a new UUID `run_id` for each start and retains it for reconnects. The Session Runner validates session ownership and queries the Chat History Store for SSE-replay items for that user, session, and run with `sequence_number` greater than `resume_from_seq`, replays them, then continues live. An unknown run is never interpreted as a new start. See `.agents/specs/streaming-protocol.md` "Reconnect/resume behavior".
 
 **Tool agent chat (B84):** `POST /tools/{source}/chat/stream` is a separate STREAM route for single-source tool-agent chat, handled by the same Session Runner Lambda and the same request/response/reconnect shapes as `/chat/stream` above. The `{source}` path parameter (one of the 10 sources or `ncbi`) tells the Session Router which YAML profile to load and which single source scope to request for the token (see `.agents/specs/auth-and-tool-scope.md` §3, `.agents/specs/agents.md` §5); the Router checks `source` against the allowed source list before dispatch.
 
@@ -102,7 +103,7 @@ Called by a running agent (real-time or async) before its 1 h tool token expires
 | GET | `/sessions` | BUFFERED | F3 |
 | GET | `/sessions/{sessionId}` | BUFFERED | F3 |
 | PATCH | `/sessions/{sessionId}` | BUFFERED | F3 |
-| DELETE | `/sessions/{sessionId}` | BUFFERED | F19 |
+| DELETE | `/sessions/{sessionId}` | BUFFERED | Removed by B104 |
 
 `POST /sessions` request/response:
 
@@ -114,7 +115,7 @@ Called by a running agent (real-time or async) before its 1 h tool token expires
 { "session_id": "session-123", "title": "New chat", "mode": "science", "status": "active", "created_at": "2026-09-29T00:00:00Z" }
 ```
 
-`GET /sessions` — paginated list, cursor as above. `GET /sessions/{sessionId}` — one session's metadata. `PATCH /sessions/{sessionId}` — partial update of `title` and/or `mode` (B55: mode is set per chat and can change mid-chat). `DELETE /sessions/{sessionId}` — marks the session "deleting" and returns `202 Accepted` at once; the Deletion Worker Lambda then runs the chat-delete cascade defined in `.agents/specs/data-model.md` (B58, B73). The UI hides the session immediately on the `202` response.
+`GET /sessions` — paginated list, cursor as above. `GET /sessions/{sessionId}` — one session's metadata. `PATCH /sessions/{sessionId}` — partial update of `title` and/or `mode` (B55: mode is set per chat and can change mid-chat). `DELETE /sessions/{sessionId}` is removed (B104): a user can not delete one chat, and there is no hide/archive action for one chat. Only `POST /account/delete` (below) deletes data.
 
 ### Chat history (Session History Handler)
 
@@ -145,6 +146,19 @@ Called by a running agent (real-time or async) before its 1 h tool token expires
 `ui` content blocks validate under CEI UI 1.0, 1.1, or 1.2 (see `.agents/specs/streaming-protocol.md` "Version negotiation"); the client falls back to `text` on validation failure (existing rule, `docs/cei-ui-protocol.md` "Text Fallback").
 
 `GET .../turns/{messageId}/trace` loads the trace only when the user expands that turn's thinking block (B59, B7). Returns the ordered trace-event log for that turn (steps, tool calls with inputs/outputs, sources, grounding decisions, reasoning text labeled `"summarized"` where applicable) — never model IDs, guardrail/system prompts, prompt versions, or secrets (B7).
+
+Implemented (F6): same ownership order as `/history` (`verify_session_owner` → metadata row → read). `messageId` must match `^[A-Za-z0-9_-]{1,128}$` (else `400 invalid_request`). Missing, foreign, or torn traces are `404 not_found`. Success is `200` with `Cache-Control: private, max-age=300`:
+
+```json
+{
+  "message_id": "msg-1",
+  "events": [
+    {"seq": 0, "type": "trace_event", "step_type": "reasoning", "reasoning_text": "[SEARCH] 12 results", "reasoning_label": "summarized"}
+  ]
+}
+```
+
+Each event is the streaming-protocol.md `trace_event`, allow-listed to `seq, type, ts, step_type, tool_name, tool_input, tool_output_summary, sources, reasoning_text, reasoning_label` and deny-scanned (`backend/agents/shared/streaming/trace_redaction.py`). Storage: `backend/agents/shared/persistence/traces.py` (head + ≤350 KB chunks below the checkpoint sort-key range; gzip above 400 KB).
 
 ### HITL actions
 
@@ -242,7 +256,7 @@ There is no `POST /jobs` route. Jobs are started internally by the Session Route
 |---|---|---|---|
 | POST | `/account/delete` | BUFFERED | F19 |
 
-Marks the account "deleting" and returns `202 Accepted` at once; the Deletion Worker Lambda then runs the account-delete cascade (B58, B73, `.agents/specs/data-model.md`).
+Behind a flag, off by default (B109). Disables the Cognito user (`AdminDisableUser`) and revokes every session (`AdminUserGlobalSignOut`), then writes an account "deleting" gate; every run-starting route checks this gate first, so no new run can start. Returns `202 Accepted` at once. A scheduled worker runs the account-delete cascade 9 hours later (B58 for the cascade list, B73 for the `202`-then-worker pattern, B109 for the 9-hour delay and the gate, `.agents/specs/data-model.md`).
 
 ## Errors table (per-route summary)
 
@@ -262,4 +276,4 @@ Marks the account "deleting" and returns `202 Accepted` at once; the Deletion Wo
 - TBD: whether the Router→Runtime token (and the refreshed token from `/internal/token-refresh`) travels as an allowlisted custom header or as `Authorization` — cross-ref `.agents/specs/auth-and-tool-scope.md` §5.
 - TBD: denied-call error shape inside LangGraph when the Gateway returns a Cedar deny (cross-ref `.agents/specs/auth-and-tool-scope.md` §8).
 
-Resolved by B67–B86: default/max pagination limit 20/100 (B78); `/chat/stream` reconnect/resume via `resume_from_seq` and Chat History Store replay (B68); the internal token-refresh route (B67); chat/account delete responses are `202 Accepted` with a Deletion Worker cascade (B73); the client-initiated export route `POST /sessions/{id}/turns/{turn}/export` (B74); export download URL TTL 15 min (B78); async threshold is 10 minutes with no mid-run handoff (B79); low-confidence routing uses a `ChoicePicker` of the 4 agents (B80); the tool-agent stream route `/tools/{source}/chat/stream` (B84).
+Resolved by B67–B109: default/max pagination limit 20/100 (B78); `/chat/stream` reconnect/resume via `resume_from_seq` and Chat History Store replay (B68); the internal token-refresh route (B67); `DELETE /sessions/{sessionId}` is removed, no chat delete (B104); account delete is a `202 Accepted` response, a disable-plus-gate step, and a worker cascade 9 hours later (B73, B109); the client-initiated export route `POST /sessions/{id}/turns/{turn}/export` (B74); export download URL TTL 15 min (B78); async threshold is 10 minutes with no mid-run handoff (B79); low-confidence routing uses a `ChoicePicker` of the 4 agents (B80); the tool-agent stream route `/tools/{source}/chat/stream` (B84).

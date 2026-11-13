@@ -141,7 +141,7 @@ class CodeInterpreterTool:
             return result
 
         except Exception as exc:
-            logger.error({"event": "code_interpreter_error", "error": str(exc)})
+            logger.error({"event": "code_interpreter_error", "error_type": type(exc).__name__})
             return CodeInterpreterResult(
                 stdout="",
                 stderr=str(exc),
@@ -159,7 +159,7 @@ class CodeInterpreterTool:
                         sessionId=session_id,
                     )
                 except Exception as stop_exc:
-                    logger.warning({"event": "code_interpreter_stop_failed", "error": str(stop_exc)})
+                    logger.warning({"event": "code_interpreter_stop_failed", "error_type": type(stop_exc).__name__})
 
     def as_langchain_tool(self) -> StructuredTool:
         return StructuredTool.from_function(

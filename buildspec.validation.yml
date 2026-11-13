@@ -1,0 +1,36 @@
+version: 0.2
+
+# Code-only validation: intentionally has no bootstrap, deploy, or AWS resource updates.
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+      python: 3.12
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm ci
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm ci
+      - python3 -m pip install --quiet uv
+  build:
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm test
+      - cd "$CODEBUILD_SRC_DIR/frontend" && npm run build
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm run build
+      - cd "$CODEBUILD_SRC_DIR/backend" && npm test
+      - cd "$CODEBUILD_SRC_DIR/backend" && node --test lambdas/session-runner/index.test.js
+      - cd "$CODEBUILD_SRC_DIR/backend/agents" && uv sync --frozen --dev
+      - cd "$CODEBUILD_SRC_DIR/backend/agents" && uv run --frozen pytest
+      # Run each Lambda suite separately to avoid colliding handler module names.
+      - |
+        cd "$CODEBUILD_SRC_DIR/backend/agents"
+        for suite in "$CODEBUILD_SRC_DIR"/backend/lambdas/*/tests "$CODEBUILD_SRC_DIR"/backend/scripts/tests; do
+          # lsops ships its own native deps in a Docker image; it runs in its own venv below.
+          case "$suite" in */lambdas/lsops/tests) continue ;; esac
+          if [ -d "$suite" ]; then uv run --frozen pytest "$suite" || exit $?; fi
+        done
+      # lsops: same install as its Dockerfile (requirements.txt, then hgvs with --no-deps).
+      - |
+        cd "$CODEBUILD_SRC_DIR/backend/lambdas/lsops"
+        uv venv -q -p 3.12 /tmp/lsops-venv
+        VIRTUAL_ENV=/tmp/lsops-venv uv pip install -q -r requirements.txt pytest
+        VIRTUAL_ENV=/tmp/lsops-venv uv pip install -q --no-deps hgvs==1.5.6
+        /tmp/lsops-venv/bin/python -m pytest tests -q

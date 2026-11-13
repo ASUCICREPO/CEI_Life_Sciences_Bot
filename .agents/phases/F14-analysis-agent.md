@@ -1,5 +1,5 @@
 # F14 — Analysis agent
-Status: not started | Depends on: F6, F13 | Decisions: B26, B30, B51, B72, B85 | Specs: ../specs/agents.md, ../specs/tools.md
+Status: partial (MVP slice, B94: Analysis runtime in CDK, scope pause and resume; `InMemorySaver`; Web Search confirmed for Analysis under the same off-by-default flag as Research (B108); full phase pending) | Depends on: F6, F13 | Decisions: B26, B30, B51, B72, B85, B108 | Specs: ../specs/agents.md, ../specs/tools.md
 
 ## Goal
 Implement the Analysis Agent's real logic: gather evidence, analyze it, build comparison matrices, and produce a mode-aware competitor/market/legal-landscape report with citations, presented as CEI UI.
@@ -54,6 +54,10 @@ Implement the Analysis Agent's real logic: gather evidence, analyze it, build co
 - **Resolved:** the decision-log Phase list and this roadmap now list F13 as an explicit dependency of this phase (not just a practical one), matching this phase's real need for F13's `interrupt` mechanism before `confirm_scope` can pause the graph.
 - Comparison framework design (`compare` node) is a **Proposal (not decided)** — agents.md does not specify one; flagged above.
 - HITL point design for Analysis was itself a "Proposal (not decided)" in `agents.md` §3 before B72; B72 has now decided the *point* (scope confirmation before analysis) but not its exact UI shape (multiple-choice vs. free text vs. a mixed ReviewGate) — this phase picks a `ReviewGate`-with-editable-fields shape as a reasonable default, not a decided one.
+- Done in code (2026-11-10): the scope-correction text (`state["scope_correction"]`) is now a separate `Guarded` block in the user turn of `scope()`, not part of the `scope.j2` system prompt. `scope.j2` is static, so prompt caching can use it. Tests: `test_analysis_nodes.py` (`test_scope_correction_is_guarded_in_user_turn_not_system_prompt`, `test_scope_system_prompt_is_static_regardless_of_correction`).
+
+## MVP slice (B94, B96, B97)
+Built before F6/F13 for the client demo, local only. In scope: all three analysis types with a fixed framework per type, graph `scope → confirm_scope → gather → analyze → compare → report`, the scope gate as a real `interrupt()` on the in-process `InMemorySaver` (resumed by `op: "resume"`), the new openFDA and PatentsView direct-mode sources, `build_analysis_surface` (CEI UI 1.1), `analysis_main.py` on port 8083, and `analysis/run.py` `run_analysis(...)` for the Pipeline Manager. Still left for the full phase: F6 streaming, F13's durable checkpointer and `/ui-actions`, F4 Gateway calls, F11 memory.
 
 ## Handoff notes
 - F17 (Pipeline Manager) will call the Analysis Agent as one of its dispatched sub-tasks — it needs `analysis_main.py`'s entrypoint contract (`{prompt, mode, user_id, session_id, analysis_type}` in, `ResponseDocument` + CEI UI out) to be stable before it can wire dispatch.

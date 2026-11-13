@@ -1,5 +1,13 @@
 # F15 — Tool agents
-Status: not started | Depends on: F4, F6 | Decisions: B21, B27, B29, B30, B69, B84, B85, B86 | Specs: ../specs/agents.md, ../specs/tools.md, ../specs/auth-and-tool-scope.md, ../specs/api.md (`/tools/{source}/chat/stream`)
+Status: partial (tool-agent graph and 13 YAML profiles, NCBI Gateway targets built; no runtime, no `/tools/{source}/chat/stream` route) | Depends on: F4, F6 | Decisions: B21, B27, B29, B30, B69, B84, B85, B86 | Specs: ../specs/agents.md, ../specs/tools.md, ../specs/auth-and-tool-scope.md, ../specs/api.md (`/tools/{source}/chat/stream`)
+
+Implementation note: the taxonomy and sequence Gateway targets and their shared
+PubMed/NCBI E-utilities rate limiter are implemented, but have not been deployed
+or validated through a live Gateway. BLAST is not exposed: associating a request
+identifier with its owner requires the B99 trusted-identity proof. The NCBI tool
+agent can bind the two read-only tools, but cannot yet complete BLAST. The
+phase remains incomplete; the generic runtime, route, and end-to-end isolation
+still require integration and proof.
 
 ## Goal
 Build the single-source, natural-language "tool agent": one AgentCore Runtime, one generic LangGraph graph, 11 YAML profiles (the 10 existing sources + NCBI), so a user can chat with exactly one data source at a time — matching the founder-ai-dashboard `ToolsPage` UX ("Ask PubMed…", NCBI quick tools).

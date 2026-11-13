@@ -25,6 +25,7 @@ class TraceEntry(BaseModel):
 class BaseAgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     mode: AgentMode
+    model_id: str
     user_id: str
     session_id: str
     trace: Annotated[list[TraceEntry], operator.add]

@@ -1,5 +1,5 @@
 # F12 — Web search + LS Ops
-Status: not started | Depends on: F4 | Decisions: B40, B42, B44, B70, B86 | Specs: ../specs/tools.md, ../specs/architecture.md, ../specs/auth-and-tool-scope.md
+Status: partial (Life Sciences Operations Lambda and Gateway target built; Web Search target, Cedar permit, `InvokeWebSearch` grant, `CEI_WEB_SEARCH_ENABLED`, agent tool, and Research triage wiring built behind `webSearchEnabled`, default false (B103); Analysis also gets Web Search under the same flag (B108); Pipeline Manager does not call web search itself (B108); not verified on AWS) | Depends on: F4 | Decisions: B40, B42, B44, B70, B86, B108 | Specs: ../specs/tools.md, ../specs/architecture.md, ../specs/auth-and-tool-scope.md
 
 ## Goal
 Give every agent two more tools: a built-in AgentCore web search connector for general research, and a deterministic Life Sciences Operations (LS Ops) Lambda for common life-sciences calculations (sequence, protein/primer, chemistry, lab math) that need no model call.
@@ -54,12 +54,62 @@ Give every agent two more tools: a built-in AgentCore web search connector for g
 - CDK assertion tests: LS Ops Lambda is a container image function; Gateway target exists; Web Search connector construct is present/absent based on the Region context value; cdk-nag passes or carries an ADR-format suppression for the container image size / public network need.
 - Integration: a local LangGraph run using `lsops_client.py` calls `lsops___dilution` and gets the correct answer, exercising the same code path the Gateway will use later.
 
+## Implementation notes (web-search part, B103)
+`backend/lib/constructs/tool-gateway.ts` builds a plain, unpinned `CfnGatewayTarget` with a
+`ConnectorSource` (`connectorId: "web-search"`), created only when `props.webSearchEnabled` is
+true — a value that already folds in the Region gate (B44/B45), because `scripts/preflight.ts
+--write` evaluates `region-capabilities.ts` and writes the final boolean into `cei.deploy.json`
+before the CDK app ever reads it. This accepts whatever connector version AWS currently defaults
+to, because CloudFormation's `ConnectorSourceProperty` exposes only `connectorId` — there is no
+`source.version` field in this resource to pin v1.2.0 against, so a lifecycle-managed custom
+resource would be the only way to pin it, and that is out of scope for this iteration (B103
+replaces the "do not deploy an unpinned default" blocker below). The Gateway role's existing
+`AuthorizeAction`/`PartiallyAuthorizeActions` statement also gets `bedrock-agentcore:
+InvokeWebSearch` added, and a `cei-tools/common` Cedar permit is written with the same
+target-level `cedarPermit('web-search', ...)` helper already proven for `lsops`. The agent-side
+tool lives in `backend/agents/shared/tools/web_search.py`, called through the existing
+`call_gateway_tool` custom-JWT MCP path (not the SigV4 `bedrock_agentcore` SDK client, which does
+not fit this Gateway's auth model); it trims every result to `url`/`title`/`snippet` before
+returning, and `shared/streaming/trace_redaction.py` re-applies the same trim to any `sources`
+trace entry tagged `source_type: "web"` as a second line of defense. `shared/schemas/citation.py`
+adds `SourceType.WEB` and an optional `snippet` field, and makes `authors`/`year` optional for
+`SourceType.WEB` only (still required for every other source). The exact MCP tool name the
+built-in connector registers on this Gateway's `tools/list` (assumed `WebSearch` here, an
+installed-SDK fact, not yet confirmed against a live Gateway) stays an S2 open item per B86.
+
+## Implementation notes (Analysis wiring, B108)
+The Analysis agent gets the same Web Search tool as Research, gated on the same `webSearchEnabled` flag (`web_search_enabled()`). The Pipeline Manager does not call web search itself; a Pipeline step that runs Research or Drafting in-process can still reach web search through that agent's own tools, but the Pipeline Manager's own nodes do not bind the tool.
+
+## Implementation notes (Research wiring, wave2)
+`research/nodes.py` now offers `"web"` as a triage-selected source (same shape as the 10 data
+sources + NCBI), gated on `web_search_enabled()`: the prompt's source list and "Valid source
+keys" line only mention `web` when the flag is true, and `triage()` additionally strips any
+`web` pick from the structured-output `TriagePlan` when the flag is false, so a model that still
+emits the enum value cannot bypass the gate. `retrieve()` calls `shared/tools/web_search.py`'s
+`_run()` directly (already gateway/trim-tested) instead of going through `ALL_DATA_SOURCE_TOOLS`,
+wraps its output into a `DataSourceResult`/`Citation` list, and reuses the exact
+`except GatewayUnavailableError: raise` / `except Exception: log+continue` pattern the other
+sources use, so a web failure degrades like any other source instead of crashing the turn.
+`synthesize()`'s evidence-context line and `cite()`'s bibliography line both special-case
+`SourceType.WEB` to render `title — url` / `title. url` with no authors/year, since
+`Citation.authors`/`year` are `None` for web and the previous unconditional `cit.authors[:3]`
+slice would have raised. No change was needed in `shared/tools/web_search.py` itself.
+
 ## Risks and open items
+- Web Search deployment is resolved by B103 (above): an unpinned `ConnectorSource` target is deployed, since CloudFormation has no `source.version` field to pin against. ~~Do not deploy an unpinned default in place of B44's approved 1.2.0~~ (superseded).
 - Resolved: B70 states plainly that "all agents and tool agents always get" the shared `cei-tools/common` scope, and B86 confirms the Code Interpreter is not a Gateway target at all (so it is outside this Cedar scope question entirely — it is controlled by the runtime binding). This phase implements the granted-by-default reading for LS Ops and Web Search; no further decision is needed. If `auth-and-tool-scope.md` still shows this as open when you read it, follow B70/B86, not the older spec text — the parallel spec-update agent may not have applied them yet.
 - Upstream rate limits are not a concern here (LS Ops has no external API calls), but the Web Search connector's $7/1,000-query cost is an unbudgeted MVP cost (B16 has no token/cost budget) — accepted gap, not a blocker.
 - RDKit container image size/cold start is a build risk; if it is too slow, revisit as a Lambda-behind-Fargate-like pattern — but note B25 already removed Fargate from the architecture, so any such change needs a new decision, not an assumption.
 
+## Needs live AWS verification
+- A deploy with `webSearchEnabled: true` in a supported Region creates the `WebSearchTarget` and `permit_web_search`.
+- The connector's real MCP tool name on `tools/list` matches `web-search___WebSearch` (S2 open item, B86).
+- The Cedar permit allows a token with `cei-tools/common` and denies one without it (in `ENFORCE` mode).
+- A Research turn that selects `web` returns `SourceType.WEB` citations, and the stored trace has only `url`/`title`/`snippet`.
+- With `webSearchEnabled: false`, triage never offers `web` and no target exists.
+- An Analysis turn that selects `web` returns `SourceType.WEB` citations the same way a Research turn does, and the Pipeline Manager's own nodes never call the Web Search tool directly.
+
 ## Handoff notes
 - F15 (Tool agents) reuses the `cei-tools/common` scope pattern established here for its own profiles.
-- F14 (Analysis agent) and F17 (Pipeline Manager) bind `lsops_client.py` and the Web Search tool the same way Research/Drafting do once this phase ships.
+- F14 (Analysis agent) binds `lsops_client.py` and the Web Search tool the same way Research/Drafting do once this phase ships (B108). F17 (Pipeline Manager) binds `lsops_client.py` the same way, but does not bind the Web Search tool itself (B108) — its in-process Research/Drafting steps can still reach web search through those agents.
 - F20 (Alarms) should consider a guardrail/cost alarm candidate for Web Search query volume, though B75's fixed alarm list does not currently include one — flagged for F20 to decide, not decided here.

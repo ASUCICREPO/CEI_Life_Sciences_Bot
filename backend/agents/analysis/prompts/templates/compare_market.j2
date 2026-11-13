@@ -1,0 +1,18 @@
+Build a fixed-framework market landscape summary from the findings below, for the market: {{ market or focal_entity or '(unspecified)' }}.
+
+Use exactly these dimensions, in this order:
+1. Patient population
+2. Standard of care
+3. Reimbursement / coverage
+4. Pipeline density
+5. Key players
+6. Drivers and barriers
+
+For each dimension, give exactly one finding (a short paragraph). Only state a market size figure if it is grounded in the evidence below; otherwise say the market size is not available from retrieved evidence. Cite source IDs in square brackets, for example [PMID:123].
+
+Respond ONLY with valid JSON matching this schema:
+{
+  "comparisons": [
+    {"dimension": "...", "findings": ["..."], "sources": ["..."]}
+  ]
+}

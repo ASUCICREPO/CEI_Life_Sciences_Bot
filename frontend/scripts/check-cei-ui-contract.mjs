@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { actionResponseMatchesRequest } from '../lib/cei-ui/action-correlation.ts';
+import { actionResponseMatchesRequest } from '../src/lib/cei-ui/action-correlation.ts';
 import {
   ActionRequestSchema,
   ActionResponseSchema,
@@ -42,7 +42,7 @@ import {
   MAX_TABS,
   MAX_TIMELINE_ITEMS,
   TableComponentSchema,
-} from '../lib/cei-ui/schema.ts';
+} from '../src/lib/cei-ui/schema.ts';
 
 const expectedLimits = {
   MAX_COMPONENTS: 250,

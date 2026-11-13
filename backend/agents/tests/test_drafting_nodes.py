@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from drafting.nodes import draft, export_documents, plan_visuals, revise
+from drafting.nodes import (
+    GuidelinePlan,
+    GuidelinesExtraction,
+    draft,
+    export_documents,
+    plan_visuals,
+    research_guidelines,
+    revise,
+)
 from drafting.state import DocumentType
+from shared.schemas.citation import Citation, SourceType
 from shared.schemas.response_blocks import (
     ChartBlock,
     ChartSeriesItem,
@@ -13,6 +23,7 @@ from shared.schemas.response_blocks import (
     ResponseDocument,
     ResponseSection,
 )
+from shared.tools.base import DataSourceResult
 
 
 def _sample_document(title: str = "Grant Proposal") -> ResponseDocument:
@@ -145,20 +156,12 @@ def test_plan_visuals_builds_specs_from_document_without_llm_call(monkeypatch) -
     assert result["trace"][0].stage == "PLAN_VISUALS"
 
 
-class _FakeChartTool:
-    def __init__(self, _ci) -> None:
-        pass
-
-    def render(self, _spec) -> bytes:
-        return b"fake-png-bytes"
-
-
-def _patch_chart_rendering(monkeypatch) -> None:
-    monkeypatch.setattr("drafting.nodes.ChartTool", _FakeChartTool)
-    monkeypatch.setattr("drafting.nodes.CodeInterpreterTool", lambda **_kw: object())
-
-
 def test_export_documents_text_has_no_base64_when_document_exists(monkeypatch) -> None:
+    """File generation is back (858bb1a reverted, product decision): export_documents renders
+    files for the requested formats; with no export storage configured (local dev), the files
+    are generated but not persisted, and a note says so."""
+    from shared.tools.export import ExportArtifact
+
     doc = _sample_document(title="Report")
     monkeypatch.setattr(
         "drafting.nodes.document_sections_for_export",
@@ -168,7 +171,18 @@ def test_export_documents_text_has_no_base64_when_document_exists(monkeypatch) -
         "drafting.nodes.render_document_markdown",
         lambda d, **kw: f"# {d.title}\n\nRevenue grew.\n\n| Year | USD |\n|---|---|\n| 2023 | 1 |\n",
     )
-    _patch_chart_rendering(monkeypatch)
+    monkeypatch.setattr("drafting.nodes.ChartTool", lambda _ci: Mock(render=Mock(return_value=None)))
+
+    generated_formats = []
+
+    def fake_generate(self, *, title, sections, charts, formats, output_dir, chart_sections=None):
+        generated_formats.append(list(formats))
+        path = output_dir / "report.md"
+        path.write_text("# Report\n\nRevenue grew.\n", encoding="utf-8")
+        return [ExportArtifact(format="md", filename=path.name, local_path=str(path), byte_size=path.stat().st_size)]
+
+    monkeypatch.setattr("shared.tools.export.ExportTool.generate", fake_generate)
+    monkeypatch.setattr("drafting.nodes._export_repository", lambda: None)
 
     state = {
         "export_formats": ["md"],
@@ -189,13 +203,68 @@ def test_export_documents_text_has_no_base64_when_document_exists(monkeypatch) -
 
     text = result["messages"][-1].content
     assert "data:image/png;base64" not in text
-    assert result["exports"]
-    assert result["exports"][0]["format"] == "md"
+    assert generated_formats == [["md"]]
+    assert result["exports"] == []
+    assert "not configured" in (result["chart_instructions"] or "")
 
 
-def test_export_documents_legacy_path_has_no_base64_in_text(monkeypatch) -> None:
-    _patch_chart_rendering(monkeypatch)
+def test_export_documents_persists_exports_with_moto(monkeypatch) -> None:
+    """Exports persist via `ExportRepository` when export storage is configured (moto)."""
+    import boto3
+    from moto import mock_aws
+    from shared.config import config
+    from shared.persistence.exports import _EXPORT_ID
+    from shared.tools.export import ExportArtifact
 
+    doc = _sample_document(title="Report")
+    monkeypatch.setattr(
+        "drafting.nodes.document_sections_for_export",
+        lambda _d: [{"heading": "Overview", "content": "Revenue grew.", "order": 0}],
+    )
+    monkeypatch.setattr("drafting.nodes.render_document_markdown", lambda d, **kw: f"# {d.title}\n\nRevenue grew.\n")
+
+    def fake_generate(self, *, title, sections, charts, formats, output_dir, chart_sections=None):
+        path = output_dir / "report.md"
+        path.write_text("# Report\n\nRevenue grew.\n", encoding="utf-8")
+        return [ExportArtifact(format="md", filename=path.name, local_path=str(path), byte_size=path.stat().st_size)]
+
+    monkeypatch.setattr("shared.tools.export.ExportTool.generate", fake_generate)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+
+    with mock_aws():
+        ddb = boto3.resource("dynamodb", region_name="us-east-1")
+        ddb.create_table(
+            TableName="exports-table", BillingMode="PAY_PER_REQUEST",
+            KeySchema=[{"AttributeName": "user_id", "KeyType": "HASH"}, {"AttributeName": "export_id", "KeyType": "RANGE"}],
+            AttributeDefinitions=[{"AttributeName": "user_id", "AttributeType": "S"}, {"AttributeName": "export_id", "AttributeType": "S"}],
+        )
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="exports-bucket")
+        monkeypatch.setattr(config, "export_metadata_table", "exports-table")
+        monkeypatch.setattr(config, "export_bucket", "exports-bucket")
+
+        state = {
+            "export_formats": ["md"],
+            "draft_document": doc,
+            "draft": "",
+            "chart_specs": [],
+            "document_type": DocumentType.WHITEPAPER,
+            "user_id": "alice",
+            "session_id": "6f1c2d3e-0000-4000-8000-000000000001",
+            "export_turn_id": "turn-1",
+        }
+
+        result = export_documents(state)
+
+    assert len(result["exports"]) == 1
+    export_item = result["exports"][0]
+    assert export_item["format"] == "md"
+    assert export_item["filename"] == "report.md"
+    assert _EXPORT_ID.fullmatch(export_item["export_id"])
+
+
+def test_export_documents_legacy_path_has_no_base64_in_text() -> None:
     draft_text = "# Report\n\n## Overview\n\nRevenue grew steadily.\n"
     state = {
         "export_formats": ["md"],
@@ -217,3 +286,79 @@ def test_export_documents_legacy_path_has_no_base64_in_text(monkeypatch) -> None
     text = result["messages"][-1].content
     assert "data:image/png;base64" not in text
     assert "*Figure: Revenue*" in text
+
+
+# ── research_guidelines: B110 attachments wiring ────────────────────────────
+
+
+def _attachment_result() -> DataSourceResult:
+    return DataSourceResult(
+        source_type=SourceType.ATTACHMENTS,
+        results=[{"file_id": "f1", "filename": "notes.pdf", "text": "The chunk text.", "score": 0.5}],
+        citations=[Citation(
+            source_id="attachment:f1:0",
+            source_type=SourceType.ATTACHMENTS,
+            url="",
+            title="notes.pdf",
+            relevant_passage="The chunk text.",
+            retrieved_at=datetime.now(UTC),
+        )],
+    )
+
+
+def _guideline_models(monkeypatch, parsed_extraction: GuidelinesExtraction) -> None:
+    raw = AIMessage(content="", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
+
+    def _with_structured_output(schema, include_raw=True):
+        structured = Mock()
+        if schema is GuidelinePlan:
+            structured.invoke.return_value = {
+                "parsed": GuidelinePlan(guideline_focus="formatting", reasoning="test"), "raw": raw,
+            }
+        else:
+            structured.invoke.return_value = {"parsed": parsed_extraction, "raw": raw}
+        return structured
+
+    model = Mock()
+    model.with_structured_output.side_effect = _with_structured_output
+    monkeypatch.setattr("drafting.nodes.get_model", lambda *a, **k: model)
+
+
+def test_research_guidelines_appends_attachments_result_to_context(monkeypatch) -> None:
+    monkeypatch.setattr("drafting.nodes.ALL_DATA_SOURCE_TOOLS", [])
+    captured = {}
+
+    def fake_retrieve_attachments(query, *, user_id, session_id):
+        captured["user_id"] = user_id
+        captured["session_id"] = session_id
+        return _attachment_result()
+
+    monkeypatch.setattr("drafting.nodes.retrieve_attachments", fake_retrieve_attachments)
+    _guideline_models(monkeypatch, GuidelinesExtraction(guidelines=[]))
+
+    state = {
+        "messages": [HumanMessage(content="Draft a grant about aspirin.")],
+        "document_type": DocumentType.GRANT,
+        "long_term_context": [],
+        "user_id": "u1",
+        "session_id": "s1",
+    }
+    result = research_guidelines(state)
+
+    assert captured == {"user_id": "u1", "session_id": "s1"}
+    assert any("attachments | results=1" in t.detail for t in result["trace"])
+
+
+def test_research_guidelines_handles_no_attachments(monkeypatch) -> None:
+    monkeypatch.setattr("drafting.nodes.ALL_DATA_SOURCE_TOOLS", [])
+    monkeypatch.setattr("drafting.nodes.retrieve_attachments", lambda *a, **k: None)
+    _guideline_models(monkeypatch, GuidelinesExtraction(guidelines=[]))
+
+    state = {
+        "messages": [HumanMessage(content="Draft a grant about aspirin.")],
+        "document_type": DocumentType.GRANT,
+        "long_term_context": [],
+    }
+    result = research_guidelines(state)
+
+    assert any("attachments | results=0" in t.detail for t in result["trace"])

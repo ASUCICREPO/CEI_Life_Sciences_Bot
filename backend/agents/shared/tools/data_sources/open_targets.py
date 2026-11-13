@@ -4,11 +4,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
 from pydantic import BaseModel, Field
 
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, DataSourceTool
+from shared.tools import retrying_http as http
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +47,13 @@ class OpenTargetsTool(DataSourceTool):
     def _build_payload(self, target: str, disease: str = "", max_results: int = 10) -> dict[str, Any]:
         return {"target": target, "disease": disease, "max_results": max_results}
 
-    def _direct_invoke(self, target: str = "", disease: str = "", max_results: int = 10, query: str = "", **_: Any) -> DataSourceResult:
+    def fetch(self, target: str = "", disease: str = "", max_results: int = 10, query: str = "", **_: Any) -> DataSourceResult:
         retrieved_at = datetime.now(timezone.utc)
         if not target and query:
             target = query
         query_str = f"{target} {disease}".strip()
         try:
-            resp = requests.post(
+            resp = http.post(
                 _GRAPHQL,
                 json={"query": _SEARCH_QUERY, "variables": {"q": query_str, "size": max_results}},
                 headers=_HEADERS,
@@ -99,5 +99,5 @@ class OpenTargetsTool(DataSourceTool):
                 query_metadata={"query": query_str, "total": len(results)},
             )
         except Exception as exc:
-            logger.error({"event": "open_targets_direct_invoke_error", "error": str(exc)})
+            logger.error({"event": "open_targets_fetch_error", "error_type": type(exc).__name__})
             return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"error": str(exc)})

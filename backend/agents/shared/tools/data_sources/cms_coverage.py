@@ -1,27 +1,47 @@
 from __future__ import annotations
 
+import html
 import logging
+import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
 from pydantic import BaseModel, Field
 
 from shared.schemas.citation import Citation, SourceType
 from shared.tools.base import DataSourceResult, DataSourceTool
+from shared.tools import retrying_http as http
 
 logger = logging.getLogger(__name__)
-
 _HEADERS = {"User-Agent": "CEI-LifeSciences-Bot/0.1 (research-tool)"}
 _TIMEOUT = 10
-# ADR: Use CMS MCD Open API for coverage search | CMS MCD website uses session-based HTML scraping; the open data API at data.cms.gov provides structured JSON
-_CMS_API = "https://data.cms.gov/data-api/v1/dataset/9767cb68-8ea9-4f0b-8179-9431abc89f11/data"
+_REPORT = "https://api.coverage.cms.gov/v1/reports/national-coverage-ncd/"
+_DETAIL = "https://api.coverage.cms.gov/v1/data/ncd/"
+# Keep one Gateway invocation bounded even when max_results is 100.
+_DETAIL_LIMIT = 10
+
+
+def _plain_text(value: Any) -> str:
+    return " ".join(html.unescape(re.sub(r"<[^>]*>", " ", str(value or ""))).split())
+
+
+def _detail(item: dict[str, Any]) -> dict[str, Any]:
+    try:
+        response = http.get(_DETAIL, params={"ncdid": item["document_id"], "ncdver": item["document_version"]}, headers=_HEADERS, timeout=_TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+        records = payload.get("data", []) if isinstance(payload, dict) else []
+        return records[0] if isinstance(records, list) and records and isinstance(records[0], dict) else {}
+    except Exception as exc:
+        logger.warning({"event": "cms_ncd_detail_error", "error_type": type(exc).__name__})
+        return {}
 
 
 class CMSCoverageTool(DataSourceTool):
     function_name = "cei-data-source-cms-coverage"
     source_type = SourceType.CMS_COVERAGE
-    description = "Search CMS National Coverage Determination records for policy titles, decision memos, and effective dates."
+    description = "Search CMS National Coverage Determination titles and display IDs, with effective dates for up to ten results."
 
     class InputSchema(BaseModel):
         query: str
@@ -30,64 +50,48 @@ class CMSCoverageTool(DataSourceTool):
     def _build_payload(self, query: str, max_results: int = 10) -> dict[str, Any]:
         return {"query": query, "max_results": max_results}
 
-    def _direct_invoke(self, query: str, max_results: int = 10, **_: Any) -> DataSourceResult:
+    def fetch(self, query: str, max_results: int = 10, **_: Any) -> DataSourceResult:
         retrieved_at = datetime.now(timezone.utc)
+        terms = re.findall(r"[\w.]+", query.casefold())
+        if not terms:
+            return DataSourceResult(source_type=self.source_type, results=[], citations=[], query_metadata={"query": query, "total": 0})
         try:
-            resp = requests.get(
-                _CMS_API,
-                params={"keyword": query, "size": max_results},
-                headers=_HEADERS,
-                timeout=_TIMEOUT,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-            results: list[dict[str, Any]] = []
-            citations: list[Citation] = []
-
-            items = data if isinstance(data, list) else data.get("data", [])
-            for item in items[:max_results]:
-                ncd_id = str(item.get("NCD_ID", item.get("ncd_id", "")))
-                title = item.get("NCD_Title", item.get("ncd_title", item.get("Title", "")))
-                decision_memo = item.get("Decision_Memo", item.get("decision_memo", ""))
-                effective_date = item.get("Effective_Date", item.get("effective_date", ""))
+            response = http.get(_REPORT, headers=_HEADERS, timeout=_TIMEOUT)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                raise ValueError("Unexpected CMS coverage report response")
+            if (payload.get("meta") or {}).get("next_token"):
+                raise ValueError("CMS coverage report has unsupported pagination")
+            # This report endpoint has no search parameters; filter its full list locally.
+            matches = [item for item in payload["data"] if isinstance(item, dict)
+                       and item.get("document_id") is not None and item.get("document_version") is not None
+                       and all(term in f"{item.get('title', '')} {item.get('document_display_id', '')}".casefold() for term in terms)]
+            selected = matches[:max_results]
+            with ThreadPoolExecutor(max_workers=_DETAIL_LIMIT) as executor:
+                details = list(executor.map(_detail, selected[:_DETAIL_LIMIT]))
+            results, citations = [], []
+            for i, item in enumerate(selected):
+                detail = details[i] if i < len(details) else {}
+                ncd_id = str(item["document_id"])
+                title = str(item.get("title") or "CMS Coverage Decision")
+                effective_date = str(detail.get("effective_date") or "")
+                passage = _plain_text(detail.get("indications_limitations") or detail.get("item_service_description"))[:500]
                 try:
-                    year = int(str(effective_date)[:4]) if effective_date else 0
+                    year = datetime.strptime(effective_date[:10], "%m/%d/%Y").year if effective_date else 0
                 except ValueError:
                     year = 0
-
-                result_dict = {"ncd_id": ncd_id, "title": title, "decision_memo": decision_memo, "effective_date": effective_date}
-                results.append(result_dict)
-                if ncd_id or title:
-                    citations.append(Citation(
-                        source_id=f"CMS:NCD:{ncd_id}" if ncd_id else f"CMS:{title[:30]}",
-                        source_type=self.source_type,
-                        url=f"https://www.cms.gov/medicare-coverage-database/view/ncd.aspx?NCDId={ncd_id}" if ncd_id else "https://www.cms.gov/medicare-coverage-database",
-                        title=title or "CMS Coverage Decision",
-                        authors=["Centers for Medicare & Medicaid Services"],
-                        year=year,
-                        relevant_passage=decision_memo[:500] if decision_memo else f"Effective date: {effective_date}",
-                        retrieved_at=retrieved_at,
-                    ))
-
-            return DataSourceResult(
-                source_type=self.source_type,
-                results=results,
-                citations=citations,
-                query_metadata={
-                    "query": query,
-                    "total": len(results),
-                    "note": "Direct mode uses CMS open data API; coverage may differ from full MCD search.",
-                },
-            )
+                results.append({"ncd_id": ncd_id, "title": title, "decision_memo": "", "effective_date": effective_date,
+                                "display_id": str(item.get("document_display_id") or ""), "last_updated": str(item.get("last_updated") or ""),
+                                "detail_available": bool(detail)})
+                citations.append(Citation(source_id=f"CMS:NCD:{ncd_id}", source_type=self.source_type,
+                    url=f"https://www.cms.gov/medicare-coverage-database/view/ncd.aspx?NCDId={ncd_id}", title=title,
+                    authors=["Centers for Medicare & Medicaid Services"], year=year,
+                    relevant_passage=passage or f"National Coverage Determination {item.get('document_display_id', '')}", retrieved_at=retrieved_at))
+            return DataSourceResult(source_type=self.source_type, results=results, citations=citations,
+                query_metadata={"query": query, "total": len(matches), "search_scope": "NCD titles and display IDs",
+                                "note": "Full details are fetched for at most 10 results; decision memos are separate NCA documents."})
         except Exception as exc:
-            logger.error({"event": "cms_coverage_direct_invoke_error", "error": str(exc)})
-            return DataSourceResult(
-                source_type=self.source_type,
-                results=[],
-                citations=[],
-                query_metadata={
-                    "error": str(exc),
-                    "note": "CMS open data API unavailable; full coverage search requires production Lambda.",
-                },
-            )
+            logger.error({"event": "cms_coverage_fetch_error", "error_type": type(exc).__name__})
+            return DataSourceResult(source_type=self.source_type, results=[], citations=[],
+                query_metadata={"query": query, "error": "CMS Coverage API unavailable or returned an invalid response."})

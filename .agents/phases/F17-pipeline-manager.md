@@ -1,5 +1,5 @@
 # F17 — Pipeline Manager
-Status: not started | Depends on: F13, F16 | Decisions: B23/B79, B25, B54, B56, B71, B72, B83 | Specs: ../specs/agents.md, ../specs/architecture.md, ../specs/api.md
+Status: partial (MVP slice, B94/B102: Pipeline runtime in CDK, plan approval, durable Job ID Store; in-process dispatch; see "Implementation status") | Depends on: F13, F16 | Decisions: B23/B79, B25, B54, B56, B71, B72, B83 | Specs: ../specs/agents.md, ../specs/architecture.md, ../specs/api.md
 
 ## Goal
 Implement the Pipeline Manager: it plans a multi-step task across Research/Drafting/Analysis, gets the plan approved by the user in chat, runs the approved plan as an always-async job, and shows live step status on `/pipeline`.
@@ -55,6 +55,16 @@ Implement the Pipeline Manager: it plans a multi-step task across Research/Draft
 - **Cross-phase dependency note:** this phase depends on F13 and F16 per the decision-log Phase list, which this file's header matches — no gap found here (unlike F14's earlier, now-resolved, header gap).
 - **Resolved by B83:** the `dispatch` mechanism is no longer an open question. Unlike Drafting's `research_subagent` (B71: in-process, does not call the Research runtime), Pipeline Manager's dispatch is the opposite pattern — it always calls the target specialist's own AgentCore Runtime (`InvokeAgentRuntime`), never in-process. Do not reuse Drafting's in-process pattern here.
 - Frontend wiring (task 8) cannot start until F2 has ported the founder-ai-dashboard into `frontend/`; if F2 has not landed by the time this phase's backend work is done, ship the backend pieces first and hold the frontend task.
+
+## MVP slice (B94, B95, B96, B98)
+Built before F13/F16 for the client demo, local only. In scope: all five nodes, plan approval as a real `interrupt()`, in-process dispatch behind a `Dispatcher` interface (sequential and concurrent waves from the dependency graph), a background `asyncio` task registered with `add_async_task`, an in-memory `JobRegistry`, `op: "job_status"` with `steps[]` and a CEI UI status surface, `pipeline_main.py` on port 8084, replay mode, and `/pipeline?job=<id>` polling in the Vite dashboard. Still left for the full phase: B83 runtime dispatch, F16 Job ID Store/Polling Lambda/watchdog, the CDK runtime construct.
+
+## Implementation status (2026-11-10, B102)
+B102 keeps the in-process `InProcessDispatcher` for this iteration; task 3's `InvokeAgentRuntime` dispatch and the separate-session acceptance criterion are deferred. Built on `complete-cei-workflows` (statically reviewed; pytest/jest and deployment pending in CodeBuild):
+- `pipeline_main.py` uses the durable Job ID Store when `CEI_JOB_TABLE` is set (`shared/runtime/durable_jobs.py`), else the local registry. Creating a job takes the user's single background slot before the approval is consumed, so a `concurrency_limit` refusal leaves the plan pending.
+- A 60-second heartbeat keeps the watchdog away and cancels the in-process run when the user cancels the job; a late completion after cancellation is ignored by a conditional write.
+- The Pipeline runtime has `CEI_JOB_TABLE`/`CEI_ACTIVE_RUNS_TABLE` and exact table actions (`AgentRuntimes.configureJobStore`).
+Still open: `/pipeline` without `?job=` still shows sample data (task 8 for the job list), and durable checkpoints for the in-process steps depend on S4.
 
 ## Handoff notes
 - F20 (Alarms) should *not* add a Pipeline-Manager-specific "stuck pipeline" alarm — B75 explicitly excludes agent-health alarms in favor of the watchdog (F16) and the dashboard (`/pipeline` itself).
