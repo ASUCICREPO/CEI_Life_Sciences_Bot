@@ -84,13 +84,9 @@ async def _drafting_long_term_context(user_id: str, prompt: str) -> list[str]:
 
 @lru_cache(maxsize=1)
 def _persistent_drafting_checkpointer():
-    """Opt in only with both a configured AgentCore Memory ID AND the explicit persistence flag.
-
-    CEI_DRAFTING_MEMORY_ID alone is already set in CDK for F11 long-term recall, so it must not by
-    itself switch the saver; the local demo keeps its in-process InMemorySaver without the flag.
+    """AgentCoreMemorySaver whenever an AgentCore Memory ID is configured (every deployed runtime, CDK);
+    a local run with no Memory ID keeps its in-process InMemorySaver. Same rule as Research.
     """
-    if os.environ.get("CEI_DRAFTING_PERSISTENT_CHECKPOINT", "").strip().lower() != "true":
-        return None
     memory_id = os.environ.get("CEI_DRAFTING_MEMORY_ID", "").strip()
     if not memory_id:
         return None

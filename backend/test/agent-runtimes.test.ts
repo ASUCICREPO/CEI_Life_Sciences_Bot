@@ -148,7 +148,6 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
       const runtime = runtimes.find(([, r]) => (r as any).Properties.AgentRuntimeName === runtimeName)![1] as any;
       expect(runtime.Properties.EnvironmentVariables[envVar]).toEqual({ 'Fn::GetAtt': [memoryId, 'MemoryId'] });
       expect(runtime.Properties.EnvironmentVariables.CEI_REQUIRE_TOOL_GATEWAY).toBeUndefined();
-      expect(runtime.Properties.EnvironmentVariables.CEI_DRAFTING_PERSISTENT_CHECKPOINT).toBeUndefined();
       expect(policies.some((p) => JSON.stringify(p.Properties.Roles).includes(roleFragment) &&
         p.Properties.PolicyDocument.Statement.some((s: any) =>
           [s.Action].flat().includes('bedrock-agentcore:RetrieveMemoryRecords') &&
@@ -161,7 +160,6 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
     const memoryId = Object.keys(template.findResources('AWS::BedrockAgentCore::Memory'))[0];
     const drafting = runtimes.find(([, r]) => (r as any).Properties.AgentRuntimeName === 'CEIDraftingAgent')![1] as any;
     expect(drafting.Properties.EnvironmentVariables.CEI_DRAFTING_MEMORY_ID).toEqual({ 'Fn::GetAtt': [memoryId, 'MemoryId'] });
-    expect(drafting.Properties.EnvironmentVariables.CEI_DRAFTING_PERSISTENT_CHECKPOINT).toBe('true');
     expect(drafting.Properties.EnvironmentVariables.CEI_REQUIRE_TOOL_GATEWAY).toBeUndefined();
     const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
     const draftingMemoryStatement = policies

@@ -37,20 +37,10 @@ class _Context:
         self.request_headers = {"Authorization": "Bearer test-token:test-user"}
 
 
-# --- the gate itself: CEI_DRAFTING_MEMORY_ID alone must never switch the saver -------------------
+# --- the gate: a configured Memory ID switches the saver (no separate flag) ---------------------
 
 
-def test_flag_off_keeps_in_memory_saver_even_with_memory_id(monkeypatch):
-    monkeypatch.setenv("CEI_DRAFTING_MEMORY_ID", "memory-id")
-    monkeypatch.delenv("CEI_DRAFTING_PERSISTENT_CHECKPOINT", raising=False)
-    created = Mock()
-    monkeypatch.setattr("shared.memory.agentcore.create_checkpointer", created)
-    assert drafting_main._persistent_drafting_checkpointer() is None
-    created.assert_not_called()
-
-
-def test_flag_on_without_memory_id_keeps_in_memory_saver(monkeypatch):
-    monkeypatch.setenv("CEI_DRAFTING_PERSISTENT_CHECKPOINT", "true")
+def test_no_memory_id_keeps_in_memory_saver(monkeypatch):
     monkeypatch.delenv("CEI_DRAFTING_MEMORY_ID", raising=False)
     created = Mock()
     monkeypatch.setattr("shared.memory.agentcore.create_checkpointer", created)
@@ -58,8 +48,7 @@ def test_flag_on_without_memory_id_keeps_in_memory_saver(monkeypatch):
     created.assert_not_called()
 
 
-def test_flag_on_with_memory_id_creates_the_persistent_saver(monkeypatch):
-    monkeypatch.setenv("CEI_DRAFTING_PERSISTENT_CHECKPOINT", "true")
+def test_memory_id_creates_the_persistent_saver(monkeypatch):
     monkeypatch.setenv("CEI_DRAFTING_MEMORY_ID", "memory-id")
     saver = Mock()
     created = Mock(return_value=saver)

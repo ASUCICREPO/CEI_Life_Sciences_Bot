@@ -264,16 +264,9 @@ export class AgentRuntimes extends Construct {
               [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId,
               CEI_REQUIRE_TOOL_GATEWAY: 'true',
             }
-          // ADR: Drafting's short-term memory uses AgentCoreMemorySaver, not the local InMemorySaver |
-          // Rationale: durable across runtime restart/idle timeout, same as Research (drafting_main.py
-          // `_persistent_drafting_checkpointer`); CEI_DRAFTING_MEMORY_ID alone (set below for every
-          // non-Research runtime, F11 long-term recall) must not switch the saver on its own.
-          : def.id === 'Drafting'
-          ? {
-              ...environmentVariables,
-              [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId,
-              CEI_DRAFTING_PERSISTENT_CHECKPOINT: 'true',
-            }
+          // ADR: Drafting's short-term memory uses AgentCoreMemorySaver whenever CEI_DRAFTING_MEMORY_ID is
+          // set | Rationale: durable across runtime restart/idle timeout, same as Research (drafting_main.py
+          // `_persistent_drafting_checkpointer`) | Alternative: a separate opt-in flag rejected by the user
           : { ...environmentVariables, [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId },
       });
       // F11: all four runtimes can retrieve from the one shared Memory resource; Research and
