@@ -14,7 +14,9 @@ describe('Research streaming infrastructure', () => {
   it('enables X-Ray on the API stage and every application Lambda', () => {
     template.hasResourceProperties('AWS::ApiGateway::Stage', { TracingEnabled: true });
     const functions = Object.entries(template.findResources('AWS::Lambda::Function'))
-      .filter(([id]) => !id.startsWith('Custom') && !id.startsWith('BucketNotificationsHandler'));
+      .filter(([id]) => !id.startsWith('Custom') && !id.startsWith('BucketNotificationsHandler') &&
+        // CDK framework Lambda behind AwsCustomResource (attachments bucket CORS): deploy-time only, not app code
+        !id.startsWith('AWS679f53fac002430cb0da5b7982bd2287'));
     expect(functions.length).toBeGreaterThan(10);
     for (const [, resource] of functions) {
       expect((resource as any).Properties.TracingConfig).toEqual({ Mode: 'Active' });

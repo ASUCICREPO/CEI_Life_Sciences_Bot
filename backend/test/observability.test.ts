@@ -46,7 +46,9 @@ describe('operational monitoring', () => {
   });
 
   it('alarms on every application Lambda error and throttle (except consolidated functions)', () => {
-    const functions = Object.entries(template.findResources('AWS::Lambda::Function')).filter(([id]) => !id.startsWith('Custom') && !id.startsWith('BucketNotificationsHandler'));
+    const functions = Object.entries(template.findResources('AWS::Lambda::Function')).filter(([id]) => !id.startsWith('Custom') && !id.startsWith('BucketNotificationsHandler') &&
+        // CDK framework Lambda behind AwsCustomResource (attachments bucket CORS): deploy-time only, not app code
+        !id.startsWith('AWS679f53fac002430cb0da5b7982bd2287'));
     const alarms = Object.values(alarmsTemplate.findResources('AWS::CloudWatch::Alarm')) as any[];
     // Some functions have throttle alarms skipped to stay within CloudFormation's 500-resource limit
     const skipThrottleAlarm = new Set(['AttachmentProcessor']);
