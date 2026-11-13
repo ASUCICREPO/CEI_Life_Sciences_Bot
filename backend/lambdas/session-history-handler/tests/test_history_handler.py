@@ -108,7 +108,8 @@ def test_history_first_page_is_newest_turns_chronological():
     assert body["has_more"] is True and body["next_cursor"]
     item = body["items"][0]
     assert set(item) == {
-        "message_id", "role", "content_blocks", "citations", "timestamp", "sequence_number", "truncated"
+        "message_id", "role", "content_blocks", "citations", "timestamp", "sequence_number", "truncated",
+        "completion_status",
     }
 
 
