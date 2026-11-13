@@ -1,6 +1,15 @@
 # F07 — Drafting + export
 
-Status: partial (Drafting runtime in CDK; export service with review-acknowledgment check; Exports bucket, ExportMetadataStore, list and download routes; outline approval, ad hoc export route and deployed checks pending) | Depends on: F6 | Decisions: B41, B61, B71, B74, B78, B81 | Specs: [`../specs/agents.md`](../specs/agents.md) §2 (Drafting Agent), [`../specs/tools.md`](../specs/tools.md) §8 (Export Tools), [`../specs/api.md`](../specs/api.md) (`/exports`), [`../specs/data-model.md`](../specs/data-model.md) §7 (Export outputs bucket)
+Status: partial (Drafting runtime in CDK with export grants; `route_request` step (chat answer or full draft); CEI UI 1.2 stream through the Session Runner, Router and UiActions; export service with review-acknowledgment check; Exports bucket, ExportMetadataStore, list and download routes; `ExportFile` component with downloads in the SPA; outline approval built in F13; ad hoc export route and deployed checks pending; see "Implementation status") | Depends on: F6 | Decisions: B41, B61, B71, B74, B78, B81 | Specs: [`../specs/agents.md`](../specs/agents.md) §2 (Drafting Agent), [`../specs/tools.md`](../specs/tools.md) §8 (Export Tools), [`../specs/api.md`](../specs/api.md) (`/exports`), [`../specs/data-model.md`](../specs/data-model.md) §7 (Export outputs bucket)
+
+## Implementation status (2026-11-12)
+
+- Graph: a new first node `route_request` sends a request to `chat_answer` (a short reply, no document) or to the full drafting path (`research_guidelines` → … → `outline` → `approve_outline` → `draft` → `revise` → `plan_visuals` → `export_documents`). See `backend/agents/drafting/graph.py`.
+- Streaming: `drafting_main.py` returns a CEI UI 1.2 SSE stream when the payload has `stream: true`, also for a resume. The Session Runner, the Session Router and the UiActions Lambda pass the Drafting stream through (commit `d2a9b03`).
+- Exports: the Drafting runtime role has write access to the Exports bucket and the ExportMetadataStore (`constructs/agent-runtimes.ts`). Routes: `GET /sessions/{sessionId}/exports` and `GET /exports/{exportId}/download`.
+- UI: a new CEI UI component `ExportFile` (backend presenter and schema, frontend `cei-ui-surface.tsx`) shows a downloadable file. The Task Launcher has one Drafting task, with descriptions for science and business mode.
+- Not built: the client-initiated `POST /sessions/{sessionId}/turns/{turnId}/export` route (task 8, B74).
+- Needs live AWS verification: a full Drafting run that streams, pauses at outline approval, resumes, and gives a working download for each format.
 
 ## Goal
 

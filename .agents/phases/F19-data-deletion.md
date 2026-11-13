@@ -1,5 +1,5 @@
 # F19 — Data deletion
-Status: not started (deferred by the user; `backend/lambdas/delete-worker/` is a tested foundation only, not deployed or wired) | Depends on: F10, F11 | Decisions: B31, B32, B33, B58, B73, B104, B109 | Specs: ../specs/data-model.md, ../specs/api.md
+Status: partial (B109 built behind `accountDeletionEnabled`, default false: `POST /account/delete` in `backend/lambdas/account-delete/`, the run-start gate in every run-starting Lambda, and the 9-hour scheduled `delete-worker` sweep; the cascade does not yet cover attachments, attachment metadata or managed KB documents (F10); needs live AWS verification) | Depends on: F10, F11 | Decisions: B31, B32, B33, B58, B73, B104, B109 | Specs: ../specs/data-model.md, ../specs/api.md
 
 ## Goal
 Let a user delete their whole account, and have every trace of that data actually removed — history, trace, attachments, KB chunks, checkpoints, long-term memory, and API keys — with the delete request returning immediately, no new run able to start after it, and a worker doing the real cleanup once any in-flight run has had time to end.

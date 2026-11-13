@@ -1,6 +1,6 @@
 # F06 — Streaming UI
 
-Status: in progress (Research CEI UI 1.2 stream, Runner with replay, thinking block and trace route built; other agents and deployed checks pending) | Depends on: F5 | Decisions: B4, B5, B6, B7, B9, B10, B59, B60, B68, B78 | Specs: [`../specs/streaming-protocol.md`](../specs/streaming-protocol.md) (full), [`../specs/data-model.md`](../specs/data-model.md) §2 (trace storage), [`../specs/tools.md`](../specs/tools.md) §6 (Artifact/presenters)
+Status: in progress (Research and Drafting CEI UI 1.2 streams, Runner with replay, thinking block and trace route built; Analysis and Pipeline streams and deployed checks pending) | Depends on: F5 | Decisions: B4, B5, B6, B7, B9, B10, B59, B60, B68, B78 | Specs: [`../specs/streaming-protocol.md`](../specs/streaming-protocol.md) (full), [`../specs/data-model.md`](../specs/data-model.md) §2 (trace storage), [`../specs/tools.md`](../specs/tools.md) §6 (Artifact/presenters)
 
 ## Goal
 
