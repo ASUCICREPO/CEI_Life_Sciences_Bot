@@ -1,6 +1,6 @@
 # F10 — Attachments + RAG
 
-Status: partial (B110 managed KB path built: upload presign, SQS + DLQ processor, managed KB ingestion, runtime retrieval in all 4 agents, chat upload UI; per-file GET/DELETE, image types, CSV→Code Interpreter, image→vision and the S3-enforced size cap not built; needs live AWS verification; see "Implementation status") | Depends on: F6, S5 | Decisions: B31, B32, B33, B35, B38, B70, B77, B78, B86, B110 (supersedes B33, B77) | Specs: [`../specs/data-model.md`](../specs/data-model.md) §5 (Attachment Metadata Store), §7 (S3 buckets), §9 (AgentCore Memory, sibling), [`../specs/tools.md`](../specs/tools.md) §7 (KB retrieval), [`../specs/api.md`](../specs/api.md) (Attachments routes)
+Status: partial (B110 managed KB path built: upload presign, SQS + DLQ processor, managed KB ingestion, runtime retrieval in all 4 agents, chat upload UI; per-file GET/DELETE, image types, CSV→Code Interpreter, and image→vision not built; needs live AWS verification; see "Implementation status") | Depends on: F6, S5 | Decisions: B31, B32, B33, B35, B38, B70, B77, B78, B86, B110 (supersedes B33, B77) | Specs: [`../specs/data-model.md`](../specs/data-model.md) §5 (Attachment Metadata Store), §7 (S3 buckets), §9 (AgentCore Memory, sibling), [`../specs/tools.md`](../specs/tools.md) §7 (KB retrieval), [`../specs/api.md`](../specs/api.md) (Attachments routes)
 
 ## Implementation status (2026-11-12)
 
@@ -8,7 +8,7 @@ B110 replaces the S3 Vectors index and the KB retrieval Gateway target in the pl
 
 Built:
 - Attachments S3 bucket (`backend-stack.ts`, `RETAIN`, objects under `uploads/`) and the `AttachmentsMetadataStore` table with a session GSI.
-- `POST /attachments/presign` (`backend/lambdas/attachment-presign/handler.py`): checks `content_type`, writes the metadata row, returns a presigned **PUT** URL (5-minute expiry). Allowed types: PDF, TXT, MD, CSV, DOCX, XLSX. The route is `/attachments/presign`, not the `/sessions/{id}/attachments/presign` path in the Scope section.
+- `POST /attachments/presign` (`backend/lambdas/attachment-presign/handler.py`): checks `content_type`, checks an optional declared `size`, writes the metadata row, and returns a presigned **POST** (5-minute expiry). The POST policy holds `content-length-range` 1–55,000,000 bytes and the exact `Content-Type`, so S3 rejects a larger body before it stores the object (B32). The bucket CORS rule allows `POST` only, from any origin (the signed policy is the access control; a CloudFront origin would make a stack cycle). Allowed types: PDF, TXT, MD, CSV, DOCX, XLSX. The route is `/attachments/presign`, not the `/sessions/{id}/attachments/presign` path in the Scope section.
 - SQS queue with a DLQ (`maxReceiveCount: 3`) on S3 object-created events, and the Attachment Processor (`backend/lambdas/attachment-processor/handler.py`). The processor checks the metadata row against the S3 key, rejects files over 50 MB, and calls `IngestKnowledgeBaseDocuments` on the managed KB CUSTOM data source (document id = `attachment_id`; inline metadata `user_id`, `session_id`, `file_id`, `filename`).
 - Managed Knowledge Base construct: `backend/lib/constructs/attachments-knowledge-base.ts` (`type: MANAGED`).
 - Runtime retrieval: `backend/agents/shared/tools/attachments_kb.py` calls `bedrock:Retrieve` with an `andAll` `user_id` + `session_id` filter from the verified `AuthorizedSession`. Research, Drafting, Analysis and the Pipeline dispatcher use it. The keyword-scan `rag_tool.py` is removed.
@@ -17,7 +17,7 @@ Built:
 Not built:
 - `GET`/`DELETE` for one attachment (task 10).
 - PNG/JPG types, the image→vision path (task 9) and the CSV→Code Interpreter path (task 8).
-- S3-enforced 55 MB cap (B32). A presigned PUT has no `content-length-range` condition, so S3 accepts a larger object. The processor rejects it only after upload (50 MB limit).
+- The processor still rejects files over 50 MiB (the managed KB per-file quota). A file between 50 MiB and 55 MB uploads, then fails at the processor.
 - Attachments, metadata rows and KB documents are not in the account-delete cascade (F19).
 
 ## Goal
@@ -79,7 +79,7 @@ Let a user attach a file (PDF, DOCX, TXT, MD, CSV, PNG, JPG — max 55 MB) to a 
 
 - Upload each allowed type and confirm it reaches `ready` in the managed KB.
 - A retrieval in session A never returns a document from session B or from another user.
-- A file over the size limit is rejected and its metadata row shows `failed`.
+- A browser POST over 55,000,000 bytes gets an S3 `EntityTooLarge` error and no object is stored; a file between 50 MiB and 55 MB uploads and its metadata row shows `failed`.
 - A message that fails 3 times goes to the DLQ.
 
 ## Handoff notes
