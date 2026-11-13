@@ -56,7 +56,7 @@ _background_tasks: Dict[str, asyncio.Task] = {}
 
 
 def _runtime_port() -> int:
-    raw_port = os.environ.get("CEI_RUNTIME_PORT", "8084")
+    raw_port = os.environ.get("CEI_RUNTIME_PORT", "8080")  # AgentCore Runtime sends traffic to 8080 only
     try:
         port = int(raw_port)
     except ValueError as error:

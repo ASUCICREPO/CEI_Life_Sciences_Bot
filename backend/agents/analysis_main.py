@@ -56,7 +56,7 @@ def _remember_scenario(thread_id: str, scenario: str) -> None:
 
 
 def _runtime_port() -> int:
-    raw_port = os.environ.get("CEI_RUNTIME_PORT", "8083")
+    raw_port = os.environ.get("CEI_RUNTIME_PORT", "8080")  # AgentCore Runtime sends traffic to 8080 only
     try:
         port = int(raw_port)
     except ValueError as error:
