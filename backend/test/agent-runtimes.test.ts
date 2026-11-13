@@ -137,11 +137,10 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
         JSON.stringify(s.Resource).includes(memoryId)))).toBe(true);
   });
 
-  test('Drafting, Analysis and Pipeline get a memory id and retrieve-only access (F11)', () => {
+  test('Analysis and Pipeline get a memory id and retrieve-only access (F11)', () => {
     const memoryId = Object.keys(template.findResources('AWS::BedrockAgentCore::Memory'))[0];
     const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
     const cases: Array<[string, string, string]> = [
-      ['CEIDraftingAgent', 'CEI_DRAFTING_MEMORY_ID', 'AgentRuntimesDraftingRuntime'],
       ['CEIAnalysisAgent', 'CEI_ANALYSIS_MEMORY_ID', 'AgentRuntimesAnalysisRuntime'],
       ['CEIPipelineManager', 'CEI_PIPELINE_MEMORY_ID', 'AgentRuntimesPipelineRuntime'],
     ];
@@ -149,12 +148,31 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
       const runtime = runtimes.find(([, r]) => (r as any).Properties.AgentRuntimeName === runtimeName)![1] as any;
       expect(runtime.Properties.EnvironmentVariables[envVar]).toEqual({ 'Fn::GetAtt': [memoryId, 'MemoryId'] });
       expect(runtime.Properties.EnvironmentVariables.CEI_REQUIRE_TOOL_GATEWAY).toBeUndefined();
+      expect(runtime.Properties.EnvironmentVariables.CEI_DRAFTING_PERSISTENT_CHECKPOINT).toBeUndefined();
       expect(policies.some((p) => JSON.stringify(p.Properties.Roles).includes(roleFragment) &&
         p.Properties.PolicyDocument.Statement.some((s: any) =>
           [s.Action].flat().includes('bedrock-agentcore:RetrieveMemoryRecords') &&
           !['bedrock-agentcore:CreateEvent'].some((a) => [s.Action].flat().includes(a)) &&
           JSON.stringify(s.Resource).includes(memoryId)))).toBe(true);
     }
+  });
+
+  test('Drafting uses a persistent AgentCoreMemorySaver checkpoint (short-term memory durability)', () => {
+    const memoryId = Object.keys(template.findResources('AWS::BedrockAgentCore::Memory'))[0];
+    const drafting = runtimes.find(([, r]) => (r as any).Properties.AgentRuntimeName === 'CEIDraftingAgent')![1] as any;
+    expect(drafting.Properties.EnvironmentVariables.CEI_DRAFTING_MEMORY_ID).toEqual({ 'Fn::GetAtt': [memoryId, 'MemoryId'] });
+    expect(drafting.Properties.EnvironmentVariables.CEI_DRAFTING_PERSISTENT_CHECKPOINT).toBe('true');
+    expect(drafting.Properties.EnvironmentVariables.CEI_REQUIRE_TOOL_GATEWAY).toBeUndefined();
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    const draftingMemoryStatement = policies
+      .filter((p) => JSON.stringify(p.Properties.Roles).includes('AgentRuntimesDraftingRuntime'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement)
+      .find((s: any) => JSON.stringify(s.Resource).includes(memoryId));
+    expect(draftingMemoryStatement).toBeDefined();
+    expect([draftingMemoryStatement.Action].flat().sort()).toEqual([
+      'bedrock-agentcore:CreateEvent', 'bedrock-agentcore:DeleteEvent',
+      'bedrock-agentcore:ListEvents', 'bedrock-agentcore:RetrieveMemoryRecords',
+    ].sort());
   });
 
   test('every runtime gets the Guardrail id/version and the blocklist env var (F8)', () => {

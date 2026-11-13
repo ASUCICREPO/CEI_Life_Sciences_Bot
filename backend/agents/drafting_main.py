@@ -8,6 +8,8 @@ import asyncio
 import logging
 import os
 from collections import OrderedDict
+from collections.abc import Mapping as MappingABC
+from functools import lru_cache
 from typing import Any, Dict
 
 from langchain_core.messages import HumanMessage
@@ -78,6 +80,60 @@ async def _drafting_long_term_context(user_id: str, prompt: str) -> list[str]:
     return await load_long_term_context(
         user_id, prompt, enabled_env="CEI_DRAFTING_LONG_TERM_ENABLED", memory_id_env="CEI_DRAFTING_MEMORY_ID",
     )
+
+
+@lru_cache(maxsize=1)
+def _persistent_drafting_checkpointer():
+    """Opt in only with both a configured AgentCore Memory ID AND the explicit persistence flag.
+
+    CEI_DRAFTING_MEMORY_ID alone is already set in CDK for F11 long-term recall, so it must not by
+    itself switch the saver; the local demo keeps its in-process InMemorySaver without the flag.
+    """
+    if os.environ.get("CEI_DRAFTING_PERSISTENT_CHECKPOINT", "").strip().lower() != "true":
+        return None
+    memory_id = os.environ.get("CEI_DRAFTING_MEMORY_ID", "").strip()
+    if not memory_id:
+        return None
+    from shared.memory.agentcore import create_checkpointer
+
+    return create_checkpointer(memory_id)
+
+
+async def _drafting_checkpoint_context(user_id: str, session_id: str):
+    """Choose the saver and detect an existing actor-scoped persistent checkpoint (mirrors main.py's
+    `_research_checkpoint_context`). `warm=True` here also drives carry-forward: an existing persistent
+    checkpoint already holds the prior draft/outline state (`_load_warm_carry_forward`'s `aget_state`),
+    so a first turn after migration is the only case that needs the cold `md`-export recovery.
+
+    Memory failures propagate instead of silently falling back across sessions.
+    """
+    persistent = _persistent_drafting_checkpointer()
+    if persistent is None:
+        return _checkpointer, session_id in _thread_ids, False
+    config = {"configurable": {"thread_id": session_id, "actor_id": user_id}}
+    checkpoint = await persistent.aget_tuple(config)
+    return persistent, checkpoint is not None, True
+
+
+async def _restore_from_memory(*, user_id, session_id, saver, graph, pending) -> bool:
+    """B82 expiry check for the AgentCoreMemorySaver path (mirrors main.py's Research equivalent).
+
+    The persistent saver already *is* the durable store across processes; `aget_tuple` tells us
+    whether AgentCore Memory's own short-term event expiry has already removed the checkpoint.
+    """
+    config = {"configurable": {"thread_id": session_id, "actor_id": user_id}}
+    checkpoint = await saver.aget_tuple(config)
+    if checkpoint is None:
+        return False
+    snapshot = await graph.aget_state(config)
+    interrupts = list(getattr(snapshot, "interrupts", None) or [])
+    if not interrupts:
+        for task in getattr(snapshot, "tasks", None) or []:
+            interrupts.extend(getattr(task, "interrupts", None) or [])
+    surface = extract_interrupt_surface({"__interrupt__": interrupts})
+    if isinstance(surface, MappingABC):
+        pending.register(session_id, surface)
+    return True
 
 
 def _runtime_port() -> int:
@@ -207,33 +263,52 @@ def _drafting_envelope(session_id: str, result: Dict[str, Any]) -> Dict[str, Any
 
 
 async def _resume(payload, context, session_id: str, user_id: str) -> Dict[str, Any]:
-    """`op: resume` (F13): pause/resume for the outline-approval HITL point, same pattern as analysis_main."""
+    """`op: resume` (F13): pause/resume for the outline-approval HITL point, same pattern as analysis_main.
+
+    With the persistent AgentCoreMemorySaver (opt-in), mirrors main.py's Research `_resume`: an
+    actor-scoped config, `_restore_from_memory`'s aget_tuple-based expiry check in place of the
+    default ChatHistoryStore-snapshot restore, and an ephemeral `pending` registry (a persistent
+    session re-derives its pending surface from the checkpoint on every cold resume).
+    """
     from drafting.graph import compile_graph
 
-    graph = compile_graph(checkpointer=_checkpointer)
+    persistent_saver = _persistent_drafting_checkpointer()
+    persistent = persistent_saver is not None
+    saver = persistent_saver if persistent else _checkpointer
+    graph = compile_graph(checkpointer=saver)
+    pending = PendingInterrupts() if persistent else _pending
+    restore = _restore_from_memory if persistent else None
+    kwargs: Dict[str, Any] = {}
+    if restore is not None:
+        kwargs["restore"] = restore
+
     action, terminal = await resolve_resume_action(
-        payload, session_id=session_id, user_id=user_id, checkpointer=_checkpointer, graph=graph,
-        pending=_pending, is_cold=session_id not in _thread_ids,
+        payload, session_id=session_id, user_id=user_id, checkpointer=saver, graph=graph,
+        pending=pending, is_cold=True if persistent else session_id not in _thread_ids, **kwargs,
     )
     if terminal is not None:
         return terminal
 
     await record_resume(user_id=user_id, session_id=session_id, action=action)
-    _touch_thread(session_id)
+    config = {"configurable": {"thread_id": session_id, "actor_id": user_id}}
+    if not persistent:
+        _touch_thread(session_id)
     with gateway_request_context(context, user_id, session_id):
-        result = await graph.ainvoke(Command(resume=resume_value(action)), config={"configurable": {"thread_id": session_id}})
+        result = await graph.ainvoke(Command(resume=resume_value(action)), config=config)
 
     surface = extract_interrupt_surface(result)
     response = action_response(action, "completed")
     if surface is not None:
-        _pending.register(session_id, surface)
+        pending.register(session_id, surface)
         envelope = awaiting_envelope(surface, "Waiting for outline approval.")
     else:
-        _pending.clear(session_id)
+        if not persistent:
+            _pending.clear(session_id)
         envelope = {**_drafting_envelope(session_id, result), "status": "completed"}
     envelope["action_response"] = response
     await end_turn(
-        saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope, trace=result.get("trace"),
+        saver=None if persistent else saver, user_id=user_id, session_id=session_id, envelope=envelope,
+        trace=result.get("trace"),
     )
     return envelope
 
@@ -289,12 +364,14 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
 
     from drafting.graph import compile_graph
 
-    warm = session_id in _thread_ids
     # New run only: a resume (`_resume` above) must not re-recall long-term memory.
     with gateway_request_context(context, user_id, session_id):
         memories = await _drafting_long_term_context(user_id, prompt)
 
-    # Cold thread (runtime restart / LRU eviction): rebuild short-term memory from ChatHistoryStore
+    saver, warm, persistent = await _drafting_checkpoint_context(user_id, session_id)
+    # Cold thread (runtime restart / LRU eviction): rebuild short-term memory from ChatHistoryStore.
+    # AgentCore Memory owns its own checkpoints, so a persistent saver restores no ChatHistoryStore
+    # snapshot here (`begin_turn`'s `saver=None`); `warm` already reflects whether its checkpoint exists.
     history = await begin_turn(
         user_id=user_id,
         session_id=session_id,
@@ -303,11 +380,15 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
         document_type=doc_type.value,
         mode=mode,
         warm=warm,
-        saver=_checkpointer,
+        saver=None if persistent else saver,
     )
-    _touch_thread(session_id)
-    graph = compile_graph(checkpointer=_checkpointer)
-    graph_config = {"configurable": {"thread_id": session_id}}
+    if not persistent:
+        _touch_thread(session_id)
+    graph = compile_graph(checkpointer=saver)
+    graph_config = {"configurable": {"thread_id": session_id, "actor_id": user_id}}
+    # `warm` already distinguishes "existing checkpoint" (persistent or in-process) from "first
+    # turn" for both branches: a persistent first turn has no checkpoint state, so it falls back to
+    # the same cold `md`-export recovery as a plain in-process restart.
     carry_forward = (
         await _load_warm_carry_forward(graph, graph_config)
         if warm
@@ -351,7 +432,8 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
 
     if stream:
         return StreamingResponse(
-            _stream_drafting(graph, initial_state, graph_config, context, session, resume=False, prompt=prompt),
+            _stream_drafting(graph, initial_state, graph_config, context, session, resume=False, prompt=prompt,
+                             saver=saver, persistent=persistent),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
         )
@@ -361,9 +443,11 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
 
     surface = extract_interrupt_surface(result)
     if surface is not None:
-        _pending.register(session_id, surface)
+        if not persistent:
+            _pending.register(session_id, surface)
         envelope = awaiting_envelope(surface, "Waiting for outline approval.")
-        await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=envelope, prompt=prompt)
+        await end_turn(saver=None if persistent else saver, user_id=user_id, session_id=session_id,
+                       envelope=envelope, prompt=prompt)
         return envelope
 
     text = final_ai_text(result.get("messages", []))
@@ -382,7 +466,8 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
             ).model_dump(mode="json"),
             "exports": [],
         }
-        await end_turn(saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=response, prompt=prompt)
+        await end_turn(saver=None if persistent else saver, user_id=user_id, session_id=session_id,
+                       envelope=response, prompt=prompt)
         return response
 
     trace_text = _format_trace(result.get("trace", []))
@@ -406,23 +491,37 @@ async def invoke(payload, context, session: AuthorizedSession):  # noqa: ANN001
     }
     # stores `text` (not `result`): the trace is diagnostic output, not conversation content
     await end_turn(
-        saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=response, prompt=prompt,
-        trace=result.get("trace"),
+        saver=None if persistent else saver, user_id=user_id, session_id=session_id, envelope=response,
+        prompt=prompt, trace=result.get("trace"),
     )
     return response
 
 
 async def _begin_stream_drafting_resume(payload, context, session_id: str, user_id: str):
-    """Resolve the resume action, then stream the resumed run exactly like a fresh `op=run` (B1xx)."""
+    """Resolve the resume action, then stream the resumed run exactly like a fresh `op=run` (B1xx).
+
+    Persistent-saver selection mirrors `_resume`/main.py's Research `_resume`: an actor-scoped
+    config, `_restore_from_memory`'s expiry check in place of the ChatHistoryStore restore, and an
+    ephemeral `pending` registry for the resolve step.
+    """
     from drafting.graph import compile_graph
 
     events = ResearchEventStream()
     yield events.begin("drafting-final")
     try:
-        graph = compile_graph(checkpointer=_checkpointer)
+        persistent_saver = _persistent_drafting_checkpointer()
+        persistent = persistent_saver is not None
+        saver = persistent_saver if persistent else _checkpointer
+        graph = compile_graph(checkpointer=saver)
+        pending = PendingInterrupts() if persistent else _pending
+        restore = _restore_from_memory if persistent else None
+        kwargs: Dict[str, Any] = {}
+        if restore is not None:
+            kwargs["restore"] = restore
+
         action, terminal = await resolve_resume_action(
-            payload, session_id=session_id, user_id=user_id, checkpointer=_checkpointer, graph=graph,
-            pending=_pending, is_cold=session_id not in _thread_ids,
+            payload, session_id=session_id, user_id=user_id, checkpointer=saver, graph=graph,
+            pending=pending, is_cold=True if persistent else session_id not in _thread_ids, **kwargs,
         )
         if terminal is not None:
             message = "This request is no longer waiting for that input."
@@ -433,9 +532,13 @@ async def _begin_stream_drafting_resume(payload, context, session_id: str, user_
             return
 
         await record_resume(user_id=user_id, session_id=session_id, action=action)
-        _touch_thread(session_id)
-        graph_config = {"configurable": {"thread_id": session_id}}
-        async for frame in _stream_drafting(graph, Command(resume=resume_value(action)), graph_config, context, None, resume=True, session_id=session_id, user_id=user_id, events=events):
+        if not persistent:
+            _touch_thread(session_id)
+        graph_config = {"configurable": {"thread_id": session_id, "actor_id": user_id}}
+        async for frame in _stream_drafting(
+            graph, Command(resume=resume_value(action)), graph_config, context, None, resume=True,
+            session_id=session_id, user_id=user_id, events=events, saver=saver, persistent=persistent,
+        ):
             yield frame
     except Exception as exc:  # noqa: BLE001
         log.error("Drafting resume stream failed (%s)", type(exc).__name__)
@@ -454,16 +557,22 @@ async def _stream_drafting(
     user_id: str | None = None,
     events: ResearchEventStream | None = None,
     prompt: str | None = None,
+    saver: Any = None,
+    persistent: bool = False,
 ):
     """Stream drafting's node progress + live prose, then the short summary + Files surface (B1xx).
 
     `events.begin(...)` has already been emitted by the caller when resuming (the resume path needs
-    to emit it before the replay/stale/expired checks); a fresh run emits it here instead.
+    to emit it before the replay/stale/expired checks); a fresh run emits it here instead. `saver`
+    defaults to the module's in-process `_checkpointer` (existing test callers omit it); `persistent`
+    selects the AgentCoreMemorySaver conventions (no local `_pending` registration, `end_turn`'s own
+    background checkpoint snapshot skipped since AgentCore Memory already wrote it durably).
     """
     surface_id = "drafting-final"
     session_id = session_id or (session.session_id if session is not None else None)
     user_id = user_id or (session.user_id if session is not None else None)
     events = events or ResearchEventStream()
+    saver = saver if saver is not None else _checkpointer
     if not resume:
         yield events.begin(surface_id)
     yield events.emit("progress", status="planning", step_label="Understanding the request")
@@ -529,10 +638,11 @@ async def _stream_drafting(
                 interrupts.extend(getattr(task, "interrupts", None) or [])
         pending_surface = extract_interrupt_surface({"__interrupt__": interrupts})
         if pending_surface is not None:
-            _pending.register(session_id, pending_surface)
+            if not persistent:
+                _pending.register(session_id, pending_surface)
             yield events.emit("hitl_request", **pending_surface)
             await end_turn(
-                saver=_checkpointer, user_id=user_id, session_id=session_id,
+                saver=None if persistent else saver, user_id=user_id, session_id=session_id,
                 envelope=awaiting_envelope(pending_surface, "Waiting for outline approval."), prompt=prompt,
             )
             return
@@ -552,8 +662,8 @@ async def _stream_drafting(
 
         response = {"result": text, "text": text, "ui": surface, "exports": exports}
         message_id = await end_turn(
-            saver=_checkpointer, user_id=user_id, session_id=session_id, envelope=response, prompt=prompt,
-            stream_trace_events=events.trace_events,
+            saver=None if persistent else saver, user_id=user_id, session_id=session_id, envelope=response,
+            prompt=prompt, stream_trace_events=events.trace_events,
         )
         yield events.emit("progress", status="finalizing", step_label="Preparing the response")
         if preview_started:

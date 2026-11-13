@@ -264,12 +264,25 @@ export class AgentRuntimes extends Construct {
               [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId,
               CEI_REQUIRE_TOOL_GATEWAY: 'true',
             }
+          // ADR: Drafting's short-term memory uses AgentCoreMemorySaver, not the local InMemorySaver |
+          // Rationale: durable across runtime restart/idle timeout, same as Research (drafting_main.py
+          // `_persistent_drafting_checkpointer`); CEI_DRAFTING_MEMORY_ID alone (set below for every
+          // non-Research runtime, F11 long-term recall) must not switch the saver on its own.
+          : def.id === 'Drafting'
+          ? {
+              ...environmentVariables,
+              [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId,
+              CEI_DRAFTING_PERSISTENT_CHECKPOINT: 'true',
+            }
           : { ...environmentVariables, [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId },
       });
-      // F11: all four runtimes can retrieve from the one shared Memory resource; only
-      // Research writes conversation events into it (B37 strategies, opt-in recall per agent).
+      // F11: all four runtimes can retrieve from the one shared Memory resource; Research and
+      // Drafting also write events into it -- Research's own conversation/strategy events (B37),
+      // and Drafting's checkpoints (AgentCoreMemorySaver: CreateEvent/ListEvents/DeleteEvent are
+      // exactly the bedrock-agentcore calls it makes -- see langgraph_checkpoint_aws's
+      // AgentCoreEventClient; it never calls GetEvent).
       runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
-        actions: def.id === 'Research'
+        actions: def.id === 'Research' || def.id === 'Drafting'
           ? ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent',
             'bedrock-agentcore:RetrieveMemoryRecords']
           : ['bedrock-agentcore:RetrieveMemoryRecords'],
