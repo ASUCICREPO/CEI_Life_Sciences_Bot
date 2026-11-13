@@ -191,6 +191,17 @@ export class BackendStack extends cdk.Stack {
       serverAccessLogsPrefix: 'attachments-access-logs/',
       // ADR: RETAIN | Rationale: attachments are user data — a stack teardown must not delete them
       removalPolicy: RemovalPolicy.RETAIN,
+      // B32: the SPA uploads with a presigned POST whose policy holds the 55 MB `content-length-range`.
+      // ADR: CORS origin '*' for POST only | Rationale: the signed POST policy (key, content type, size,
+      // 5-minute expiry) is the access control, not the origin; naming the CloudFront origin here would make a
+      // cycle (CSP response headers policy -> this bucket -> distribution) | Alternative: a custom resource
+      // that sets CORS after the distribution exists was rejected (more resources under the 500 limit)
+      cors: [{
+        allowedMethods: [s3.HttpMethods.POST],
+        allowedOrigins: ['*'],
+        allowedHeaders: ['*'],
+        maxAge: 3000,
+      }],
     });
 
     // Export objects are written directly with the Intelligent-Tiering storage class.

@@ -104,9 +104,12 @@ export interface TurnTrace {
   events: TraceEvent[];
 }
 
-/** POST /attachments/presign response */
+/** POST /attachments/presign response: a presigned S3 POST (B32 size cap in the policy). */
 export interface PresignedUpload {
   upload_url: string;
+  /** Form fields to send before the file, in any order. */
+  upload_fields: Record<string, string>;
+  max_bytes: number;
   attachment_id: string;
   s3_key: string;
   expires_in: number;
@@ -122,7 +125,7 @@ export interface SessionsClient {
   /** Lazy: called only when the user expands a turn's thinking block. Invalid events are skipped. */
   loadTurnTrace(sessionId: string, messageId: string): Promise<TurnTrace>;
   /** Get a pre-signed URL for uploading an attachment. */
-  presignAttachment(sessionId: string, filename: string, contentType: string): Promise<PresignedUpload>;
+  presignAttachment(sessionId: string, filename: string, contentType: string, size?: number): Promise<PresignedUpload>;
 }
 
 export interface SessionsClientOptions {
@@ -331,8 +334,10 @@ export function createSessionsClient(getToken: TokenProvider, options: SessionsC
         .filter((event): event is TraceEvent => event?.type === 'trace_event');
       return { message_id: typeof raw?.message_id === 'string' ? raw.message_id : messageId, events };
     },
-    async presignAttachment(sessionId, filename, contentType) {
-      return (await request('POST', '/attachments/presign', { session_id: sessionId, filename, content_type: contentType })) as PresignedUpload;
+    async presignAttachment(sessionId, filename, contentType, size) {
+      return (await request('POST', '/attachments/presign', {
+        session_id: sessionId, filename, content_type: contentType, ...(size !== undefined ? { size } : {}),
+      })) as PresignedUpload;
     },
   };
 }

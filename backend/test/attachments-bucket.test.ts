@@ -61,6 +61,13 @@ describe.each([
     });
   });
 
+  it('allows only a browser POST upload through CORS (B32 presigned POST)', () => {
+    const bucket = template.findResources('AWS::S3::Bucket')[bucketId] as any;
+    expect(bucket.Properties.CorsConfiguration.CorsRules).toEqual([
+      { AllowedHeaders: ['*'], AllowedMethods: ['POST'], AllowedOrigins: ['*'], MaxAge: 3000 },
+    ]);
+  });
+
   it('passes the generated bucket name to every AgentCore runtime', () => {
     const runtimes = template.findResources('AWS::BedrockAgentCore::Runtime');
     expect(Object.keys(runtimes)).toHaveLength(4);

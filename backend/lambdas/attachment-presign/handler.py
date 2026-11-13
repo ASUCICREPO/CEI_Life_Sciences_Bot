@@ -1,4 +1,8 @@
-"""Pre-signed URL generator for attachment uploads."""
+"""Pre-signed POST generator for attachment uploads.
+
+B32: S3 itself enforces the 55 MB cap. A presigned POST policy carries a `content-length-range`
+condition, so S3 rejects a larger body before it stores the object. A presigned PUT cannot do this.
+"""
 from __future__ import annotations
 
 import json
@@ -18,6 +22,8 @@ logger.setLevel(logging.INFO)
 BUCKET = os.environ.get("ATTACHMENTS_BUCKET", "")
 TABLE = os.environ.get("ATTACHMENTS_TABLE", "")
 PRESIGN_EXPIRY = 300
+# B32: 55 MB, in decimal bytes.
+MAX_UPLOAD_BYTES = 55_000_000
 
 ALLOWED_TYPES = frozenset([
     "application/pdf", "text/plain", "text/markdown", "text/csv",
@@ -66,12 +72,28 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _error(400, "session_id must be UUID")
     if content_type not in ALLOWED_TYPES:
         return _error(400, f"content_type must be one of: {', '.join(sorted(ALLOWED_TYPES))}")
+    # Optional early check; S3 still enforces the cap through the POST policy below.
+    size = body.get("size")
+    if size is not None:
+        if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+            return _error(400, "size must be a positive integer")
+        if size > MAX_UPLOAD_BYTES:
+            return _error(400, f"File too large (max {MAX_UPLOAD_BYTES} bytes)")
 
     attachment_id = str(uuid.uuid4())
     s3_key = f"uploads/{user_id}/{session_id}/{attachment_id}/{filename}"
 
     try:
-        upload_url = s3.generate_presigned_url("put_object", Params={"Bucket": BUCKET, "Key": s3_key, "ContentType": content_type}, ExpiresIn=PRESIGN_EXPIRY)
+        post = s3.generate_presigned_post(
+            Bucket=BUCKET,
+            Key=s3_key,
+            Fields={"Content-Type": content_type},
+            Conditions=[
+                {"Content-Type": content_type},
+                ["content-length-range", 1, MAX_UPLOAD_BYTES],
+            ],
+            ExpiresIn=PRESIGN_EXPIRY,
+        )
     except Exception:
         logger.exception("presign failed")
         return _error(500, "Failed to generate upload URL")
@@ -88,4 +110,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _error(500, "Failed to record attachment")
 
     logger.info({"event": "presign", "user_id": user_id[:8], "attachment_id": attachment_id})
-    return _ok({"upload_url": upload_url, "attachment_id": attachment_id, "s3_key": s3_key, "expires_in": PRESIGN_EXPIRY})
+    return _ok({
+        "upload_url": post["url"], "upload_fields": post["fields"], "max_bytes": MAX_UPLOAD_BYTES,
+        "attachment_id": attachment_id, "s3_key": s3_key, "expires_in": PRESIGN_EXPIRY,
+    })

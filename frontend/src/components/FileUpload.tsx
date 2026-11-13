@@ -10,7 +10,8 @@ const ALLOWED_TYPES: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
 };
 const ACCEPT = Object.values(ALLOWED_TYPES).join(',');
-const MAX_SIZE = 55 * 1024 * 1024; // 55 MB
+// B32: 55 MB in decimal bytes; S3 enforces the same cap through the presigned POST policy.
+const MAX_SIZE = 55_000_000;
 
 interface FileUploadProps {
   sessionId: string;
@@ -38,8 +39,14 @@ export function FileUpload({ sessionId, onUploaded, disabled }: FileUploadProps)
     }
     setUploading(true);
     try {
-      const { upload_url, attachment_id } = await client.presignAttachment(sessionId, file.name, contentType);
-      const resp = await fetch(upload_url, { method: 'PUT', body: file, headers: { 'Content-Type': contentType } });
+      const { upload_url, upload_fields, attachment_id } = await client.presignAttachment(
+        sessionId, file.name, contentType, file.size,
+      );
+      // Presigned POST: every policy field goes first; S3 requires the file to be the last form field.
+      const form = new FormData();
+      for (const [name, value] of Object.entries(upload_fields)) form.append(name, value);
+      form.append('file', file);
+      const resp = await fetch(upload_url, { method: 'POST', body: form });
       if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
       onUploaded?.(attachment_id, file.name);
     } catch (err) {
