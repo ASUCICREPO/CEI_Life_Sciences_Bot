@@ -61,11 +61,34 @@ describe.each([
     });
   });
 
-  it('allows only a browser POST upload through CORS (B32 presigned POST)', () => {
+  it('sets a POST-only CORS rule for the SPA origin through a custom resource (B32 presigned POST)', () => {
     const bucket = template.findResources('AWS::S3::Bucket')[bucketId] as any;
-    expect(bucket.Properties.CorsConfiguration.CorsRules).toEqual([
-      { AllowedHeaders: ['*'], AllowedMethods: ['POST'], AllowedOrigins: ['*'], MaxAge: 3000 },
-    ]);
+    expect(bucket.Properties.CorsConfiguration).toBeUndefined();
+    const corsResources = Object.values(template.findResources('Custom::AWS')) as any[];
+    const cors = corsResources.filter((r) => JSON.stringify(r.Properties.Create).includes('putBucketCors'));
+    expect(cors).toHaveLength(1);
+    const create = JSON.stringify(cors[0].Properties.Create);
+    expect(create).toContain(bucketId);
+    expect(create).toContain('\\"AllowedMethods\\":[\\"POST\\"]');
+    expect(create).not.toContain('\\"AllowedOrigins\\":[\\"*\\"]');
+    expect(create).toContain('DomainName');
+    expect(create).not.toContain('localhost');
+    expect(JSON.stringify(cors[0].Properties.Update)).toEqual(create);
+  });
+
+  it('gives the CORS custom resource a role limited to PutBucketCors on this bucket', () => {
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    const corsPolicies = policies.filter((p) =>
+      (p.Properties.Roles as Array<{ Ref: string }>).some((r) => r.Ref.startsWith('AttachmentsCorsRole')),
+    );
+    const statements = corsPolicies.flatMap((p) => p.Properties.PolicyDocument.Statement);
+    const s3Statements = statements.filter((st: any) => JSON.stringify(st.Action).includes('s3:'));
+    expect(s3Statements).toHaveLength(1);
+    expect(s3Statements[0].Action).toBe('s3:PutBucketCors');
+    expect(JSON.stringify(s3Statements[0].Resource)).toContain(bucketId);
+    const roles = template.findResources('AWS::IAM::Role') as Record<string, any>;
+    const corsRole = Object.entries(roles).find(([id]) => id.startsWith('AttachmentsCorsRole'))![1];
+    expect(corsRole.Properties.ManagedPolicyArns).toBeUndefined();
   });
 
   it('passes the generated bucket name to every AgentCore runtime', () => {

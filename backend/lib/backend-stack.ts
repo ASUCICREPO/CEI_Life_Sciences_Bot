@@ -8,6 +8,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -191,17 +192,6 @@ export class BackendStack extends cdk.Stack {
       serverAccessLogsPrefix: 'attachments-access-logs/',
       // ADR: RETAIN | Rationale: attachments are user data — a stack teardown must not delete them
       removalPolicy: RemovalPolicy.RETAIN,
-      // B32: the SPA uploads with a presigned POST whose policy holds the 55 MB `content-length-range`.
-      // ADR: CORS origin '*' for POST only | Rationale: the signed POST policy (key, content type, size,
-      // 5-minute expiry) is the access control, not the origin; naming the CloudFront origin here would make a
-      // cycle (CSP response headers policy -> this bucket -> distribution) | Alternative: a custom resource
-      // that sets CORS after the distribution exists was rejected (more resources under the 500 limit)
-      cors: [{
-        allowedMethods: [s3.HttpMethods.POST],
-        allowedOrigins: ['*'],
-        allowedHeaders: ['*'],
-        maxAge: 3000,
-      }],
     });
 
     // Export objects are written directly with the Intelligent-Tiering storage class.
@@ -501,6 +491,49 @@ export class BackendStack extends cdk.Stack {
       // ADR: localhost origin gated behind config.allowLocalhostCallback (B90) | Rationale: same local-dev switch as the Cognito callback URLs; never added unconditionally
       allowedOrigins.push('http://localhost:5173');
     }
+
+    // B32: the SPA uploads attachments with a presigned POST whose policy holds the 55 MB `content-length-range`.
+    // ADR: attachments bucket CORS set by a custom resource | Rationale: a `cors` prop on the bucket that names the
+    // CloudFront origin makes a cycle (CSP response headers policy -> bucket -> distribution); PutBucketCors runs after
+    // both exist, so the rule can name only the SPA origin(s) | Alternative: CORS origin '*' rejected by the user
+    const attachmentsCorsRole = new iam.Role(this, 'AttachmentsCorsRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      description: 'Sets the attachments bucket CORS rule (PutBucketCors only)',
+    });
+    attachmentsCorsRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['s3:PutBucketCors'],
+      resources: [attachmentsBucket.bucketArn],
+    }));
+    const attachmentsCorsLogGroup = new logs.LogGroup(this, 'AttachmentsCorsLogs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    attachmentsCorsLogGroup.grantWrite(attachmentsCorsRole);
+    const attachmentsCorsCall: cr.AwsSdkCall = {
+      service: 'S3',
+      action: 'putBucketCors',
+      parameters: {
+        Bucket: attachmentsBucket.bucketName,
+        CORSConfiguration: {
+          CORSRules: [{
+            AllowedMethods: ['POST'],
+            AllowedOrigins: allowedOrigins,
+            AllowedHeaders: ['*'],
+            MaxAgeSeconds: 3000,
+          }],
+        },
+      },
+      // Fixed id: a change in origins is an update, never a replace, so no delete step can remove the new rule.
+      physicalResourceId: cr.PhysicalResourceId.of('attachments-bucket-cors'),
+    };
+    // No onDelete: the bucket is RETAIN, and its CORS rule stays with it.
+    new cr.AwsCustomResource(this, 'AttachmentsBucketCors', {
+      onCreate: attachmentsCorsCall,
+      onUpdate: attachmentsCorsCall,
+      role: attachmentsCorsRole,
+      logGroup: attachmentsCorsLogGroup,
+      installLatestAwsSdk: false,
+    });
 
     const pythonDeps = new PythonDepsLayer(this, 'PythonDepsLayer');
 
