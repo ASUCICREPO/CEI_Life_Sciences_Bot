@@ -10,7 +10,7 @@ from shared.persistence.chat_metadata import ChatMetadataRepository, SessionNotF
 from shared.persistence.conversation import ConversationRecorder, clean_title
 from shared.presenters import build_research_surface
 from shared.runtime.titles import bedrock_title_generator, is_blocked_model
-from test_persistence import session  # noqa: F401 — moto tables fixture
+from test_persistence import _meta, session  # noqa: F401 — moto tables fixture
 
 
 def _surface(text: str = "answer") -> dict:
@@ -67,6 +67,41 @@ def test_first_turn_stores_turn_context_and_later_turns_keep_it(session):  # noq
     assert (drafting.agent_type, drafting.document_type, drafting.analysis_type) == ("drafting", "grant", None)
     analysis = repo.get("u1", "a1")
     assert (analysis.agent_type, analysis.document_type, analysis.analysis_type) == ("analysis", None, "market")
+
+
+def test_start_turn_stamps_agent_on_row_created_by_post_sessions(session):  # noqa: F811
+    # The SPA creates the row through POST /sessions without agent_type (streaming path); the runtime's
+    # first turn must stamp it, or History shows "This chat doesn't record which agent it belongs to."
+    repo = ChatMetadataRepository(session)
+    for sid in ("d1", "a1", "p1"):
+        repo.get_or_create(_meta(session_id=sid))
+
+    async def scenario(rec):
+        await rec.start_turn(user_id="u1", session_id="d1", prompt="draft", agent_type="drafting", mode="science",
+                             document_type="grant")
+        await rec.start_turn(user_id="u1", session_id="a1", prompt="analyze", agent_type="analysis",
+                             mode="business", analysis_type="market")
+        await rec.start_turn(user_id="u1", session_id="p1", prompt="plan", agent_type="pipeline_manager",
+                             mode="science")
+        # A later turn from another runtime does not rewrite the stamped owner.
+        await rec.start_turn(user_id="u1", session_id="d1", prompt="again", agent_type="analysis",
+                             mode="science", analysis_type="competitor")
+        await rec.drain()
+
+    _run(scenario(_recorder(session)))
+    d1, a1, p1 = (repo.get("u1", sid) for sid in ("d1", "a1", "p1"))
+    assert (d1.agent_type, d1.document_type, d1.analysis_type) == ("drafting", "grant", None)
+    assert (a1.agent_type, a1.analysis_type) == ("analysis", "market")
+    assert p1.agent_type == "pipeline_manager"
+
+
+def test_start_turn_keeps_agent_type_set_by_post_sessions(session):  # noqa: F811
+    repo = ChatMetadataRepository(session)
+    repo.get_or_create(_meta(session_id="r1", agent_type="research"))
+    _run(_recorder(session).start_turn(user_id="u1", session_id="r1", prompt="q", agent_type="drafting",
+                                       mode="science", document_type="grant"))
+    got = repo.get("u1", "r1")
+    assert (got.agent_type, got.document_type) == ("research", None)
 
 
 def test_generated_title_set_once_after_first_answer(session):  # noqa: F811

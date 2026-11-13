@@ -253,6 +253,18 @@ class ConversationRecorder:
                 last_activity_at=now,
             )
         )
+        # The SPA creates the row first through POST /sessions, usually without agent_type; stamp it here so
+        # History can reopen the chat in this runtime. Never overwrite a value that is already set.
+        # Only a row with no owning agent yet is stamped; a later turn never rewrites how a session started.
+        missing = {
+            field: value
+            for field, value in (
+                ("agent_type", agent_type), ("document_type", document_type), ("analysis_type", analysis_type),
+            )
+            if value and getattr(meta, field, None) is None
+        } if agent_type and meta.agent_type is None else {}
+        if missing and hasattr(self._metadata, "initialize_routing"):
+            meta = self._metadata.initialize_routing(user_id, session_id, **missing)
         self._append(user_id, session_id, MessageRole.HUMAN, [ContentBlock(block_type="text", body=prompt)], [])
         return meta
 

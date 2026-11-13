@@ -210,10 +210,26 @@ class ChatMetadataRepository(BaseChatMetadataRepository):
         """
         if mode is None and model_id is None:
             raise ValueError("no settings to initialize")
+        return self._fill_missing(user_id, session_id, {"mode": mode, "model_id": model_id})
+
+    def initialize_routing(self, user_id: str, session_id: str, *, agent_type: str | None = None,
+                           document_type: str | None = None,
+                           analysis_type: str | None = None) -> ChatMetadataRecord:
+        """Stamp the owning agent on a row that was created without it (for example by `POST /sessions`).
+
+        History resume reads `agent_type` to reopen the chat in the runtime that owns it. A value that is
+        already set is never overwritten; a conditional failure returns the latest record.
+        """
+        fields = {"agent_type": agent_type, "document_type": document_type, "analysis_type": analysis_type}
+        if all(value is None for value in fields.values()):
+            raise ValueError("no routing fields to initialize")
+        return self._fill_missing(user_id, session_id, fields)
+
+    def _fill_missing(self, user_id: str, session_id: str, fields: dict[str, Any]) -> ChatMetadataRecord:
         names = {"#uid": "user_id"}
         values: dict[str, Any] = {":null": None}
         sets, checks = [], ["attribute_exists(#uid)"]
-        for field, value in (("mode", mode), ("model_id", model_id)):
+        for field, value in fields.items():
             if value is not None:
                 names[f"#{field}"] = field
                 values[f":{field}"] = value
