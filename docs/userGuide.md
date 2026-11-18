@@ -28,9 +28,7 @@ CEI Life Sciences Bot will be an AI-powered assistant for life sciences research
 3. User verifies their email address.
 4. There is no MFA step (B14).
 
-![Sign up](./media/step-1-signup.png)
-
-> **[PLACEHOLDER]** Screenshot of the sign-up screen.
+> **TO DO (project team):** Add screenshot `docs/media/step-1-signup.png` (the sign-up screen).
 
 ---
 
@@ -49,9 +47,7 @@ When the list of four agents shows:
 
 The list stays valid for 10 minutes. After that, the chat shows "This request has expired. Start again." Send your message again.
 
-![Start a chat](./media/step-2-start-chat.png)
-
-> **[PLACEHOLDER]** Screenshot of the chat start screen.
+> **TO DO (project team):** Add screenshot `docs/media/step-2-start-chat.png` (the chat start screen).
 
 ---
 
@@ -68,9 +64,7 @@ To select a model for a chat:
 
 After the chat starts, the model is locked. The control shows "The model is fixed when the chat starts." To use a different model, start a new chat. You can pick any model in the list, not only Anthropic models. Prompt caching (a cost and speed feature) only works on some models (Claude 3.5 Haiku, Claude 3.7 Sonnet, Claude 4 and later, and Amazon Nova); other models still work, just without that feature.
 
-![Mode and model picker](./media/step-3-mode-model.png)
-
-> **[PLACEHOLDER]** Screenshot of the mode/model controls, once built.
+> **TO DO (project team):** Add screenshot `docs/media/step-3-mode-model.png` (the mode and model picker controls).
 
 ---
 
@@ -84,9 +78,7 @@ While the agent works, the user sees:
 - A live token/cost counter.
 - The answer itself streaming in, piece by piece, with a "verifying citations" state on tables/charts/statistics until grounding finishes.
 
-![Thinking block](./media/step-4-thinking-block.png)
-
-> **[PLACEHOLDER]** Screenshot of an in-progress answer with the thinking block expanded.
+> **TO DO (project team):** Add screenshot `docs/media/step-4-thinking-block.png` (an in-progress answer with the thinking block expanded).
 
 ---
 
@@ -96,9 +88,7 @@ While the agent works, the user sees:
 2. The file becomes available only within that chat.
 3. The agent retrieves relevant chunks from the file automatically as part of its research, rather than reading the whole file into context. CSV files are also available to the Code Interpreter; images are also available directly to models that support vision.
 
-![Attachments](./media/step-5-attachments.png)
-
-> **[PLACEHOLDER]** Screenshot of the attachment upload UI, once built.
+> **TO DO (project team):** Add screenshot `docs/media/step-5-attachments.png` (the attachment upload UI, once built).
 
 ---
 
@@ -121,9 +111,7 @@ The question card also shows on a streamed Research answer.
 
 Some agents pause mid-task to ask the user a question — for example, Research asking for clarification when no data source clearly fits, or Drafting asking for outline approval before writing a full draft. The chat shows "waiting for you" with no fixed time limit — the user can take as long as they need. If a paused question is left unanswered for a very long time (on the order of a year), it eventually expires; the chat then shows "expired, start again" and the user restarts that task. In normal use, the user answers with a multiple-choice pick or free text well before that, and the agent resumes exactly where it paused.
 
-![HITL question](./media/step-6-hitl.png)
-
-> **[PLACEHOLDER]** Screenshot of a HITL question surface.
+> **TO DO (project team):** Add screenshot `docs/media/step-6-hitl.png` (a HITL question surface).
 
 ---
 
@@ -133,9 +121,7 @@ Today only Pipeline Manager runs are background jobs. The jobs routes exist, and
 
 For a request predicted to take longer than 10 minutes (or any multi-agent pipeline), the agent hands the work off to a background job. This choice is made once, before the agent starts answering — a request already streaming an answer never switches to a background job partway through. The user sees the job in a jobs list, and a dedicated `/pipeline` view for pipeline jobs shows live step status as the job progresses. The user is notified only inside the dashboard — there is no email notification.
 
-![Jobs list](./media/step-7-jobs.png)
-
-> **[PLACEHOLDER]** Screenshot of the jobs list / pipeline view.
+> **TO DO (project team):** Add screenshot `docs/media/step-7-jobs.png` (the jobs list / pipeline view).
 
 ---
 
@@ -148,9 +134,7 @@ The chat shows a list of the session's reports with download links (`GET /sessio
 3. User checks the box "I have reviewed this output." The Export button stays disabled until the box is checked. This acknowledgment is logged.
 4. User downloads the file from a time-limited link.
 
-![Export](./media/step-8-export.png)
-
-> **[PLACEHOLDER]** Screenshot of the export dialog, once built.
+> **TO DO (project team):** Add screenshot `docs/media/step-8-export.png` (the export dialog, once built).
 
 ---
 
@@ -169,9 +153,7 @@ Note: a new chat with no model selected now uses your saved default model. If th
 
 Users can set their default model and mode, and can optionally add their own API key for a data source (for example NCBI) to get a higher rate limit, or configure additional paid sources. API keys are never shown back to the user once saved.
 
-![Settings](./media/step-9-settings.png)
-
-> **[PLACEHOLDER]** Screenshot of the settings page, once built.
+> **TO DO (project team):** Add screenshot `docs/media/step-9-settings.png` (the settings page, once built).
 
 ---
 
@@ -179,9 +161,7 @@ Users can set their default model and mode, and can optionally add their own API
 
 A user can delete their entire account: everything, including chat history, trace, attachments, Knowledge Base chunks, checkpoints, long-term memories, and stored API keys. There is no way to delete a single chat; a chat stays until the whole account is deleted. Deleting the account signs the user out everywhere and blocks any new chat right away; the dashboard shows the account as gone at once, and the underlying data is fully removed within about 9 hours.
 
-![Delete](./media/step-10-delete.png)
-
-> **[PLACEHOLDER]** Screenshot of the delete confirmation, once built.
+> **TO DO (project team):** Add screenshot `docs/media/step-10-delete.png` (the delete confirmation, once built).
 
 ---
 

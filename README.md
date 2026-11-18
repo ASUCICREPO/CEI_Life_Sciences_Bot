@@ -1,10 +1,6 @@
-# [INSERT_PROJECT_NAME]
+# CEI Life Sciences Bot
 
-[INSERT_PROJECT_DESCRIPTION - 2-3 sentences describing what the project does, who it's for, and the key problem it solves]
-
----
-
-> **🚀 New to this template?** Start with the [GETTING_STARTED.md](./GETTING_STARTED.md) guide for setup instructions and best practices.
+CEI Life Sciences Bot is an AI-powered assistant for life sciences researchers and founders. It gives each user deep research across public life sciences data sources, document drafting (grants, VC decks, journal articles, whitepapers), competitor and market analysis, and multi-step agent pipelines, all from one chat-based dashboard. It solves the problem of searching many separate scientific databases and drafting tools by hand, by bringing research, drafting, and analysis into one guided interface backed by Amazon Bedrock AgentCore.
 
 ---
 
@@ -34,9 +30,7 @@ All work produced is open source. More information can be found in the GitHub re
 
 ## Visual Demo
 
-![User Interface Demo](./docs/media/user-interface.gif)
-
-> **[PLACEHOLDER]** Please provide a GIF or screenshot of the application interface and save it as `docs/media/user-interface.gif`
+> **TO DO (project team):** Add a GIF or screenshot of the dashboard as `docs/media/user-interface.gif`, then add the image link here.
 
 ---
 
@@ -44,7 +38,6 @@ All work produced is open source. More information can be found in the GitHub re
 
 | Index                                               | Description                                              |
 | :-------------------------------------------------- | :------------------------------------------------------- |
-| [**Getting Started Guide**](./GETTING_STARTED.md)  | **Setup instructions and best practices for this template** |
 | [High Level Architecture](#high-level-architecture) | High level overview illustrating component interactions  |
 | [Deployment Guide](#deployment-guide)               | How to deploy the project                                |
 | [User Guide](#user-guide)                           | End-user instructions and walkthrough                    |
@@ -52,7 +45,6 @@ All work produced is open source. More information can be found in the GitHub re
 | [Directories](#directories)                         | General project directory structure                      |
 | [Modification Guide](#modification-guide)           | Guide for developers extending the project               |
 | [Troubleshooting](#troubleshooting)                 | Common issues and solutions                              |
-| [Removing Commit History](#removing-commit-history) | Steps to clean commit history when using as a template   |
 | [Credits](#credits)                                 | Contributors and acknowledgments                         |
 | [License](#license)                                 | License information                                      |
 
@@ -60,39 +52,13 @@ All work produced is open source. More information can be found in the GitHub re
 
 ## High Level Architecture
 
-[INSERT_ARCHITECTURE_OVERVIEW - Brief paragraph explaining the architecture, how components interact, and the overall system design]
-
 ![Architecture Diagram](./docs/media/architecture.png)
 
-> **[PLACEHOLDER]** Please create and provide an architecture diagram showing:
-> - All major components/services
-> - Data flow between components
-> - User interaction points
-> - External services/APIs
-> 
-> Save the diagram as `docs/media/architecture.png` (or .jpeg/.jpg)
+**Note:** this diagram shows an earlier design and is not updated. See [Architecture Deep Dive](./docs/architectureDeepDive.md) for the current target and the "Differences from the diagram" section there for what changed.
 
-For a detailed explanation of the architecture and architectural decisions, see the [Architecture Deep Dive](./docs/architectureDeepDive.md).
+Today the deployed stack serves the dashboard as a static single-page app from Amazon S3 behind CloudFront and AWS WAF, with Amazon Cognito handling self-service sign-up (with an email-domain allowlist) and login. A single Regional REST API Gateway exposes the session, jobs, exports, models, and settings routes, plus a streaming route for live chat. A Node.js Session Runner Lambda relays that stream, and a Session Router Lambda sends each request to the right specialist agent — Research, Drafting, Analysis, or Pipeline Manager — each running on Amazon Bedrock AgentCore Runtime. The agents reach 12 public life sciences data sources plus NCBI through an AgentCore Gateway with Cedar access policies, and a deterministic Biopython/RDKit Lambda for lab calculations. DynamoDB stores session metadata, chat history, and background jobs; CloudWatch alarms and an SNS topic notify an admin email on errors and security events.
 
----
-
-## AI-DLC Development Workflow
-
-This project was built using **AI-DLC (AI Development Lifecycle)**, a structured workflow that guides AI through requirements → design → implementation → testing.
-
-**For developers working on this project:**
-- See [AI-DLC Documentation](./ai_dlc_files.md) for complete details on:
-  - How to use AI-DLC for new features
-  - Writing effective prompts
-  - Understanding generated documentation in `aidlc-docs/`
-  - Adding custom development rules
-
-**Quick Start:**
-```
-using AI-DLC: [describe your feature or change]
-```
-
-> **Note**: Remove this section before production deployment.
+Several parts of the target architecture are still planned, not yet built: file attachments with a Knowledge Base for retrieval, long-term memory for every agent (today only Research uses it), user-owned API keys, account deletion (built, but behind a flag that is off by default), and full progressive streaming for every agent (today only Research streams its answer; the other agents return one completed response). See the [Architecture Deep Dive](./docs/architectureDeepDive.md) for the exact status of every component.
 
 ---
 
@@ -101,9 +67,9 @@ using AI-DLC: [describe your feature or change]
 For complete deployment instructions, see the [Deployment Guide](./docs/deploymentGuide.md).
 
 **Quick Start:**
-1. [INSERT_QUICK_START_STEP_1]
-2. [INSERT_QUICK_START_STEP_2]
-3. [INSERT_QUICK_START_STEP_3]
+1. Sign in to the target AWS account with the AWS CLI (v2), and have Node.js 20+ and git available. See the Deployment Guide's Prerequisites section for the exact IAM permissions `deploy.sh` needs.
+2. From the repo root, run `./deploy.sh` and answer the prompts (Region, default/router/blocked Bedrock models, allowed sign-up email domains, admin alert email), or pass them as flags. `deploy.sh` starts a CodeBuild build that builds the frontend, bootstraps CDK, and deploys the stacks — no build step runs on your machine.
+3. When the build finishes, open the printed `SiteUrl` output in a browser and sign up with an email address in an allowed domain.
 
 ---
 
@@ -130,106 +96,73 @@ For developers looking to extend or modify this project, see the [Modification G
 ```
 ├── backend/
 │   ├── bin/
-│   │   └── backend.ts
-│   ├── lambda/
-│   │   └── [INSERT_LAMBDA_FUNCTIONS]
+│   │   └── backend.ts          # CDK app entry point
 │   ├── lib/
-│   │   └── backend-stack.ts
-│   ├── agent/
-│   │   └── [INSERT_AGENT_FILES]
-│   ├── cdk.json
-│   ├── package.json
-│   └── tsconfig.json
+│   │   ├── backend-stack.ts    # main stack: API, Lambdas, Cognito, data stores, agent runtimes
+│   │   ├── edge-waf-stack.ts   # CLOUDFRONT-scope WAF web ACL (always us-east-1)
+│   │   └── constructs/         # one file per construct (agent runtimes, tool gateway, session router,
+│   │                           # background jobs, life sciences operations, observability, ...)
+│   ├── lambdas/                # Lambda handlers: session/jobs/exports/models APIs, one per data source,
+│   │                           # lsops, auth triggers, session runner/router, ui-actions, watchdog, ...
+│   ├── agents/                 # LangGraph agent code: research/, drafting/, analysis/, pipeline_manager/,
+│   │                           # tool_agent/, shared/, and the local AgentCore CLI project (agentcore/)
+│   ├── test/                   # Jest tests for the CDK stacks and constructs
+│   ├── scripts/                # preflight.ts: Region/service capability check run inside CodeBuild
+│   ├── cdk.json, package.json, tsconfig.json
 ├── frontend/
-│   ├── app/
-│   │   ├── layout.tsx
-│   │   ├── page.tsx
-│   │   └── globals.css
-│   ├── public/
+│   ├── src/                    # founder-ai-dashboard Vite SPA (React 19, Tailwind 4, react-router)
+│   ├── public/                 # static assets, config.example.json
 │   └── package.json
-├── docs/
-│   ├── architectureDeepDive.md
-│   ├── deploymentGuide.md
-│   ├── userGuide.md
-│   ├── APIDoc.md
-│   ├── modificationGuide.md
-│   └── media/
-│       ├── architecture.png
-│       └── user-interface.gif
+├── archive/
+│   └── frontend-next/          # archived Next.js test harness (not deployed), kept for reference
+├── docs/                       # human-facing documentation (this file links to all of it)
+│   └── media/                  # images used in the docs
+├── .agents/                    # agent-facing planning: decision-log.md, roadmap.md, specs/, phases/
+├── deploy.sh                   # guided deployment script
+├── buildspec*.yml              # CodeBuild build specs
 ├── LICENSE
 └── README.md
 ```
 
 ### Directory Explanations:
 
-1. **backend/** - Contains all backend infrastructure and serverless functions
-   - `bin/` - CDK app entry point
-   - `lambda/` - AWS Lambda function handlers
-   - `lib/` - CDK stack definitions
-   - `agent/` - [INSERT_AGENT_DESCRIPTION]
+1. **backend/** — AWS CDK (TypeScript) infrastructure and the Python/Node.js serverless functions and agents
+   - `bin/` — CDK app entry point
+   - `lib/` — the two CDK stacks (`BackendStack`, `EdgeWafStack`) and their constructs
+   - `lambdas/` — one directory per Lambda function: session, jobs, exports, models/settings APIs, one
+     handler per data source, Life Sciences Operations, Cognito triggers, the Session Runner/Router,
+     `ui-actions`, and the background-job watchdog
+   - `agents/` — the real LangGraph agent code for Research, Drafting, Analysis, Pipeline Manager, and the
+     tool-agent profiles, run locally today through the AgentCore CLI
+   - `test/` — Jest tests for the CDK stacks and constructs
 
-2. **frontend/** - Next.js frontend application
-   - `app/` - Next.js App Router pages and layouts
-   - `public/` - Static assets
+2. **frontend/** — the `founder-ai-dashboard` Vite SPA, the production frontend
+   - `src/` — React 19 components, pages, and the CEI UI / streaming client code
+   - `public/` — static assets and the runtime `config.example.json`
 
-3. **docs/** - Project documentation
-   - `media/` - Images, diagrams, and GIFs for documentation
+3. **archive/frontend-next/** — the archived Next.js test harness that preceded the Vite SPA; kept for
+   reference only and not deployed
+
+4. **docs/** — project documentation
+   - `media/` — images, diagrams, and GIFs for documentation
+
+5. **.agents/** — agent-facing planning and specs (decision log, roadmap, detailed specs, and one file per
+   build phase); this is the working source of truth during active development, see
+   [Modification Guide](./docs/modificationGuide.md)
 
 ---
 
 ## Troubleshooting
 
-### MCP Servers Not Connecting
-
-**Issue**: MCP servers show "Disconnected" status in Kiro
-
-**Solutions**:
-1. Verify `uv` and `uvx` are installed: `uvx --version`
-2. Check AWS credentials: `aws sts get-caller-identity`
-3. Update AWS profile in `.kiro/settings/mcp.json`
-4. Restart Kiro or reconnect servers from MCP Server view
-
-### Spec Generation Fails
-
-**Issue**: Kiro fails to create specification documents
-
-**Solutions**:
-1. Ensure you're in **Autopilot mode** (required for subagent delegation)
-2. Verify scope documents are readable and well-formatted
-3. Check that `.kiro/agents/cic-project-specs.md` exists
-4. Try with a simpler project description first
-
-### Subagent Not Delegating
-
-**Issue**: Kiro implements code directly instead of delegating to subagents
-
-**Solutions**:
-1. Confirm you're in **Autopilot mode**
-2. Use clear domain keywords (backend, frontend, deploy, security)
-3. Explicitly request: "Use cic-backend agent to implement this"
-4. Check `.kiro/steering/main-agent-orchestration.md` is present
-
 ### CDK Deployment Fails
 
-**Issue**: `cdk deploy` fails with errors
+**Issue**: the deployment started by `./deploy.sh` fails
 
 **Solutions**:
-1. Run `cdk synth` first to check for issues
-2. Verify AWS credentials: `aws sts get-caller-identity`
-3. Check cdk-nag findings and address or suppress them
-4. Ensure CDK is bootstrapped: `cdk bootstrap`
-5. Review CloudFormation events in AWS Console
-
-### Amplify Build Fails
-
-**Issue**: Amplify build fails after deployment
-
-**Solutions**:
-1. Check `AMPLIFY_MONOREPO_APP_ROOT` is set to `frontend`
-2. Verify `buildSpec` in CDK matches your project structure
-3. Check Amplify build logs in AWS Console
-4. Ensure Next.js version is 12-15 (not 16+)
-5. Verify environment variables are set on the branch
+1. Open the CodeBuild console log URL that `deploy.sh` prints (or that it prints again on failure) — every build step (`npm ci`, the Region pre-flight, the frontend build, `cdk bootstrap`, `cdk deploy`) runs there, not on your machine.
+2. Check the pre-flight output in the build log: it fails fast if the chosen Region is missing a required service (AgentCore Runtime/Gateway/Memory/Policy, S3 Vectors, Bedrock Knowledge Bases) or if a selected Bedrock model is not available/entitled there.
+3. Check cdk-nag findings in the build log and address or suppress them with an ADR-format reason.
+4. Verify your AWS credentials have the permissions listed in the Deployment Guide's Prerequisites section (`deploy.sh` only needs IAM/CodeBuild/Secrets Manager/read-only CloudFormation permissions locally; `cdk bootstrap` and `cdk deploy` run under the CodeBuild role instead).
 
 ### Frontend Can't Connect to Backend
 
@@ -256,35 +189,15 @@ For developers looking to extend or modify this project, see the [Modification G
 **Issue**: cdk-nag or security scans report violations
 
 **Solutions**:
-1. Review findings and fix resource configurations
-2. Add suppressions with ADR-format reasons if intentional
-3. Consult `.kiro/steering/security/` files for guidance
-4. Use `cic-security` agent to review and fix issues
+1. Review findings and fix resource configurations.
+2. Add suppressions with ADR-format reasons if intentional: `ADR: <title> | Rationale: <why> | Alternative: <rejected>`.
+3. Use the `cic-security` agent, or run `/cic-security-check`, to review and fix issues.
 
 ### Need More Help?
 
-- **Kiro Documentation**: Check `.kiro/README.md` for MCP and Power setup
-- **Steering Files**: Review `.kiro/steering/` for domain-specific guidance
-- **AWS Documentation**: Use AWS documentation MCP server for latest info
-- **GitHub Issues**: File issues in this repository for template problems
-
----
-
-## Removing Commit History
-
-When using this as a template for a new repo, you can strip the entire commit history to start fresh with a single initial commit:
-
-```bash
-git checkout --orphan fresh-start
-git add -A
-git commit -m "Initial commit"
-git remote add new-origin https://github.com/REPO_OWNER/REPO_NAME.git
-git branch -D main
-git branch -m main
-git push origin main --force
-```
-
-> **Warning:** `--force` rewrites the remote branch history. Only do this on a repo you own and before collaborators have cloned it.
+- **Operations**: see [Operations](./docs/operations.md) for monitoring and known validation gaps.
+- **Observability**: see [Observability](./docs/observability.md) for alarms and dashboards.
+- **GitHub Issues**: file issues in this repository for bugs or questions.
 
 ---
 
@@ -292,11 +205,10 @@ git push origin main --force
 
 This application was developed by:
 
-- <a href="[INSERT_LINKEDIN_URL]" target="_blank">[INSERT_CONTRIBUTOR_NAME_1]</a>
-- <a href="[INSERT_LINKEDIN_URL]" target="_blank">[INSERT_CONTRIBUTOR_NAME_2]</a>
-- <a href="[INSERT_LINKEDIN_URL]" target="_blank">[INSERT_CONTRIBUTOR_NAME_3]</a>
+- <a href="https://github.com/RETR0-OS" target="_blank">RETR0-OS</a>
+- <a href="https://github.com/sreeram2001" target="_blank">sreeram2001</a>
 
-[INSERT_ADDITIONAL_ACKNOWLEDGMENTS - Teams, supporters, or organizations to acknowledge]
+> **TO DO (project team):** Replace these with full names and LinkedIn links, and add acknowledgments (for example ASU CIC and AWS).
 
 ---
 
