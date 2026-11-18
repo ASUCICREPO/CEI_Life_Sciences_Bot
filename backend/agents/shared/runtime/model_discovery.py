@@ -27,7 +27,7 @@ _PROFILE_PREFIXES = ("us.", "eu.", "apac.", "global.")
 # ADR: restrict discovery to models the agents can Converse with tool use | picker and
 # write-time validation must only ever surface models these tool-using agents can run.
 # Source: AWS Bedrock "Supported models and model features" (Converse API tool use column),
-# checked 2026-11-10. Patterns match the base foundation-model id (fnmatch).
+# checked 2026-11-18. Patterns match the base foundation-model id (fnmatch).
 _TOOL_CAPABLE_MODEL_ID_PATTERNS = (
     "anthropic.claude-*",
     "amazon.nova-*",  # nova canvas/reel/sonic are excluded by the TEXT-modality check below
@@ -44,6 +44,11 @@ _TOOL_CAPABLE_MODEL_ID_PATTERNS = (
     "writer.palmyra-x*",
     "qwen.*",
     "openai.gpt-oss-*",
+    "google.gemma-*-it",  # "-it" (instruction-tuned) only; "-pt" (pretrained) variants have no tool use
+    "moonshotai.kimi-*",
+    "moonshot.kimi-*",  # Bedrock has listed Kimi under both "moonshotai." and "moonshot." id prefixes
+    "zai.glm-*",
+    "xai.grok-*",
 )
 
 
@@ -95,12 +100,25 @@ def _foundation_model_labels(client: Any) -> dict[str, str]:
 
 
 def _profile_underlying_model(summary: dict[str, Any]) -> str | None:
-    """The one foundation model a profile summary already names, if exactly one."""
+    """The one foundation model a profile targets, if exactly one.
+
+    A cross-Region profile lists one model ARN per Region it routes to (for example us-east-1,
+    us-east-2 and us-west-2), all for the same foundation model. Resolve it when every ARN names the
+    same model id; a profile whose ARNs name different models stays unresolved (fail closed).
+    """
+    # ADR: accept one model id across many Region ARNs | Rationale: real SYSTEM_DEFINED us./global.
+    # profiles list a model ARN per Region; "exactly one ARN" rejected every cross-Region profile
+    # (checked live 2026-11-18) | Alternative: first ARN only rejected -- would hide a mixed-model profile
     models = summary.get("models")
-    if not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict):
+    if not isinstance(models, list) or not models:
         return None
-    arn = models[0].get("modelArn")
-    return arn.rsplit("/", 1)[-1] if isinstance(arn, str) and "/" in arn else None
+    ids = set()
+    for entry in models:
+        arn = entry.get("modelArn") if isinstance(entry, dict) else None
+        if not isinstance(arn, str) or "/" not in arn:
+            return None
+        ids.add(arn.rsplit("/", 1)[-1])
+    return ids.pop() if len(ids) == 1 else None
 
 
 def _resolve_profile(client: Any, profile_id: str) -> str | None:
