@@ -4,9 +4,10 @@ from __future__ import annotations
 import os
 
 from textual import work
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Select, Static
 
+from ..widgets import DropDown
 from .base import WizardScreen
 from .basics import BasicsScreen
 
@@ -29,36 +30,46 @@ def _available_regions(session_factory) -> list:
 
 
 class StartScreen(WizardScreen):
+    HINT = "Tab/Down next · Shift+Tab/Up back · Left/Right between buttons · Enter press/open · Ctrl+Q quit"
+
     def compose(self):
-        yield Static("CEI Life Sciences Bot — Guided Deployment", id="title")
+        yield Static("Step 1 of 5 · AWS account and Region", id="title")
         yield Static("Looking up your AWS identity...", id="identity-line")
+        saved = self._has_saved_config()
         with VerticalScroll(id="start-body"):
-            if self.wizard.cfg.region:
-                saved_notice = "Found a saved configuration for Region %s." % self.wizard.cfg.region
-            else:
-                saved_notice = ""
-            if self._has_saved_config():
-                yield Static(saved_notice, id="saved-notice")
+            if saved:
+                yield Static(
+                    "Saved settings found for Region %s. Redeploy them as they are, or change them."
+                    % self.wizard.cfg.region,
+                    id="saved-notice",
+                )
                 with Horizontal(id="saved-actions"):
                     yield Button("Redeploy with saved settings", id="redeploy", variant="primary")
                     yield Button("Change settings", id="change-settings")
-            yield Static("AWS Region to deploy into:")
-            default_region = self.wizard.cfg.region or os.environ.get("AWS_REGION") or os.environ.get(
-                "AWS_DEFAULT_REGION"
-            ) or "us-east-1"
-            regions = _available_regions(self.wizard_app.session_factory)
-            if default_region not in regions:
-                regions = [default_region] + regions
-            yield Select(
-                [(r, r) for r in regions], value=default_region, id="region-select", allow_blank=False,
-            )
-            yield Button("Continue", id="continue", variant="primary")
+            # ADR: the Region picker is hidden behind "Change settings" when a saved config exists |
+            # Rationale: users saw two competing primary actions on one screen; "Change settings" now
+            # also confirms the Region, so the Region pre-fetch always starts (it was skipped before)
+            with Vertical(id="region-section", classes="hidden" if saved else ""):
+                yield Static("AWS Region to deploy into (Enter opens the list):", id="region-label")
+                default_region = self.wizard.cfg.region or os.environ.get("AWS_REGION") or os.environ.get(
+                    "AWS_DEFAULT_REGION"
+                ) or "us-east-1"
+                regions = _available_regions(self.wizard_app.session_factory)
+                if default_region not in regions:
+                    regions = [default_region] + regions
+                yield DropDown(
+                    [(r, r) for r in regions], value=default_region, id="region-select", allow_blank=False,
+                )
+                yield Button("Continue", id="continue", variant="primary")
+        yield Horizontal(Static(self.HINT, id="key-hints"), id="nav-footer")
 
     def _has_saved_config(self) -> bool:
         return bool(self.wizard_app._has_saved_config)
 
     def on_mount(self) -> None:
         self._load_identity()
+        first = "#redeploy" if self._has_saved_config() else "#region-select"
+        self.query_one(first).focus()
 
     @work(thread=True, exclusive=True)
     def _load_identity(self) -> None:
@@ -88,7 +99,8 @@ class StartScreen(WizardScreen):
 
             self.app.push_screen(ReviewScreen())
         elif event.button.id == "change-settings":
-            self.app.push_screen(BasicsScreen())
+            self.query_one("#region-section").remove_class("hidden")
+            self.query_one("#region-select", Select).focus()
         elif event.button.id == "continue":
             select = self.query_one("#region-select", Select)
             region = select.value

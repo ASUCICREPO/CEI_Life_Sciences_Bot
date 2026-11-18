@@ -118,3 +118,49 @@ Collapsible {
 #summary {
     padding-bottom: 1;
 }
+
+/* ---- Keyboard focus and key hints -------------------------------------------------------- */
+/* ADR: one strong focus colour on every control | Rationale: in CloudShell users could not tell
+   which button or field had focus; primary buttons were the same blue as the focus ring.
+   Unfocused buttons are now neutral, and the focused control (any kind) is the accent colour. */
+
+Button {
+    background: $panel-lighten-1;
+    color: $text;
+}
+
+Button.-primary {
+    background: $primary-darken-2;
+    text-style: bold;
+}
+
+Button:focus, Button.-primary:focus {
+    background: $accent;
+    color: $background;
+    text-style: bold;
+}
+
+Input:focus {
+    background: $accent 25%;
+}
+
+Select:focus > SelectCurrent {
+    background: $accent 25%;
+}
+
+CheckList:focus {
+    border: round $accent;
+}
+
+#region-section {
+    height: auto;
+}
+
+#key-hints {
+    width: 1fr;
+    height: 1;
+    color: $text-muted;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
+}

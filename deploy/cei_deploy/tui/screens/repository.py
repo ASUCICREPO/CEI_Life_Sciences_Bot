@@ -7,12 +7,13 @@ from textual.widgets import Button, Checkbox, Collapsible, Input, Select, Static
 
 from ...config import REPOSITORY_BRANCH_PATTERN, REPOSITORY_URL_PATTERN, TOOL_POLICY_MODES
 from ...git_info import to_https_github_url
+from ..widgets import DropDown
 from .base import WizardScreen
 
 
 class RepositoryScreen(WizardScreen):
     def compose(self):
-        yield Static("Repository", id="title")
+        yield Static("Step 4 of 5 · Repository and advanced settings", id="title")
         with VerticalScroll(id="repo-body"):
             yield Static("GitHub repository URL:")
             yield Input(
@@ -34,7 +35,7 @@ class RepositoryScreen(WizardScreen):
                 yield Static("Max concurrent background runs per user:")
                 yield Input(value=str(self.wizard.cfg.limits.maxBackgroundRunsPerUser), id="max-background")
                 yield Static("Tool Gateway policy mode:")
-                yield Select(
+                yield DropDown(
                     [(m, m) for m in TOOL_POLICY_MODES], value=self.wizard.cfg.toolPolicyMode,
                     allow_blank=False, id="tool-policy-mode",
                 )

@@ -16,7 +16,7 @@ def _domain_of(email: str) -> str:
 
 class BasicsScreen(WizardScreen):
     def compose(self):
-        yield Static("Basics", id="title")
+        yield Static("Step 2 of 5 · Admin contact and sign-up", id="title")
         with VerticalScroll(id="basics-body"):
             yield Static("Admin alert email address:")
             yield Input(value=self.wizard.cfg.adminEmail, placeholder="you@example.com", id="admin-email")

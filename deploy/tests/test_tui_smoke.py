@@ -143,3 +143,146 @@ async def test_private_repo_without_token_blocks_real_run(tmp_path):
         await pilot.pause()
         assert app.screen.__class__.__name__ == "ReviewScreen"
         assert app.wizard.pat_token == "ghp_test_token"
+
+
+def _linked_prefetcher():
+    prefetcher = FakePrefetcher()
+    sonnet = "anthropic.claude-sonnet-x"
+    haiku = "anthropic.claude-haiku-x"
+    prefetcher._discovery = models.DiscoveryResult(
+        global_items=[
+            models.ModelItem("global." + sonnet, "Global Sonnet", sonnet, "Anthropic"),
+            models.ModelItem("global." + haiku, "Global Haiku", haiku, "Anthropic"),
+        ],
+        us_items=[
+            models.ModelItem("us." + sonnet, "US Sonnet", sonnet, "Anthropic"),
+            models.ModelItem("us." + haiku, "US Haiku", haiku, "Anthropic"),
+        ],
+        all_backend_ids=[sonnet, haiku],
+        default_model_id="global." + haiku,
+        router_model_id="global." + haiku,
+    )
+    return prefetcher
+
+
+async def _press_until(pilot, key, predicate, limit=15):
+    for _ in range(limit):
+        if predicate():
+            return True
+        await pilot.press(key)
+        await pilot.pause()
+    return predicate()
+
+
+def _focused_id(app):
+    focused = app.screen.focused
+    return focused.id if focused is not None else None
+
+
+@pytest.mark.asyncio
+async def test_keyboard_only_flow(tmp_path):
+    """Arrow keys, Enter and Space alone take a user from Start to a finished dry run."""
+    (tmp_path / "backend").mkdir()
+    app = DeployApp(repo_root=tmp_path, dry_run=True, session_factory=_fake_session_factory,
+                    prefetcher=_linked_prefetcher())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        # Start: the Region dropdown has focus; Down must move past it (not open it).
+        assert _focused_id(app) == "region-select"
+        await pilot.press("down")
+        await pilot.pause()
+        assert _focused_id(app) == "continue"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Basics: Enter moves from field to field.
+        assert app.screen.__class__.__name__ == "BasicsScreen"
+        assert _focused_id(app) == "admin-email"
+        await pilot.press(*"admin@example.com")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _focused_id(app) == "email-domains"
+        assert await _press_until(pilot, "down", lambda: _focused_id(app) == "nav-back")
+        await pilot.press("right")
+        await pilot.pause()
+        assert _focused_id(app) == "nav-next"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Models: reach the Global list, uncheck the first model with Space, switch to US with Right.
+        for _ in range(20):
+            if app.wizard.discovery is not None:
+                break
+            await pilot.pause()
+        assert await _press_until(pilot, "tab", lambda: _focused_id(app) == "list-global")
+        await pilot.press("space")
+        await pilot.pause()
+        global_list = app.screen.query_one("#list-global")
+        us_list = app.screen.query_one("#list-us")
+        assert "global.anthropic.claude-sonnet-x" not in global_list.selected
+        await pilot.press("right")
+        await pilot.pause()
+        assert _focused_id(app) == "list-us"
+        assert "us.anthropic.claude-sonnet-x" not in us_list.selected  # linked by base model
+        await pilot.press("left")
+        await pilot.pause()
+        assert _focused_id(app) == "list-global"
+        assert await _press_until(pilot, "tab", lambda: _focused_id(app) == "nav-next", limit=25)
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Repository -> Review -> Dry run, keyboard only.
+        assert app.screen.__class__.__name__ == "RepositoryScreen"
+        for _ in range(10):
+            await pilot.pause()
+        assert await _press_until(pilot, "tab", lambda: _focused_id(app) == "nav-next", limit=25)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "ReviewScreen"
+        assert await _press_until(pilot, "tab", lambda: _focused_id(app) == "deploy", limit=10)
+        await pilot.press("enter")
+        for _ in range(40):
+            if app.exit_code is not None:
+                break
+            await pilot.pause()
+        # Esc on the first screen must never leave a blank screen.
+    assert app.exit_code == 0
+    assert app.wizard.cfg.blockedModelIds == ["anthropic.claude-sonnet-x"]
+
+
+@pytest.mark.asyncio
+async def test_saved_config_change_settings_confirms_region(tmp_path):
+    """With a saved config, "Change settings" opens the Region picker and Continue starts pre-fetch."""
+    from cei_deploy import config as config_mod
+
+    (tmp_path / "backend").mkdir()
+    cfg = config_mod.DeployConfig()
+    cfg.region = "us-west-2"
+    cfg.adminEmail = "admin@example.com"
+    cfg.allowedEmailDomains = ["example.com"]
+    cfg.defaultModelId = "global.anthropic.claude-sonnet-x"
+    cfg.routerModelId = "global.anthropic.claude-sonnet-x"
+    config_mod.save(cfg, config_mod.default_config_path(tmp_path))
+
+    prefetcher = FakePrefetcher()
+    app = DeployApp(repo_root=tmp_path, dry_run=True, session_factory=_fake_session_factory, prefetcher=prefetcher)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        assert _focused_id(app) == "redeploy"
+        assert not app.screen.query_one("#region-section").display
+        await pilot.press("right")
+        await pilot.pause()
+        assert _focused_id(app) == "change-settings"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.query_one("#region-section").display
+        assert _focused_id(app) == "region-select"
+        await pilot.press("escape")  # Esc on step 1 must not pop to a blank screen
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "StartScreen"
+        await pilot.press("down")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "BasicsScreen"
+        assert prefetcher.region_jobs("us-west-2") is not None

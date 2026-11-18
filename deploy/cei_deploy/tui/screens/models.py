@@ -11,12 +11,12 @@ from textual.widgets import (
 
 from ... import models as models_mod
 from ...config import MODEL_ID_PATTERN
-from ..widgets import CheckList
+from ..widgets import CheckList, DropDown
 from .base import WizardScreen
 
 NOTE_TEXT = (
-    "Global and US share one setting per model. Unchecked models are blocked in the app. "
-    "New models released later stay allowed."
+    "[✓] = available in the app. [ ] = blocked. Global and US share one setting per model. "
+    "Models that AWS releases later stay available."
 )
 
 
@@ -32,13 +32,32 @@ def _matches(item: "models_mod.ModelItem", needle: str) -> bool:
 
 
 class ModelsScreen(WizardScreen):
+    HINT = "Space check/uncheck · Left/Right switch tab · Tab next · Esc previous step"
+
+    def action_focus_next_button(self) -> None:
+        if not self._switch_tab_from_list("tab-us"):
+            super().action_focus_next_button()
+
+    def action_focus_previous_button(self) -> None:
+        if not self._switch_tab_from_list("tab-global"):
+            super().action_focus_previous_button()
+
+    def _switch_tab_from_list(self, tab_id: str) -> bool:
+        """Left/Right inside a model list switches the Global/US tab and keeps focus in a list."""
+        if not isinstance(self.focused, CheckList):
+            return False
+        self.query_one("#model-tabs", TabbedContent).active = tab_id
+        list_id = "#list-us" if tab_id == "tab-us" else "#list-global"
+        self.query_one(list_id, CheckList).focus()
+        return True
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._syncing = False
         self._displayed: Dict[str, List["models_mod.ModelItem"]] = {"global": [], "us": []}
 
     def compose(self):
-        yield Static("Models", id="title")
+        yield Static("Step 3 of 5 · Models", id="title")
         yield LoadingIndicator(id="models-loading")
         with VerticalScroll(id="models-error", classes="hidden"):
             yield Static("", id="models-error-text")
@@ -56,11 +75,11 @@ class ModelsScreen(WizardScreen):
             with Horizontal(id="select-actions"):
                 yield Button("Select all", id="select-all")
                 yield Button("Clear all", id="clear-all")
-            yield Static(NOTE_TEXT, id="models-note")
+            yield Static(NOTE_TEXT, id="models-note", markup=False)
             yield Static("Default model:")
-            yield Select([], id="default-model-select", allow_blank=True)
+            yield DropDown([], id="default-model-select", allow_blank=True)
             yield Static("Router (classifier) model:")
-            yield Select([], id="router-model-select", allow_blank=True)
+            yield DropDown([], id="router-model-select", allow_blank=True)
         yield Static("", id="error-message")
         yield self.footer_buttons()
 

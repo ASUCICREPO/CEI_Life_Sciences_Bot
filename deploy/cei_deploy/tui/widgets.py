@@ -3,19 +3,25 @@ from __future__ import annotations
 
 from rich.segment import Segment
 from rich.style import Style
+from textual.binding import Binding
 from textual.strip import Strip
-from textual.widgets import OptionList, SelectionList
+from textual.widgets import OptionList, Select, SelectionList
 from textual.widgets.option_list import OptionDoesNotExist
 
 
 class CheckList(SelectionList):
-    """A SelectionList that draws plain "[x]" / "[ ]" marks.
+    """A SelectionList that draws "[✓]" (available) / "[ ]" (blocked) marks.
 
-    ADR: plain ASCII marks, not Textual's half-block toggle | Rationale: SelectionList draws its
+    ADR: text marks, not Textual's half-block toggle | Rationale: SelectionList draws its
     check box with the half-block glyphs U+2590/U+258C, which many browser-terminal fonts (AWS
     CloudShell) render with gaps or at the wrong width, and it shows the checked state by colour
     only | Alternative: keep the stock widget (rejected: hard to read in CloudShell and in 256 colours)
     """
+
+    def on_focus(self) -> None:
+        # Highlight the first row on focus, so Space works at once (no row is highlighted by default).
+        if self.highlighted is None and self.option_count:
+            self.highlighted = 0
 
     def render_line(self, y: int) -> Strip:
         # ADR: skip SelectionList.render_line and build on OptionList's | Rationale: the stock method
@@ -29,6 +35,25 @@ class CheckList(SelectionList):
             return line
         base_style = next(iter(line)).style or self.rich_style
         checked = selection.value in self._selected
-        mark_style = base_style + Style(bold=checked, meta={"option": index})
-        mark = "[x] " if checked else "[ ] "
+        meta = Style(meta={"option": index})
+        if checked:
+            # ADR: a green check mark, not "x" | Rationale: user request -- a check reads as "this
+            # model will be available"; "x" reads as "removed" | U+2713 is in the common monospace
+            # fonts browser terminals use (CloudShell included)
+            mark_style = base_style + Style(bold=True, color="green") + meta
+            mark = "[✓] "
+        else:
+            mark_style = base_style + Style(dim=True) + meta
+            mark = "[ ] "
         return Strip([Segment(mark, mark_style), *line])
+
+
+class DropDown(Select, inherit_bindings=False):
+    """A Select that opens on Enter or Space only.
+
+    ADR: Up/Down do not open the list | Rationale: the stock Select opens on Up/Down too, so the
+    wizard's "Down = next field" key stopped at every dropdown | Alternative: keep stock bindings
+    (rejected: inconsistent with the key-hint bar)
+    """
+
+    BINDINGS = [Binding("enter,space", "show_overlay", "Open list", show=False)]
