@@ -1,6 +1,6 @@
 # Provisioned Resources — CEI Life Sciences Bot
 
-This page lists only what is **really deployed today** — through `backend/lib/backend-stack.ts` (CDK, run inside a CodeBuild build) and through `deploy.sh` itself (AWS CLI, outside CDK). All build steps (`npm ci`, the Region pre-flight, the frontend build, `cdk bootstrap`, `cdk deploy`) run in CodeBuild, not in `deploy.sh` (B91) — see [Deployment Guide](./deploymentGuide.md). For the full target architecture, and everything that is planned but not yet built, see [Architecture Deep Dive](./architectureDeepDive.md) and `.agents/specs/architecture.md`.
+This page lists only what is **really deployed today** — through `backend/lib/backend-stack.ts` (CDK, run inside a CodeBuild build) and through `deploy.sh` itself (the bash wrapper and the Python `deploy/cei_deploy` tool it launches, B111; boto3 calls, outside CDK). All build steps (`npm ci`, the Region pre-flight, the frontend build, `cdk bootstrap`, `cdk deploy`) run in CodeBuild, not in `deploy.sh` (B91) — see [Deployment Guide](./deploymentGuide.md). For the full target architecture, and everything that is planned but not yet built, see [Architecture Deep Dive](./architectureDeepDive.md) and `.agents/specs/architecture.md`.
 
 ---
 
@@ -54,9 +54,9 @@ Two stacks now exist: `BackendStack` (`backend/lib/backend-stack.ts`, deploys to
 
 No SQS queue, Bedrock Knowledge Base, or S3 Vectors index is in the stack yet. `backend/lambdas/delete-worker/` is a tested foundation only; no CDK resource uses it.
 
-## What `deploy.sh` creates outside CDK (F1, B87, B91)
+## What `deploy.sh` creates outside CDK (F1, B87, B91, B111)
 
-`deploy.sh` sets up the deployment pipeline itself with the AWS CLI, not with CDK. `deploy.sh` runs no build step itself (no `npm ci`, no pre-flight, no `cdk bootstrap`) — it only creates/updates these pipeline resources, then starts and polls a CodeBuild build that runs every build step (B91). These resources exist once `deploy.sh` has been run at least once against an account/Region:
+`deploy.sh` is a thin bash wrapper that launches `deploy/cei_deploy`, a Python Textual TUI (B111). The TUI sets up the deployment pipeline itself directly through boto3, not with CDK and not with the AWS CLI. Neither the wrapper nor the TUI runs any build step itself (no `npm ci`, no pre-flight, no `cdk bootstrap`) — the TUI only creates/updates these pipeline resources, then starts and polls a CodeBuild build that runs every build step (B91). These resources exist once the tool has been run at least once against an account/Region:
 
 | Resource | Service | Status | Notes |
 |---|---|---|---|
