@@ -6,6 +6,7 @@ from typing import Callable, List, Optional
 
 from textual.app import App
 from textual.binding import Binding
+from textual.scrollbar import ScrollBarRender
 
 from .. import config as config_mod
 from ..prefetch import Prefetcher
@@ -13,6 +14,13 @@ from .screens.start import StartScreen
 from .state import WizardState
 
 _CSS_PATH = str(Path(__file__).with_name("app.tcss"))
+
+# ADR: whole-cell scrollbar thumbs | Rationale: Textual draws sub-cell thumb ends with the partial
+# block glyphs U+2581-U+2587 / U+2589-U+258F, which AWS CloudShell's browser font draws as stray
+# bars; spaces keep a solid, cell-aligned thumb | Alternative: hide scrollbars (rejected: users lose
+# the cue that a screen scrolls)
+ScrollBarRender.VERTICAL_BARS = [" "] * len(ScrollBarRender.VERTICAL_BARS)
+ScrollBarRender.HORIZONTAL_BARS = [" "] * len(ScrollBarRender.HORIZONTAL_BARS)
 
 
 class DeployApp(App):

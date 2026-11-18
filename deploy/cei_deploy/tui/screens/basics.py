@@ -1,7 +1,7 @@
 """Screen 2: admin email and the allowed sign-up email domains."""
 from __future__ import annotations
 
-from textual.containers import Vertical
+from textual.containers import VerticalScroll
 from textual.widgets import Button, Input, Static
 
 from ...config import EMAIL_PATTERN
@@ -17,7 +17,7 @@ def _domain_of(email: str) -> str:
 class BasicsScreen(WizardScreen):
     def compose(self):
         yield Static("Basics", id="title")
-        with Vertical(id="basics-body"):
+        with VerticalScroll(id="basics-body"):
             yield Static("Admin alert email address:")
             yield Input(value=self.wizard.cfg.adminEmail, placeholder="you@example.com", id="admin-email")
             yield Static("Allowed sign-up email domains (comma-separated):")

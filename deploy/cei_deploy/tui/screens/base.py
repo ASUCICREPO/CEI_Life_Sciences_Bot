@@ -18,6 +18,14 @@ class WizardScreen(Screen):
 
     BINDINGS = [Binding("escape", "go_back", "Back", show=True)]
 
+    def on_mount(self) -> None:
+        # ADR: compact (borderless, one-row) inputs, selects and buttons on every screen | Rationale:
+        # the default "tall" borders use half-block glyphs that browser terminals (AWS CloudShell)
+        # draw with gaps, and each bordered widget costs 3 rows in a small CloudShell pane |
+        # Alternative: per-widget compact=True at each call site (rejected: easy to miss one)
+        for widget in self.query("Input, Select, Button"):
+            widget.compact = True  # type: ignore[attr-defined]
+
     def action_go_back(self) -> None:
         if len(self.app.screen_stack) > 1:
             self.app.pop_screen()

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 from textual import work
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Button, Select, Static
 
 from .base import WizardScreen
@@ -32,7 +32,7 @@ class StartScreen(WizardScreen):
     def compose(self):
         yield Static("CEI Life Sciences Bot — Guided Deployment", id="title")
         yield Static("Looking up your AWS identity...", id="identity-line")
-        with Vertical(id="start-body"):
+        with VerticalScroll(id="start-body"):
             if self.wizard.cfg.region:
                 saved_notice = "Found a saved configuration for Region %s." % self.wizard.cfg.region
             else:

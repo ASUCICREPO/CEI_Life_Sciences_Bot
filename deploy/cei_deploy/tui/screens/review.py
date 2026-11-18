@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from textual import work
-from textual.containers import Vertical
+from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Button, RichLog, Static
 
 from ... import config as config_mod
@@ -46,12 +46,18 @@ def _summary_lines(wizard) -> list:
 class ReviewScreen(WizardScreen):
     def compose(self):
         yield Static("Review & Deploy", id="title")
-        with Vertical(id="review-body"):
+        with VerticalScroll(id="review-body"):
             yield Static("Loading summary...", id="summary")
             yield RichLog(id="provision-log", wrap=True, highlight=False, markup=False)
-            deploy_label = "Dry run" if self.wizard.dry_run else "Deploy"
-            yield Button(deploy_label, id="deploy", variant="primary")
-        yield self.footer_buttons(next_label="Finish", show_back=True)
+        # ADR: Deploy lives in the docked footer, not the scrolling body | Rationale: in a 25-row
+        # CloudShell pane the summary pushes a body button below the fold, so users saw only "Back"
+        deploy_label = "Dry run" if self.wizard.dry_run else "Deploy"
+        yield Horizontal(
+            Button("Back", id="nav-back", variant="default"),
+            Button(deploy_label, id="deploy", variant="primary"),
+            Button("Finish", id="nav-next", variant="primary"),
+            id="nav-footer",
+        )
 
     def on_mount(self) -> None:
         self.query_one("#nav-next").display = False

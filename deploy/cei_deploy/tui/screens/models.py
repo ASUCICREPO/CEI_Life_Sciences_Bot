@@ -4,13 +4,14 @@ from __future__ import annotations
 from typing import Dict, List
 
 from textual import work
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import (
     Button, Input, LoadingIndicator, Select, SelectionList, Static, TabbedContent, TabPane,
 )
 
 from ... import models as models_mod
 from ...config import MODEL_ID_PATTERN
+from ..widgets import CheckList
 from .base import WizardScreen
 
 NOTE_TEXT = (
@@ -39,19 +40,19 @@ class ModelsScreen(WizardScreen):
     def compose(self):
         yield Static("Models", id="title")
         yield LoadingIndicator(id="models-loading")
-        with Vertical(id="models-error", classes="hidden"):
+        with VerticalScroll(id="models-error", classes="hidden"):
             yield Static("", id="models-error-text")
             yield Static("Default Bedrock model ID:")
             yield Input(value=self.wizard.cfg.defaultModelId, id="manual-default-model")
             yield Static("Router Bedrock model ID:")
             yield Input(value=self.wizard.cfg.routerModelId, id="manual-router-model")
-        with Vertical(id="models-body", classes="hidden"):
+        with VerticalScroll(id="models-body", classes="hidden"):
             yield Input(placeholder="Search models...", id="model-search")
             with TabbedContent(id="model-tabs"):
                 with TabPane("Global", id="tab-global"):
-                    yield SelectionList(id="list-global")
+                    yield CheckList(id="list-global")
                 with TabPane("US", id="tab-us"):
-                    yield SelectionList(id="list-us")
+                    yield CheckList(id="list-us")
             with Horizontal(id="select-actions"):
                 yield Button("Select all", id="select-all")
                 yield Button("Clear all", id="clear-all")

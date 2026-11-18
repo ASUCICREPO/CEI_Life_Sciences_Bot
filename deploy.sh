@@ -50,5 +50,12 @@ if [ ! -f "$STAMP_FILE" ] || [ "$(cat "$STAMP_FILE" 2>/dev/null)" != "$REQUIREME
   printf '%s' "$REQUIREMENTS_SHA" > "$STAMP_FILE"
 fi
 
+# ADR: COLORTERM=truecolor in AWS CloudShell when unset | Rationale: CloudShell's browser terminal
+# draws 24-bit colour but does not set COLORTERM, so Textual drops to 256 colours and its theme looks
+# washed out | Alternative: force it everywhere (rejected: real 256-colour terminals would break)
+case "${AWS_EXECUTION_ENV:-}" in
+  *CloudShell*) export COLORTERM="${COLORTERM:-truecolor}" ;;
+esac
+
 cd "$SCRIPT_DIR/deploy"
 exec "$VENV_PYTHON" -m cei_deploy "$@"

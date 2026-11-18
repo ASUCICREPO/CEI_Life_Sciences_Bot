@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from textual import work
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Button, Checkbox, Collapsible, Input, Select, Static, Switch
 
 from ...config import REPOSITORY_BRANCH_PATTERN, REPOSITORY_URL_PATTERN, TOOL_POLICY_MODES
@@ -13,7 +13,7 @@ from .base import WizardScreen
 class RepositoryScreen(WizardScreen):
     def compose(self):
         yield Static("Repository", id="title")
-        with Vertical(id="repo-body"):
+        with VerticalScroll(id="repo-body"):
             yield Static("GitHub repository URL:")
             yield Input(
                 value=self.wizard.cfg.repository.url, placeholder="https://github.com/org/repo", id="repo-url",
