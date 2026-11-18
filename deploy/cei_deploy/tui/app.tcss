@@ -1,0 +1,51 @@
+Screen {
+    layout: vertical;
+}
+
+#title {
+    text-style: bold;
+    padding: 1 2;
+    background: $primary;
+    color: $text;
+}
+
+#nav-footer {
+    dock: bottom;
+    height: 3;
+    align: right middle;
+    padding: 0 2;
+}
+
+#nav-footer Button {
+    margin-left: 1;
+}
+
+#error-message {
+    color: $error;
+    padding: 0 2;
+}
+
+.hidden {
+    display: none;
+}
+
+#start-body, #basics-body, #models-body, #models-error, #repo-body, #review-body {
+    padding: 1 2;
+}
+
+#model-tabs {
+    height: 16;
+}
+
+#select-actions Button {
+    margin-right: 1;
+}
+
+#provision-log {
+    height: 12;
+    border: round $primary;
+}
+
+#summary {
+    padding-bottom: 1;
+}
