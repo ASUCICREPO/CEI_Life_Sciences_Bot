@@ -1,0 +1,161 @@
+/* ADR: layout and borders tuned for small browser terminals (AWS CloudShell) | Rationale: a
+   CloudShell pane is often about 100x25; only rounded box-drawing borders are used (half-block
+   "tall" borders draw with gaps there), widgets are compact (see screens/base.py), and every screen
+   body scrolls so nothing is cut off | Alternative: fixed heights (rejected: clipped on small panes) */
+
+Screen {
+    layout: vertical;
+}
+
+#title {
+    height: 1;
+    padding: 0 1;
+    text-style: bold;
+    background: $primary;
+    color: $text;
+}
+
+#identity-line {
+    padding: 0 1;
+    color: $text-muted;
+}
+
+/* Every screen body fills the space between the title and the footer and scrolls. */
+#start-body, #basics-body, #models-body, #models-error, #repo-body, #review-body {
+    height: 1fr;
+    padding: 1 2 0 2;
+}
+
+/* Field labels: one blank row above each, none below. */
+#start-body > Static, #basics-body > Static, #models-body > Static,
+#models-error > Static, #repo-body > Static, #pat-section > Static {
+    margin-top: 1;
+}
+
+Input, Select {
+    width: 100%;
+    max-width: 90;
+}
+
+Button {
+    margin-right: 1;
+}
+
+#start-body > Button, #saved-actions {
+    margin-top: 1;
+    height: auto;
+}
+
+#nav-footer {
+    dock: bottom;
+    height: 1;
+    align: right middle;
+    padding: 0 1;
+    background: $panel;
+}
+
+#nav-footer Button {
+    margin-left: 1;
+    margin-right: 0;
+}
+
+#error-message {
+    dock: bottom;
+    height: auto;
+    color: $error;
+    text-style: bold;
+    padding: 0 2;
+}
+
+.hidden {
+    display: none;
+}
+
+#model-search {
+    margin-bottom: 1;
+}
+
+#model-tabs {
+    height: auto;
+}
+
+CheckList {
+    height: 12;
+    border: round $panel-lighten-2;
+    padding: 0 1;
+}
+
+CheckList:focus {
+    border: round $primary;
+}
+
+#select-actions {
+    height: auto;
+    margin-top: 1;
+}
+
+#pat-section {
+    height: auto;
+}
+
+Collapsible {
+    margin-top: 1;
+    border-top: solid $panel-lighten-2;
+    padding: 0;
+}
+
+#provision-log {
+    height: 12;
+    margin-top: 1;
+    border: round $primary;
+}
+
+#summary {
+    padding-bottom: 1;
+}
+
+/* ---- Keyboard focus and key hints -------------------------------------------------------- */
+/* ADR: one strong focus colour on every control | Rationale: in CloudShell users could not tell
+   which button or field had focus; primary buttons were the same blue as the focus ring.
+   Unfocused buttons are now neutral, and the focused control (any kind) is the accent colour. */
+
+Button {
+    background: $panel-lighten-1;
+    color: $text;
+}
+
+Button.-primary {
+    background: $primary-darken-2;
+    text-style: bold;
+}
+
+Button:focus, Button.-primary:focus {
+    background: $accent;
+    color: $background;
+    text-style: bold;
+}
+
+Input:focus {
+    background: $accent 25%;
+}
+
+Select:focus > SelectCurrent {
+    background: $accent 25%;
+}
+
+CheckList:focus {
+    border: round $accent;
+}
+
+#region-section {
+    height: auto;
+}
+
+#key-hints {
+    width: 1fr;
+    height: 1;
+    color: $text-muted;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
+}

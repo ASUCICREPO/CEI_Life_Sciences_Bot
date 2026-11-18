@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: ACTIVE (F1, F2 and F3 done; S1, S2, F4, F5 and F6 in progress; several later phases partly built, see the Status column; status updated 2026-11-12). Source of truth for every decision referenced below is `.agents/decision-log.md`. This file gives the map; each phase's detail lives in `.agents/phases/<ID>-*.md`.
+Status: ACTIVE (F1, F2 and F3 done; S2, F4, F5 and F6 in progress, S1 never run; several later phases partly built, see the Status column; status updated 2026-11-18). Source of truth for every decision referenced below is `.agents/decision-log.md`. This file gives the map; each phase's detail lives in `.agents/phases/<ID>-*.md`. All isolated spike code was removed on 2026-11-18 (B111, closes B92); see `.agents/phases/findings/S1.md` and `.agents/phases/findings/S2.md`.
 
 This file is owned by the documentation agent. The phase files S1–S10 (spikes) and F01–F10 are also owned by the documentation agent. Phase files F11–F21 are written in parallel by another agent using the same template; they are listed here for completeness but this file does not certify their content.
 
@@ -8,8 +8,8 @@ This file is owned by the documentation agent. The phase files S1–S10 (spikes)
 
 | ID | Title | Goal (1 line) | Depends on | Specs touched | Status |
 |---|---|---|---|---|---|
-| S1 | Streaming spike | Prove REST API response streaming + Cognito authorizer + CloudFront works end to end before building the real Session Runner. | — | `architecture.md`, `streaming-protocol.md`, `api.md`, `auth-and-tool-scope.md` §9 | in progress (spike code prepared; live checks pending) |
-| S2 | Tool scope spike | Prove Cedar Policy + Cognito M2M scoped tokens can gate Gateway tool access per source, including `tools/list` filtering. | — | `auth-and-tool-scope.md`, `tools.md`, `security.md` (T3) | in progress |
+| S1 | Streaming spike | Prove REST API response streaming + Cognito authorizer + CloudFront works end to end before building the real Session Runner. | — | `architecture.md`, `streaming-protocol.md`, `api.md`, `auth-and-tool-scope.md` §9 | never run; spike code removed 2026-11-18 (B111), see findings |
+| S2 | Tool scope spike | Prove Cedar Policy + Cognito M2M scoped tokens can gate Gateway tool access per source, including `tools/list` filtering. | — | `auth-and-tool-scope.md`, `tools.md`, `security.md` (T3) | findings recorded; spike code removed 2026-11-18 (B111), see findings |
 | S3 | Async spike | Prove an AgentCore Runtime async session can run over 1 hour, report `HealthyBusy`, be cancelled, and resume from `AgentCoreMemorySaver` after a kill. | — | `data-model.md` (Job ID Store), `agents.md` (async pattern), `architecture.md` §2.2 | not started |
 | S4 | HITL spike | Prove a LangGraph `interrupt` can checkpoint, end a stream, and resume in a new run from a typed action. | — | `agents.md` (HITL), `api.md` (`/ui-actions`), `streaming-protocol.md` (`hitl_request`), `data-model.md` (AgentCore Memory) | not started |
 | S5 | RAG spike | Prove Bedrock Knowledge Base with S3 Vectors ingests PNG/JPG/CSV via the FM parser and every retrieval honors a metadata filter. | — | `data-model.md` §7/§9, `tools.md` §7, `architecture.md` | not started |

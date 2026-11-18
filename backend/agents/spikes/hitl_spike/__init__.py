@@ -1,1 +1,0 @@
-"""Checkpointed HITL experiment."""

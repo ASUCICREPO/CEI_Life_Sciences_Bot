@@ -27,7 +27,6 @@ out/
 !jest.config.js
 !backend/lambdas/session-runner/*.js
 !backend/lambdas/ui-actions/*.js
-!backend/lambdas/spike-streaming-runner/*.js
 !backend/lambdas/shared/*.js
 *.d.ts
 
@@ -70,6 +69,7 @@ CLAUDE.md
 
 # Python
 .venv/
+.deploy-venv/
 __pycache__/
 *.py[ocd]
 

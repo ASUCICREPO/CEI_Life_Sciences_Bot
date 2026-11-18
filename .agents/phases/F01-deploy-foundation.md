@@ -2,6 +2,8 @@
 
 Status: done (sandbox `deploy.sh` run passed, verified by the user on 2026-10-05) | Depends on: — | Decisions: B45, B46, B47, B48, B52, B87 | Specs: [`../specs/architecture.md`](../specs/architecture.md) (Deploy foundation row, §1 component table), [`../specs/security.md`](../specs/security.md) (Infrastructure as code hygiene, Encryption)
 
+**B111 (2026-11-18) replaced this phase's bash prompts and flags with a Python Textual TUI** (`deploy/cei_deploy`, launched by a thin `deploy.sh` wrapper). The plan and tasks below describe the original bash implementation; see `docs/deploymentGuide.md` and `.agents/decision-log.md` B111 for the current flow.
+
 ## Goal
 
 Give every later phase somewhere real to deploy to: a guided `deploy.sh` that collects configuration and starts a CodeBuild deployment, and a CDK skeleton with the conventions (Region configurability, cdk-nag, ADR-format suppressions) that every subsequent phase's CDK code must follow. No product feature ships in this phase.

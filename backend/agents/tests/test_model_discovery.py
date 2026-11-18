@@ -172,6 +172,26 @@ def test_includes_allowlisted_llama_and_nova_and_claude():
     assert model_ids == {"anthropic.claude-sonnet-v1", "amazon.nova-pro-v1:0", "meta.llama3-1-70b-instruct-v1:0"}
 
 
+def test_includes_google_moonshot_zai_and_xai_tool_capable_models():
+    client = _client(foundation=[
+        _qualifying("google.gemma-3-12b-it"),
+        _qualifying("moonshotai.kimi-k3"),
+        _qualifying("moonshot.kimi-k2-thinking"),
+        _qualifying("zai.glm-5"),
+        _qualifying("xai.grok-4-7"),
+    ])
+    model_ids = {m.model_id for m in discover_models(client)}
+    assert model_ids == {
+        "google.gemma-3-12b-it", "moonshotai.kimi-k3", "moonshot.kimi-k2-thinking",
+        "zai.glm-5", "xai.grok-4-7",
+    }
+
+
+def test_excludes_google_gemma_pretrained_variant():
+    client = _client(foundation=[_qualifying("google.gemma-3-27b-pt")])
+    assert discover_models(client) == []
+
+
 def test_excludes_profile_resolving_to_non_qualifying_model():
     client = _client(
         foundation=[_qualifying("stability.stable-diffusion-xl-v1")],
@@ -182,3 +202,21 @@ def test_excludes_profile_resolving_to_non_qualifying_model():
     )
     models = discover_models(client)
     assert models == []
+
+
+def test_resolves_cross_region_profile_listing_one_arn_per_region():
+    # Real us./global. profiles list one ARN per Region, all for the same model (checked live 2026-11-18).
+    model_id = "anthropic.claude-sonnet-v1"
+    client = _client(
+        foundation=[_qualifying(model_id)],
+        profiles=[{
+            "inferenceProfileId": "us." + model_id,
+            "inferenceProfileName": "US Sonnet",
+            "models": [
+                {"modelArn": "arn:aws:bedrock:%s::foundation-model/%s" % (region, model_id)}
+                for region in ("us-east-1", "us-east-2", "us-west-2")
+            ],
+        }],
+    )
+    assert DiscoveredModel("us." + model_id, "US Sonnet") in discover_models(client)
+    client.get_inference_profile.assert_not_called()

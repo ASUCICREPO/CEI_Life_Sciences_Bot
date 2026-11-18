@@ -1,0 +1,5 @@
+# ADR: pinned to the last release line each package shipped that still supports Python 3.9 |
+# Rationale: CloudShell/AL2023 ships Python 3.9, and this tool must run there without a newer
+# interpreter installed. Re-pin forward only once CloudShell's default Python moves past 3.9.
+textual==8.2.8
+boto3==1.42.97
