@@ -4,10 +4,10 @@ from __future__ import annotations
 import os
 
 from textual import work
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Select, Static
 
-from ..widgets import DropDown
+from ..widgets import Body, DropDown
 from .base import WizardScreen
 from .basics import BasicsScreen
 
@@ -30,21 +30,17 @@ def _available_regions(session_factory) -> list:
 
 
 class StartScreen(WizardScreen):
-    HINT = "Tab/Down next · Shift+Tab/Up back · Left/Right between buttons · Enter press/open · Ctrl+Q quit"
+    HINT = "↑ ↓ ← → move   Space/Enter select   Ctrl+Q quit"
 
     def compose(self):
         yield Static("Step 1 of 5 · AWS account and Region", id="title")
-        yield Static("Looking up your AWS identity...", id="identity-line")
         saved = self._has_saved_config()
-        with VerticalScroll(id="start-body"):
+        with Body(id="start-body"):
             if saved:
-                yield Static(
-                    "Saved settings found for Region %s. Redeploy them as they are, or change them."
-                    % self.wizard.cfg.region,
-                    id="saved-notice",
-                )
                 with Horizontal(id="saved-actions"):
-                    yield Button("Redeploy with saved settings", id="redeploy", variant="primary")
+                    yield Button(
+                        "Redeploy saved settings (%s)" % self.wizard.cfg.region, id="redeploy", variant="primary",
+                    )
                     yield Button("Change settings", id="change-settings")
             # ADR: the Region picker is hidden behind "Change settings" when a saved config exists |
             # Rationale: users saw two competing primary actions on one screen; "Change settings" now
@@ -61,6 +57,7 @@ class StartScreen(WizardScreen):
                     [(r, r) for r in regions], value=default_region, id="region-select", allow_blank=False,
                 )
                 yield Button("Continue", id="continue", variant="primary")
+        yield Static("", id="error-message")
         yield Horizontal(Static(self.HINT, id="key-hints"), id="nav-footer")
 
     def _has_saved_config(self) -> bool:
@@ -73,22 +70,15 @@ class StartScreen(WizardScreen):
 
     @work(thread=True, exclusive=True)
     def _load_identity(self) -> None:
+        # The account is shown on the Review screen; here only a failure is shown (as an error).
         prefetcher = self.wizard_app.prefetcher
         try:
             identity = prefetcher.identity_future.result(timeout=30)
-            line = "AWS account %s (%s)" % (identity.account_id, identity.arn)
             self.wizard.account_id = identity.account_id
             self.wizard.caller_arn = identity.arn
             self.wizard.partition = identity.partition
         except Exception as exc:  # noqa: BLE001
-            line = "Could not determine your AWS identity: %s" % exc
-        self.app.call_from_thread(self._set_identity_line, line)
-
-    def _set_identity_line(self, line: str) -> None:
-        try:
-            self.query_one("#identity-line", Static).update(line)
-        except Exception:
-            pass
+            self.app.call_from_thread(self.set_error, "Could not read your AWS identity: %s" % exc)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "redeploy":

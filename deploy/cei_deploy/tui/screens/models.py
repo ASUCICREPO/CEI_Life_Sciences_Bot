@@ -4,14 +4,14 @@ from __future__ import annotations
 from typing import Dict, List
 
 from textual import work
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal
 from textual.widgets import (
     Button, Input, LoadingIndicator, Select, SelectionList, Static, TabbedContent, TabPane,
 )
 
 from ... import models as models_mod
 from ...config import MODEL_ID_PATTERN
-from ..widgets import CheckList, DropDown
+from ..widgets import Body, CheckList, DropDown
 from .base import WizardScreen
 
 
@@ -27,7 +27,7 @@ def _matches(item: "models_mod.ModelItem", needle: str) -> bool:
 
 
 class ModelsScreen(WizardScreen):
-    HINT = "Space check/uncheck · Left/Right switch tab · Tab next · Esc previous step"
+    HINT = "↑ ↓ move   ← → Global/US   Space/Enter check   Esc back"
 
     def action_focus_next_button(self) -> None:
         if not self._switch_tab_from_list("tab-us"):
@@ -54,13 +54,13 @@ class ModelsScreen(WizardScreen):
     def compose(self):
         yield Static("Step 3 of 5 · Models", id="title")
         yield LoadingIndicator(id="models-loading")
-        with VerticalScroll(id="models-error", classes="hidden"):
+        with Body(id="models-error", classes="hidden"):
             yield Static("", id="models-error-text")
             yield Static("Default Bedrock model ID:")
             yield Input(value=self.wizard.cfg.defaultModelId, id="manual-default-model")
             yield Static("Router Bedrock model ID:")
             yield Input(value=self.wizard.cfg.routerModelId, id="manual-router-model")
-        with VerticalScroll(id="models-body", classes="hidden"):
+        with Body(id="models-body", classes="hidden"):
             yield Input(placeholder="Search models...", id="model-search")
             with TabbedContent(id="model-tabs"):
                 with TabPane("Global", id="tab-global"):
@@ -105,6 +105,7 @@ class ModelsScreen(WizardScreen):
         self.query_one("#models-body").remove_class("hidden")
         self._populate("")
         self._refresh_default_router_selects()
+        self.query_one("#model-search").focus()
 
     def _show_manual(self, error: str) -> None:
         self.query_one("#models-loading").display = False
@@ -115,6 +116,7 @@ class ModelsScreen(WizardScreen):
             "Could not list Bedrock models (%s). Your AWS credentials need: %s.\n"
             "Enter model IDs directly below." % (error, permissions)
         )
+        self.query_one("#manual-default-model").focus()
 
     # -- populate / filter ---------------------------------------------------
     def _populate(self, filter_text: str) -> None:

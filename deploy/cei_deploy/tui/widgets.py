@@ -4,6 +4,7 @@ from __future__ import annotations
 from rich.segment import Segment
 from rich.style import Style
 from textual.binding import Binding
+from textual.containers import VerticalScroll
 from textual.strip import Strip
 from textual.widgets import OptionList, Select, SelectionList
 from textual.widgets.option_list import OptionDoesNotExist
@@ -17,6 +18,20 @@ class CheckList(SelectionList):
     CloudShell) render with gaps or at the wrong width, and it shows the checked state by colour
     only | Alternative: keep the stock widget (rejected: hard to read in CloudShell and in 256 colours)
     """
+
+    def action_cursor_down(self) -> None:
+        # ADR: Down on the last row (Up on the first) leaves the list | Rationale: with arrow keys
+        # only, the list was a dead end -- OptionList keeps Up/Down and stops at its ends
+        if self.highlighted is None or self.highlighted >= self.option_count - 1:
+            self.screen.focus_next()
+        else:
+            super().action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        if self.highlighted is None or self.highlighted <= 0:
+            self.screen.focus_previous()
+        else:
+            super().action_cursor_up()
 
     def on_focus(self) -> None:
         # Highlight the first row on focus, so Space works at once (no row is highlighted by default).
@@ -57,3 +72,13 @@ class DropDown(Select, inherit_bindings=False):
     """
 
     BINDINGS = [Binding("enter,space", "show_overlay", "Open list", show=False)]
+
+
+class Body(VerticalScroll, inherit_bindings=False):
+    """A screen body that scrolls (mouse wheel, focus) but leaves the arrow keys to navigation.
+
+    ADR: no scroll key bindings on screen bodies | Rationale: VerticalScroll binds Up/Down/PageUp/...
+    to scrolling, so on a screen taller than the terminal (the Models screen in a CloudShell pane)
+    Down scrolled the page and focus never moved; focusing a widget still scrolls it into view |
+    Alternative: priority arrow bindings on the screen (rejected: would break lists and inputs)
+    """

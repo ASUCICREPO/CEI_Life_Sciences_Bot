@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from textual import work
-from textual.containers import VerticalScroll
+
 from textual.widgets import Button, RichLog, Static
 
 from ... import config as config_mod
 from ... import provision
 from ...git_info import resolve_source_version
+from ..widgets import Body
 from .base import WizardScreen
 
 
@@ -46,8 +47,8 @@ def _summary_lines(wizard) -> list:
 class ReviewScreen(WizardScreen):
     def compose(self):
         yield Static("Step 5 of 5 · Review and deploy", id="title")
-        with VerticalScroll(id="review-body"):
-            yield Static("Loading summary...", id="summary")
+        with Body(id="review-body"):
+            yield Static("", id="summary")
             yield RichLog(id="provision-log", wrap=True, highlight=False, markup=False)
         # ADR: Deploy lives in the docked footer, not the scrolling body | Rationale: in a 25-row
         # CloudShell pane the summary pushes a body button below the fold, so users saw only "Back"

@@ -2,30 +2,29 @@
 from __future__ import annotations
 
 from textual import work
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Vertical
 from textual.widgets import Button, Checkbox, Collapsible, Input, Select, Static, Switch
 
 from ...config import REPOSITORY_BRANCH_PATTERN, REPOSITORY_URL_PATTERN, TOOL_POLICY_MODES
 from ...git_info import to_https_github_url
-from ..widgets import DropDown
+from ..widgets import Body, DropDown
 from .base import WizardScreen
 
 
 class RepositoryScreen(WizardScreen):
     def compose(self):
         yield Static("Step 4 of 5 · Repository and advanced settings", id="title")
-        with VerticalScroll(id="repo-body"):
+        with Body(id="repo-body"):
             yield Static("GitHub repository URL:")
             yield Input(
                 value=self.wizard.cfg.repository.url, placeholder="https://github.com/org/repo", id="repo-url",
             )
             yield Static("Branch:")
             yield Input(value=self.wizard.cfg.repository.branch or "main", id="repo-branch")
-            yield Static("Checking whether this repository is public...", id="visibility-line")
             with Vertical(id="pat-section", classes="hidden"):
                 if self.wizard.stored_pat_exists:
                     yield Checkbox("Use stored token", value=True, id="use-stored-pat")
-                yield Static("GitHub personal access token:")
+                yield Static("GitHub personal access token:", id="pat-label")
                 yield Input(password=True, id="pat-token")
             with Collapsible(title="Advanced", collapsed=True, id="advanced"):
                 yield Static("Per-user requests/second limit:")
@@ -82,14 +81,13 @@ class RepositoryScreen(WizardScreen):
 
     def _apply_visibility(self, visibility: str) -> None:
         try:
-            self.query_one("#visibility-line", Static).update(
-                {
-                    "public": "This repository looks public — no token needed.",
-                    "private": "This repository looks private.",
-                    "unknown": "Could not tell if this repository is public or private.",
-                }[visibility]
-            )
+            # The field label carries the status, so no separate status line is needed.
             if visibility in ("private", "unknown"):
+                self.query_one("#pat-label", Static).update(
+                    "GitHub personal access token (private repository):"
+                    if visibility == "private"
+                    else "GitHub personal access token (only if the repository is private):"
+                )
                 self.query_one("#pat-section").remove_class("hidden")
         except Exception:
             pass

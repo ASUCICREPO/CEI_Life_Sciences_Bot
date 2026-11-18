@@ -286,3 +286,74 @@ async def test_saved_config_change_settings_confirms_region(tmp_path):
         await pilot.pause()
         assert app.screen.__class__.__name__ == "BasicsScreen"
         assert prefetcher.region_jobs("us-west-2") is not None
+
+
+@pytest.mark.asyncio
+async def test_arrows_space_enter_only(tmp_path):
+    """The whole flow works with only arrow keys, Space and Enter (no Tab, no mouse)."""
+    from textual.widgets import Collapsible
+
+    (tmp_path / "backend").mkdir()
+    app = DeployApp(repo_root=tmp_path, dry_run=True, session_factory=_fake_session_factory,
+                    prefetcher=_linked_prefetcher())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        # Start: Right moves from the dropdown to Continue; Space presses it.
+        await pilot.press("right")
+        await pilot.pause()
+        assert _focused_id(app) == "continue"
+        await pilot.press("space")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "BasicsScreen"
+
+        await pilot.press(*"admin@example.com")
+        assert await _press_until(pilot, "down", lambda: _focused_id(app) == "nav-next")
+        await pilot.press("space")
+        await pilot.pause()
+
+        # Models: Down reaches the list; Enter also toggles a model.
+        for _ in range(20):
+            if app.wizard.discovery is not None:
+                break
+            await pilot.pause()
+        assert app.screen.__class__.__name__ == "ModelsScreen"
+        assert await _press_until(pilot, "down", lambda: _focused_id(app) == "list-global", limit=6)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "global.anthropic.claude-sonnet-x" not in app.screen.query_one("#list-global").selected
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "global.anthropic.claude-sonnet-x" in app.screen.query_one("#list-global").selected
+        # Down past the last row leaves the list, then Down keeps moving to the footer.
+        assert await _press_until(pilot, "down", lambda: _focused_id(app) == "select-all", limit=5)
+        await pilot.press("up")
+        await pilot.pause()
+        assert _focused_id(app) == "list-global"  # Up from the next control returns to the list
+        assert await _press_until(pilot, "down", lambda: _focused_id(app) == "nav-next", limit=15)
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Repository: Space opens the Advanced section.
+        assert app.screen.__class__.__name__ == "RepositoryScreen"
+        for _ in range(10):
+            await pilot.pause()
+        advanced = app.screen.query_one("#advanced", Collapsible)
+        assert await _press_until(
+            pilot, "down", lambda: type(app.screen.focused).__name__ == "CollapsibleTitle", limit=10,
+        )
+        await pilot.press("space")
+        await pilot.pause()
+        assert advanced.collapsed is False
+        assert await _press_until(pilot, "down", lambda: _focused_id(app) == "nav-next", limit=15)
+        await pilot.press("space")
+        await pilot.pause()
+
+        # Review: Left/Right reach the Dry run button; Space runs it.
+        assert app.screen.__class__.__name__ == "ReviewScreen"
+        assert await _press_until(pilot, "right", lambda: _focused_id(app) == "deploy", limit=6)
+        await pilot.press("space")
+        for _ in range(40):
+            if app.exit_code is not None:
+                break
+            await pilot.pause()
+    assert app.exit_code == 0

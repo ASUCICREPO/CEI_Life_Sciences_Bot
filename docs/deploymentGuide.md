@@ -48,9 +48,11 @@ Every flag the old bash script had — `--region`, `--repo-url`, `--branch`, `--
 
 ### The guided screens
 
+**Keyboard.** Every screen works with the arrow keys, Space and Enter only. Up/Down (and Left/Right outside a text field) move between fields and buttons. Space or Enter presses a button, opens a dropdown, toggles a check box or the Advanced section, and checks or unchecks a model. In the model list, Left/Right switch between the Global and US tabs, and Down on the last row (Up on the first) leaves the list. Enter in a text field moves to the next field. Esc goes back one step; Ctrl+Q quits. Tab and Shift+Tab also work. The bar at the bottom of each screen shows these keys.
+
 With no flags, `./deploy.sh` opens a five-screen TUI:
 
-1. **Start** — shows your AWS account and caller identity, lets you pick the Region to deploy into, and (if `backend/cei.deploy.json` already has a saved, matching Region) offers "Redeploy with saved settings" to skip straight to Review & Deploy, or "Change settings" to edit it instead.
+1. **Start** — lets you pick the Region to deploy into. If `backend/cei.deploy.json` already exists, it shows two buttons instead: "Redeploy saved settings (<Region>)" skips straight to Review & Deploy, and "Change settings" opens the Region picker. Your AWS account shows on the Review & Deploy screen; the Start screen shows it only if it cannot be read (as an error).
 2. **Basics** — the admin alert email address, and the allowed sign-up email domains. The domains field defaults to the admin email's own domain and keeps following it until you edit the domains field directly.
 3. **Models** — see [Model selection](#model-selection) below.
 4. **Repository** — the GitHub repository URL and branch (pre-filled from your local git `origin` remote and current branch, converted from SSH to HTTPS form if needed), a GitHub personal access token field that appears only when the repository looks private or its visibility could not be determined, and a collapsed **Advanced** section: the per-user requests/second limit (default 20), max concurrent real-time runs per user (default 2), max concurrent background runs per user (default 1), the Tool Gateway policy mode (`LOG_ONLY` or `ENFORCE`, default `LOG_ONLY`), and a switch to add `http://localhost:5173` as a Cognito callback/logout URL for local frontend development (default off, B90).

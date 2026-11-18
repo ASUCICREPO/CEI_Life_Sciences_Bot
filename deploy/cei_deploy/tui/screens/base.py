@@ -7,12 +7,13 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Input, Static
+from textual.widgets._collapsible import CollapsibleTitle
 
 if TYPE_CHECKING:
     from ..app import DeployApp
     from ..state import WizardState
 
-DEFAULT_HINT = "Tab/Down next · Shift+Tab/Up back · Enter press/open · Esc previous step"
+DEFAULT_HINT = "↑ ↓ ← → move   Space/Enter select   Esc back"
 
 
 class WizardScreen(Screen):
@@ -31,6 +32,7 @@ class WizardScreen(Screen):
         Binding("up", "focus_previous", "Previous field", show=False),
         Binding("right", "focus_next_button", show=False),
         Binding("left", "focus_previous_button", show=False),
+        Binding("space", "press_focused", show=False),
     ]
 
     #: The key-hint text shown in the footer; screens may override it.
@@ -63,13 +65,23 @@ class WizardScreen(Screen):
         self.focus_previous()
 
     def action_focus_next_button(self) -> None:
-        # Left/Right move only between buttons, so they never steal a text cursor.
-        if isinstance(self.focused, Button):
-            self.focus_next(Button)
+        # Left/Right reach this screen binding only when the focused widget does not use them itself
+        # (an Input keeps them for its cursor, the Tabs bar for switching tabs), so they never steal
+        # a text cursor.
+        self.focus_next()
 
     def action_focus_previous_button(self) -> None:
-        if isinstance(self.focused, Button):
-            self.focus_previous(Button)
+        self.focus_previous()
+
+    def action_press_focused(self) -> None:
+        # ADR: Space works like Enter on buttons and on a Collapsible header | Rationale: users expect
+        # Space and Enter to do the same thing; Textual binds only Enter there (check boxes, switches,
+        # lists and dropdowns already take both) | Alternative: none -- Space is otherwise unused there
+        focused = self.focused
+        if isinstance(focused, Button):
+            focused.press()
+        elif isinstance(focused, CollapsibleTitle):
+            focused.action_toggle_collapsible()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         # Enter in a text field moves to the next field (then to the footer buttons).
