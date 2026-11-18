@@ -94,11 +94,6 @@ CheckList:focus {
     margin-top: 1;
 }
 
-#models-note {
-    margin-top: 1;
-    color: $text-muted;
-}
-
 #pat-section {
     height: auto;
 }

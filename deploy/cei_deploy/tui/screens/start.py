@@ -50,7 +50,7 @@ class StartScreen(WizardScreen):
             # Rationale: users saw two competing primary actions on one screen; "Change settings" now
             # also confirms the Region, so the Region pre-fetch always starts (it was skipped before)
             with Vertical(id="region-section", classes="hidden" if saved else ""):
-                yield Static("AWS Region to deploy into (Enter opens the list):", id="region-label")
+                yield Static("AWS Region to deploy into:", id="region-label")
                 default_region = self.wizard.cfg.region or os.environ.get("AWS_REGION") or os.environ.get(
                     "AWS_DEFAULT_REGION"
                 ) or "us-east-1"

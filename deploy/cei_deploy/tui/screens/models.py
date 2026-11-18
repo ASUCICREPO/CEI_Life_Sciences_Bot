@@ -14,11 +14,6 @@ from ...config import MODEL_ID_PATTERN
 from ..widgets import CheckList, DropDown
 from .base import WizardScreen
 
-NOTE_TEXT = (
-    "[✓] = available in the app. [ ] = blocked. Global and US share one setting per model. "
-    "Models that AWS releases later stay available."
-)
-
 
 def _option_label(item: "models_mod.ModelItem") -> str:
     return "%s (%s)" % (item.label, item.provider)
@@ -75,7 +70,6 @@ class ModelsScreen(WizardScreen):
             with Horizontal(id="select-actions"):
                 yield Button("Select all", id="select-all")
                 yield Button("Clear all", id="clear-all")
-            yield Static(NOTE_TEXT, id="models-note", markup=False)
             yield Static("Default model:")
             yield DropDown([], id="default-model-select", allow_blank=True)
             yield Static("Router (classifier) model:")
