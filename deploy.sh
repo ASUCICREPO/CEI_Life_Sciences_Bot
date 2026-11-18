@@ -143,6 +143,7 @@ GITHUB_PAT_STDIN="false"
 NON_INTERACTIVE="false"
 ASSUME_YES="false"
 DRY_RUN="false"
+USE_STORED_PAT="false"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -197,6 +198,7 @@ require_cmd() {
 # ADR: no `require_cmd npm` | Rationale: every build step (npm ci, preflight, frontend/backend
 # build, cdk bootstrap/deploy) now runs in CodeBuild; deploy.sh only uses `node -e` to write JSON
 require_cmd aws
+require_cmd jq
 require_cmd node
 
 NODE_VERSION="$(node -v | sed 's/^v//')"
@@ -249,6 +251,32 @@ to_https_github_url() {
     *) printf '%s' "$u" ;;
   esac
 }
+
+# ---------------------------------------------------------------------------
+# Load saved config if it exists (one-click redeploy)
+# ---------------------------------------------------------------------------
+if [ -f "$CONFIG_FILE" ] && [ -z "$REGION_FLAG" ] && [ -z "$DEFAULT_MODEL_FLAG" ]; then
+  echo "Found existing config at $CONFIG_FILE — loading saved settings..."
+  REGION_FLAG="$(jq -r '.region // empty' "$CONFIG_FILE")"
+  DEFAULT_MODEL_FLAG="$(jq -r '.defaultModelId // empty' "$CONFIG_FILE")"
+  ROUTER_MODEL_FLAG="$(jq -r '.routerModelId // empty' "$CONFIG_FILE")"
+  BLOCKED_MODELS_FLAG="$(jq -r '.blockedModelIds | join(",") // empty' "$CONFIG_FILE")"
+  EMAIL_DOMAINS_FLAG="$(jq -r '.allowedEmailDomains | join(",") // empty' "$CONFIG_FILE")"
+  ADMIN_EMAIL_FLAG="$(jq -r '.adminEmail // empty' "$CONFIG_FILE")"
+  RPS_FLAG="$(jq -r '.limits.requestsPerSecond // empty' "$CONFIG_FILE")"
+  MAX_REALTIME_FLAG="$(jq -r '.limits.maxRealtimeRunsPerUser // empty' "$CONFIG_FILE")"
+  MAX_BACKGROUND_FLAG="$(jq -r '.limits.maxBackgroundRunsPerUser // empty' "$CONFIG_FILE")"
+  TOOL_POLICY_MODE_FLAG="$(jq -r '.toolPolicyMode // empty' "$CONFIG_FILE")"
+  REPO_URL_FLAG="$(jq -r '.repository.url // empty' "$CONFIG_FILE")"
+  BRANCH_FLAG="$(jq -r '.repository.branch // empty' "$CONFIG_FILE")"
+  if [ "$(jq -r '.allowLocalhostCallback // false' "$CONFIG_FILE")" = "true" ]; then
+    ALLOW_LOCALHOST_CALLBACK_FLAG="true"
+  fi
+  # Auto-use stored PAT and skip prompts
+  NON_INTERACTIVE="true"
+  ASSUME_YES="true"
+  USE_STORED_PAT="true"
+fi
 
 DEFAULT_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 DEFAULT_REPO_URL="$(to_https_github_url "$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || true)")"
@@ -520,6 +548,14 @@ done
 GITHUB_SECRET_ARN=""
 OWNER_TAG_KEY="cei:owner"
 OWNER_TAG_VALUE="deploy.sh"
+
+# If using stored config, try to get existing PAT secret ARN from Secrets Manager
+if [ "$USE_STORED_PAT" = "true" ] && [ -z "$GITHUB_PAT" ]; then
+  if aws secretsmanager describe-secret --secret-id "$GITHUB_PAT_SECRET_NAME" --region "$REGION" >/dev/null 2>&1; then
+    GITHUB_SECRET_ARN="$(aws secretsmanager describe-secret --secret-id "$GITHUB_PAT_SECRET_NAME" --region "$REGION" --query 'ARN' --output text)"
+    echo "Using existing GitHub PAT from Secrets Manager."
+  fi
+fi
 
 if [ -n "$GITHUB_PAT" ]; then
   mktemp_secure pat_file
