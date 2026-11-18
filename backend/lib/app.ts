@@ -2,23 +2,11 @@ import * as cdk from 'aws-cdk-lib';
 import { BackendStack } from './backend-stack';
 import { EdgeWafStack } from './edge-waf-stack';
 import { DeployConfig } from './config/deploy-config';
-// FIXME: remove after S2 validation (B92)
-import { ToolScopeSpikeStack } from './spikes/tool-scope-spike-stack';
-// FIXME: remove after S1 validation (B92)
-import { StreamingSpikeStack } from './spikes/streaming-spike-stack';
-import { DurableSpikeStack } from './spikes/durable-spike-stack';
-import { IdentitySpikeStack } from './spikes/identity-spike-stack';
 
 export interface BuiltStacks {
   /** Only present when `config` is supplied — the CLOUDFRONT-scope WAF stack (always us-east-1, B88). */
   edgeWaf?: EdgeWafStack;
   backend: BackendStack;
-  /** FIXME: remove after S2 validation (B92). Only present when `-c ceiSpikes=tool-scope` is set. */
-  toolScopeSpike?: ToolScopeSpikeStack;
-  /** FIXME: remove after S1 validation (B92). */
-  streamingSpike?: StreamingSpikeStack;
-  durableSpike?: DurableSpikeStack;
-  identitySpike?: IdentitySpikeStack;
 }
 
 /**
@@ -27,39 +15,7 @@ export interface BuiltStacks {
  * app entry point uses, instead of re-deriving it in test code.
  */
 export function buildStacks(app: cdk.App, config: DeployConfig | undefined, frontendAssetPath: string): BuiltStacks {
-  const built = buildCoreStacks(app, config, frontendAssetPath);
-
-  // FIXME: remove after S2 validation (B92)
-  // ADR: spike stack only when `-c ceiSpikes` lists it | Rationale: B92 — a normal deploy must never create spike resources; deploy.sh --spike sets the flag | Alternative: always synthesizing it rejected — would deploy a throwaway Gateway with every release
-  const spikes = String(app.node.tryGetContext('ceiSpikes') ?? '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-  if (spikes.includes('tool-scope')) {
-    built.toolScopeSpike = new ToolScopeSpikeStack(app, 'ToolScopeSpikeStack', {
-      // ADR: Region from deploy config | Rationale: B45 — same env rule as BackendStack; env-agnostic when no config exists yet
-      env: config ? { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region } : undefined,
-      policyMode: app.node.tryGetContext('ceiSpikePolicyMode') || undefined,
-    });
-  }
-  // FIXME: remove after S1 validation (B92)
-  if (spikes.includes('streaming')) {
-    built.streamingSpike = new StreamingSpikeStack(app, 'StreamingSpikeStack', {
-      env: config ? { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region } : undefined,
-    });
-  }
-  if (spikes.includes('durable')) {
-    built.durableSpike = new DurableSpikeStack(app, 'DurableSpikeStack', {
-      env: config ? { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region } : undefined,
-    });
-  }
-  if (spikes.includes('identity')) {
-    built.identitySpike = new IdentitySpikeStack(app, 'IdentitySpikeStack', {
-      env: config ? { account: process.env.CDK_DEFAULT_ACCOUNT, region: config.region } : undefined,
-    });
-  }
-
-  return built;
+  return buildCoreStacks(app, config, frontendAssetPath);
 }
 
 function buildCoreStacks(app: cdk.App, config: DeployConfig | undefined, frontendAssetPath: string): BuiltStacks {

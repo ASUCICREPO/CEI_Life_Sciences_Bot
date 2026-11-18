@@ -19,7 +19,7 @@ phases:
       - cd "$CODEBUILD_SRC_DIR/backend/lambdas" && node --test session-runner/index.test.js ui-actions/index.test.js shared/account-gate.test.js
       - cd "$CODEBUILD_SRC_DIR/backend/agents" && AWS_EC2_METADATA_DISABLED=true .venv/bin/python -m pytest tests -q
       - cd "$CODEBUILD_SRC_DIR/backend/lambdas/ncbi" && AWS_EC2_METADATA_DISABLED=true ../../agents/.venv/bin/python -m pytest test_handler.py test_targets.py test_limiter.py -q
-      - cd "$CODEBUILD_SRC_DIR/backend/agents" && AWS_EC2_METADATA_DISABLED=true .venv/bin/python -m pytest ../lambdas/spikes/b99_identity/test_interceptor.py ../lambdas/session-router/tests/test_classifier.py ../lambdas/delete-worker/test_handler.py -q
+      - cd "$CODEBUILD_SRC_DIR/backend/agents" && AWS_EC2_METADATA_DISABLED=true .venv/bin/python -m pytest ../lambdas/session-router/tests/test_classifier.py ../lambdas/delete-worker/test_handler.py -q
       # session-router and delete-worker both have a top-level test_handler module: separate invocations
       - cd "$CODEBUILD_SRC_DIR/backend/agents" && AWS_EC2_METADATA_DISABLED=true .venv/bin/python -m pytest ../lambdas/session-router/tests/test_handler.py -q
       # F19/B109: the real account-delete cascade (handle), kept separate from the superseded test_handler.py contract above
@@ -30,7 +30,6 @@ phases:
       - cd "$CODEBUILD_SRC_DIR/backend/lambdas/models-settings-handler" && AWS_EC2_METADATA_DISABLED=true ../../agents/.venv/bin/python -m pytest tests -q
       - cd "$CODEBUILD_SRC_DIR/backend/lambdas/watchdog" && AWS_EC2_METADATA_DISABLED=true ../../agents/.venv/bin/python -m pytest tests -q
       - cd "$CODEBUILD_SRC_DIR/backend/agents" && AWS_EC2_METADATA_DISABLED=true .venv/bin/python -m pytest ../lambdas/token-refresh/tests -q
-      - cd "$CODEBUILD_SRC_DIR/backend/scripts/spikes" && AWS_EC2_METADATA_DISABLED=true ../../agents/.venv/bin/python -m pytest test_b99_identity_test.py -q
       - docker build -t cei-lsops-verify "$CODEBUILD_SRC_DIR/backend/lambdas/lsops"
       - docker run --rm --entrypoint python cei-lsops-verify -c "import Bio, rdkit, primer3, hgvs.parser"
       - docker run --rm --entrypoint python cei-lsops-verify -c "from lab_calculations import dilution; assert dilution(10, 2, 5)['stock_volume'] == 1"
