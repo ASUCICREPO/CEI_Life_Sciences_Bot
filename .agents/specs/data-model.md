@@ -108,6 +108,8 @@ Attributes (planned): `default_model_id`, `default_mode` (`science`/`business`, 
 
 Access patterns: get/put settings (F3); read `default_model_id`/`default_mode` when starting a session; list `configured_sources` for the settings page (F18).
 
+**Profile fields live on Cognito, not here (B112).** `given_name`, `family_name`, and `birthdate` are the founder-onboarding profile fields. They are stored only as standard Cognito user attributes on the existing user pool, written once by `POST /profile` (`backend/lambdas/profile-handler/`) through `AdminUpdateUserAttributes`. This table never gains these three attributes, and no new table is added for them. See `.agents/specs/auth-and-tool-scope.md` §14 and `.agents/specs/api.md` "Profile" for the full design. Status: Exists (partial) — built in code, not yet deployed; needs live AWS verification.
+
 ---
 
 ## 5. Attachment Metadata Store (`AttachmentMetadataStore`)
@@ -204,3 +206,5 @@ Decided (B109): `POST /account/delete` is behind a flag, off by default. It disa
 - TBD: synchronous vs. fanned-out Deletion Worker execution for large accounts (B73).
 
 Resolved by B67–B109: token-refresh active-run check (B67), SSE event replay via sequence numbers instead of an in-memory buffer (B68), trace chunk size 350 KB (B78), Secrets Manager secret naming `cei/user-keys/{user_id}/{source_id}` (B78), export download URL TTL 15 min (B78), no per-user model restriction attribute (B76), no per-chat delete (B104), account delete 202 + disable/gate + a worker cascade 9 hours later (B73, B109), AgentCore Memory short-term event expiry behavior on expiry ("expired, start again", exact number still to verify — B82).
+
+B112: the founder-onboarding profile fields (`given_name`, `family_name`, `birthdate`) live only on Cognito, never on the User Metadata Table or any new table. Exists (partial): built in code, not yet deployed; needs live AWS verification.

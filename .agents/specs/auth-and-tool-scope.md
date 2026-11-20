@@ -57,7 +57,7 @@ Checked pairwise for the substring rule above: none of `pubmed, clinicaltrials, 
 
 ## 4. Pre-Token-Generation Trigger
 
-A Pre-Token-Generation Lambda trigger (V3 event, so it can read `aws_client_metadata` on the token request) adds two custom claims to every issued token (B30):
+A Pre-Token-Generation Lambda trigger (V3 event, so it can read `aws_client_metadata` on the token request) adds two custom claims to every issued token (B30). B112 extends this same trigger to also run for normal user sign-in and add one more claim — see §14.
 
 - the user's Cognito `sub`
 - the current session ID
@@ -209,3 +209,21 @@ A Gateway Lambda target reads the user's `sub` from the forwarded token's claims
 - `tools/list` scope-filtering behavior — needs a working Policy-in-AgentCore prototype (§8, B30).
 
 Resolved by B67–B86: token TTL and refresh mid-run (B67, §5), Cedar permit granularity is target-level (B69, §6), and the LS Ops/Code Interpreter/Web Search/KB retrieval scope model is one shared `cei-tools/common` scope granted by default (B70, §3, §7); specialist agents also get the NCBI scope, not tool-agent only (B85, §3, §7); the Web Search connector is a Cedar-gated Gateway target while Code Interpreter is not a Gateway target at all (B86, §6).
+
+## 14. Onboarding and Age-Gate (B112)
+
+Status: Exists (partial) — built in code, not yet deployed. No live AWS check has run.
+
+A one-time onboarding page collects First name, Last name, and Date of birth after a user's first sign-in. The data is stored only as standard Cognito user attributes on the existing user pool: `given_name`, `family_name`, `birthdate`. There is no new table and no user pool replacement — these attributes are already optional in the user pool schema, so `standardAttributes` does not change.
+
+**SPA client.** `readAttributes` now includes `given_name`, `family_name`, `birthdate`, so the ID token carries them. `writeAttributes` stays empty: a user cannot change these attributes directly, only through `POST /profile` (see `api.md`, "Profile" route).
+
+**Pre-token-generation trigger (extends §4).** The same V3_0 trigger now also has a user-token branch (not only the Router's M2M token branch). For a user token, when `birthdate` is present and the user is 18 or older, the trigger adds one access-token claim: `cei_age_verified = "true"`. The trigger stays failure-safe for user sign-in: on any internal error it returns the token unchanged, with no claim, so a trigger bug never blocks sign-in. The M2M-token behavior described in §4 (adding `sub` and session ID) is unchanged.
+
+**Write-once date of birth.** `backend/lambdas/profile-handler/` (`POST /profile`) looks the caller up by `sub` via Cognito `ListUsers`, validates the input, and writes the three attributes with `AdminUpdateUserAttributes`. Name validation: Unicode letters after NFC normalization, first character a letter, then letters/space/hyphen/apostrophe/period, 1–50 characters. It refuses a second write once `birthdate` is already set, returning `409 profile_exists` — date of birth is write-once. When the supplied `birthdate` shows the user as under 18, the Lambda still stores the attributes, then calls `AdminDisableUser` and `AdminUserGlobalSignOut`, and returns `403 age_restricted`. The user cannot sign in again until an admin re-enables the account. CDK construct: `backend/lib/constructs/profile.ts`.
+
+**Enforcement.** Gate helpers: `http_errors.require_age_verified` (Python) and `lambdas/shared/age-gate.js`'s `isAgeVerified` (Node). The gate is applied in the Session Runner, `POST /ui-actions`, the Session Metadata Handler, the Models/Settings Handler's `PUT` routes, the Jobs Handler, and the attachment presign route; a token with no `cei_age_verified` claim gets `403 onboarding_required`. The agent runtimes also check it: `agents/shared/runtime/identity.py` raises `AgeNotVerifiedError`, turned into a `403` by `session_guard.py`. Not gated: `POST /profile` and `POST /account/delete` (a user must reach them before onboarding is complete), the Exports Handler (reads only), and the agent-proxy Lambda (its function URL has no authorizer claims to check — the runtime-side check above covers it instead).
+
+**Frontend flow.** The SPA (`frontend/src/pages/`, a new `/onboarding` route, a `RequireOnboarding` gate in `App.tsx`, and `profileClient.ts`) sends a user whose ID token is missing `given_name`/`family_name`/`birthdate` to `/onboarding`, and centrally redirects on any `onboarding_required` error from any route. After a successful `POST /profile`, the SPA refreshes tokens so the new claims (including `cei_age_verified`) take effect immediately.
+
+Full route contract: `api.md` "Profile". Full decision: `.agents/decision-log.md` B112. Needs live AWS verification (deploy not yet run).
