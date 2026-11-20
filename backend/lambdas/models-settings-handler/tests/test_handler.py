@@ -69,7 +69,7 @@ def stubs(monkeypatch):
         yield
 
 
-def call(method, resource, *, sub="user-a", body=None, claims=True):
+def call(method, resource, *, sub="user-a", body=None, claims=True, extra_claims=None):
     event = {
         "httpMethod": method,
         "resource": resource,
@@ -78,7 +78,10 @@ def call(method, resource, *, sub="user-a", body=None, claims=True):
         "requestContext": {"requestId": "req-1"},
     }
     if claims:
-        event["requestContext"]["authorizer"] = {"claims": {"sub": sub}}
+        # B112: every call defaults to an age-verified token; tests of that gate override extra_claims.
+        event["requestContext"]["authorizer"] = {
+            "claims": {"sub": sub, "cei_age_verified": "true", **(extra_claims or {})}
+        }
     response = handler.handler(event, None)
     return response["statusCode"], json.loads(response["body"]), response
 
@@ -114,6 +117,16 @@ def test_put_settings_is_blocked_once_the_account_deleting_gate_is_set():
     assert status == 403 and body["error"]["code"] == "forbidden"
     # GET /settings is a read, not a run-starting write, and stays unaffected by the gate.
     status, _, _ = call("GET", "/settings")
+    assert status == 200
+
+
+def test_put_settings_is_blocked_without_the_age_verified_claim():
+    status, body, _ = call(
+        "PUT", "/settings", body={"default_mode": "science"}, extra_claims={"cei_age_verified": "false"},
+    )
+    assert status == 403 and body["error"]["code"] == "onboarding_required"
+    # GET /settings is a read, not a run-starting write, and stays unaffected by the gate.
+    status, _, _ = call("GET", "/settings", extra_claims={"cei_age_verified": "false"})
     assert status == 200
 
 

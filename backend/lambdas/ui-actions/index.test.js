@@ -6,8 +6,8 @@ const { createHandler, validateRequest, isRouteChoice, actionResponse, mapRouter
 const SESSION = '6f1c2d3e-0000-4000-8000-000000000001';
 const ACTION = { request_id: 'r1', session_id: SESSION, surface_id: 'analysis-scope', revision: 1, interaction_id: 'i-1', component_id: 'c-1', action_id: 'approve-scope', value: null };
 
-function request(body = ACTION, { sub = 'user-1', auth = 'Bearer token', accept } = {}) {
-  return { requestContext: { requestId: 'req-1', authorizer: { claims: { sub } } }, headers: { Authorization: auth, ...(accept ? { Accept: accept } : {}) }, body: JSON.stringify(body) };
+function request(body = ACTION, { sub = 'user-1', auth = 'Bearer token', accept, ageVerified = 'true' } = {}) {
+  return { requestContext: { requestId: 'req-1', authorizer: { claims: { sub, cei_age_verified: ageVerified } } }, headers: { Authorization: auth, ...(accept ? { Accept: accept } : {}) }, body: JSON.stringify(body) };
 }
 
 function harness({ agent = 'analysis', envelope = { status: 'completed', text: 'done' }, fail, routeChoice = {}, deleting = false, streamChunks, streamFail } = {}) {
@@ -298,6 +298,23 @@ test('B109: a deleting account cannot start a run through a route choice either'
   const pending = { message: 'x', mode: 'science', surface_id: 'router-choice-1', expires_at: future };
   const h = harness({ deleting: true, routeChoice: { pending } });
   await h.handler(request(routeChoiceAction()), {});
+  assert.equal(h.out.metadata.statusCode, 403);
+  assert.equal(h.calls.some((c) => c.target === 'routeStart'), false);
+});
+
+test('B112: an unverified-age user cannot resume a paused run', async () => {
+  const h = harness();
+  await h.handler(request(ACTION, { ageVerified: 'false' }), {});
+  assert.equal(h.out.metadata.statusCode, 403);
+  assert.equal(h.body().error.code, 'onboarding_required');
+  assert.equal(h.calls.length, 0);
+});
+
+test('B112: an unverified-age user cannot start a run through a route choice either', async () => {
+  const future = Math.floor(Date.now() / 1000) + 300;
+  const pending = { message: 'x', mode: 'science', surface_id: 'router-choice-1', expires_at: future };
+  const h = harness({ routeChoice: { pending } });
+  await h.handler(request(routeChoiceAction(), { ageVerified: 'false' }), {});
   assert.equal(h.out.metadata.statusCode, 403);
   assert.equal(h.calls.some((c) => c.target === 'routeStart'), false);
 });

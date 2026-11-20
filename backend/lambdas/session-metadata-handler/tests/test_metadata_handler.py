@@ -121,7 +121,7 @@ def tables(monkeypatch):
         yield
 
 
-def call(method, resource, *, sub="user-a", body=None, path=None, query=None, claims=True):
+def call(method, resource, *, sub="user-a", body=None, path=None, query=None, claims=True, extra_claims=None):
     event = {
         "httpMethod": method,
         "resource": resource,
@@ -132,7 +132,10 @@ def call(method, resource, *, sub="user-a", body=None, path=None, query=None, cl
         "requestContext": {"requestId": "req-1"},
     }
     if claims:
-        event["requestContext"]["authorizer"] = {"claims": {"sub": sub}}
+        # B112: every call defaults to an age-verified token; tests of that gate override extra_claims.
+        event["requestContext"]["authorizer"] = {
+            "claims": {"sub": sub, "cei_age_verified": "true", **(extra_claims or {})}
+        }
     response = handler.handler(event, None)
     return response["statusCode"], json.loads(response["body"]), response
 
@@ -141,6 +144,16 @@ def create(sub="user-a", title="Chat", mode="science", **extra):
     status, body, _ = call("POST", "/sessions", sub=sub, body={"title": title, "mode": mode, **extra})
     assert status == 201
     return body
+
+
+def test_create_is_blocked_without_the_age_verified_claim():
+    status, body, _ = call(
+        "POST", "/sessions", body={"title": "Chat", "mode": "science"}, extra_claims={"cei_age_verified": "false"},
+    )
+    assert status == 403 and body["error"]["code"] == "onboarding_required"
+    # GET /sessions is a read, not a run-starting write, and stays unaffected by the gate.
+    status, _, _ = call("GET", "/sessions", extra_claims={"cei_age_verified": "false"})
+    assert status == 200
 
 
 def user_message(sub: str, sid: str) -> None:

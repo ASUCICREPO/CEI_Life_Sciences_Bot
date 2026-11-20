@@ -20,6 +20,7 @@ from http_errors import (
     parse_json_body,
     parse_limit,
     request_id,
+    require_age_verified,
     user_id_from_claims,
 )
 from shared.config import config
@@ -182,6 +183,8 @@ def _create(event: dict[str, Any], user_id: str) -> dict[str, Any]:
     # B109/F19: a new session is a new run-starting write; the account-deleting gate blocks it.
     if _account_gate().is_deleting(user_id):
         raise ApiError(403, "forbidden", "This account is being deleted.")
+    # B112: a new session also requires a completed, age-verified profile.
+    require_age_verified(event)
     body = parse_json_body(event)
     _reject_unknown(body, {"title", "mode", "model_id", "agent_type"})
     if "title" not in body or "mode" not in body:
