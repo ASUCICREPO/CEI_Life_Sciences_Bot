@@ -159,12 +159,14 @@ describe('BackendStack', () => {
       expect(client.Properties.ExplicitAuthFlows).toEqual(['ALLOW_REFRESH_TOKEN_AUTH']);
     });
 
-    it('gives the SPA client no write access to any attribute (email is immutable at the schema level)', () => {
+    it('gives the SPA client no write access to any attribute (email is immutable, B112 profile fields are write-once)', () => {
       const { template } = built();
       const clients = template.findResources('AWS::Cognito::UserPoolClient');
       const client = Object.values(clients)[0];
       expect(client.Properties.WriteAttributes ?? []).toEqual([]);
-      expect(client.Properties.ReadAttributes).toEqual(expect.arrayContaining(['email']));
+      expect(client.Properties.ReadAttributes).toEqual(
+        expect.arrayContaining(['email', 'given_name', 'family_name', 'birthdate']),
+      );
     });
   });
 

@@ -23,6 +23,7 @@ import { PythonDepsLayer } from './constructs/python-deps-layer';
 import { AgentRuntimes } from './constructs/agent-runtimes';
 import { ModelGuardrail } from './constructs/model-guardrail';
 import { ModelSettings } from './constructs/model-settings';
+import { Profile } from './constructs/profile';
 import { ToolGateway, fullScope, loadToolSchemas, RESERVED_SOURCE_IDS } from './constructs/tool-gateway';
 import { SessionRouter } from './constructs/session-router';
 import { suppressXrayWildcard } from './constructs/tracing';
@@ -31,14 +32,16 @@ import { BackgroundJobs } from './constructs/background-jobs';
 import { AccountDeletion } from './constructs/account-deletion';
 import { AttachmentsKnowledgeBase } from './constructs/attachments-knowledge-base';
 
-// B109/F19: session-runner and ui-actions both require('../shared/account-gate') (backend/lambdas/shared/
-// account-gate.js). A plain `Code.fromAsset(lambdas/<dir>)` zips only that one directory, so `shared/` would
-// be missing at the Lambda's runtime filesystem; this stages the zip root at `lambdas/` instead, with every
-// sibling excluded except the one Lambda's own directory and this one shared file -- the exact same relative
-// layout (`<dir>/index.js` next to `shared/account-gate.js`) that already works for local `require` and tests.
+// B109/F19/B112: session-runner and ui-actions both require('../shared/account-gate') and
+// require('../shared/age-gate') (backend/lambdas/shared/{account-gate,age-gate}.js). A plain
+// `Code.fromAsset(lambdas/<dir>)` zips only that one directory, so `shared/` would be missing at the
+// Lambda's runtime filesystem; this stages the zip root at `lambdas/` instead, with every sibling excluded
+// except the one Lambda's own directory and these shared files -- the exact same relative layout
+// (`<dir>/index.js` next to `shared/account-gate.js`/`shared/age-gate.js`) that already works for local
+// `require` and tests.
 function nodeLambdaCode(dir: string): lambda.Code {
   return lambda.Code.fromAsset(path.join(__dirname, '..', 'lambdas'), {
-    exclude: ['*', '!' + dir, '!' + dir + '/**', '!shared', '!shared/account-gate.js', dir + '/*.test.js'],
+    exclude: ['*', '!' + dir, '!' + dir + '/**', '!shared', '!shared/account-gate.js', '!shared/age-gate.js', dir + '/*.test.js'],
   });
 }
 
@@ -363,8 +366,11 @@ export class BackendStack extends cdk.Stack {
       supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
       // ADR: no direct-auth flows | Rationale: security review — this is a hosted-UI/PKCE-only client; SRP/custom/password/admin flows must stay off so credentials can only move through the managed-login OAuth endpoint
       // Alternative: `authFlows: {}` rejected — CDK's UserPoolClient omits ExplicitAuthFlows entirely when `authFlows` is undefined or empty (see configureAuthFlows in user-pool-client.js), which leaves Cognito's own default (SRP + custom auth enabled) in place instead of locking it down
-      readAttributes: new cognito.ClientAttributes().withStandardAttributes({ email: true }),
-      // ADR: empty writeAttributes | Rationale: security review — email is immutable at the schema level and there are no other user-editable profile fields yet, so no attribute needs app-client write access
+      // B112: given_name/family_name/birthdate added so the ID token carries the onboarding profile.
+      readAttributes: new cognito.ClientAttributes().withStandardAttributes({
+        email: true, givenName: true, familyName: true, birthdate: true,
+      }),
+      // ADR: empty writeAttributes | Rationale: security review — email is immutable at the schema level; given_name/family_name/birthdate (B112) are write-once and set only by profile-handler's Admin* call, never by the app client directly | Alternative: granting the client write access to the three new attributes rejected — would let a user bypass the write-once/age-verification rule in profile-handler
       writeAttributes: new cognito.ClientAttributes(),
     });
 
@@ -1022,6 +1028,16 @@ export class BackendStack extends cdk.Stack {
       allowedOrigins,
       blockedModelIds: this.config?.blockedModelIds ?? [],
     });
+    // B112: POST /profile — founder onboarding (first/last name, DOB), stored only as Cognito user attributes.
+    const profile = new Profile(this, 'Profile', {
+      api,
+      methodOptions,
+      corsOptions,
+      requestValidator,
+      pythonDepsLayer: pythonDeps.layer,
+      allowedOrigins,
+      userPool,
+    });
     // F08: POST /sessions reads the caller's saved default_model_id when none is given (read-only, no PutItem)
     sessionMetadata.fn.addEnvironment('CEI_USER_METADATA_TABLE', modelSettings.table.tableName);
     modelSettings.table.grant(sessionMetadata.role, 'dynamodb:GetItem');
@@ -1184,6 +1200,7 @@ export class BackendStack extends cdk.Stack {
         ClientDiagnostics: clientDiagnostics.fn, Exports: exportsHandler.fn, LifeSciencesOperations: gateway.operationsFunction,
         NcbiReadOnly: gateway.ncbiFunction, Jobs: backgroundJobs.jobsFunction, JobWatchdog: backgroundJobs.watchdogFunction,
         PreToken: gateway.preTokenFunction, TokenRefresh: gateway.tokenRefreshFunction, ModelSettings: modelSettings.function,
+        Profile: profile.function,
         AttachmentPresign: attachmentPresign.fn, AttachmentProcessor: attachmentProcessor,
         ...Object.fromEntries(Object.entries(gateway.sourceFunctions).map(([name, fn]) => [`Source${name}`, fn])),
       },
@@ -1205,6 +1222,7 @@ export class BackendStack extends cdk.Stack {
         SessionHistory: { logGroup: sessionHistory.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         Exports: { logGroup: exportsHandler.fn.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         ModelSettings: { logGroup: modelSettings.function.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
+        Profile: { logGroup: profile.function.logGroup, terms: ['handled_api_failure', 'unhandled error'] },
         NcbiReadOnly: { logGroup: gateway.ncbiFunction.logGroup, terms: ['ncbi_request_failed'] },
         UiActions: { logGroup: uiActionsLogs, terms: ['resume_failed'] },
         Jobs: { logGroup: backgroundJobs.jobsFunction.logGroup, terms: ['handled_api_failure', 'unhandled error', 'runtime_stop_failed'] },
