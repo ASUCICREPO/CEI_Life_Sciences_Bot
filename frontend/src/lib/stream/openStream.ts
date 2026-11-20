@@ -1,6 +1,7 @@
 import { TERMINAL_EVENT_TYPES, parseStreamEvent, type StreamEvent } from './events';
 import { SseParser, frameToRawEvent } from './sseParser';
 import { reportClientFailure } from '../clientDiagnostics';
+import { notifyOnboardingRequired } from '../auth/onboardingGate';
 
 // Opens POST /chat/stream over fetch + ReadableStream (B4) and yields typed stream events.
 // On a dropped connection it re-opens the stream with backoff, sending `resume_from_seq`
@@ -86,6 +87,10 @@ export async function* openStream(options: OpenStreamOptions): AsyncGenerator<St
           const envelope = body && typeof body === 'object' && 'error' in body ? (body as { error?: unknown }).error : null;
           const requestId = envelope && typeof envelope === 'object' && 'request_id' in envelope && typeof envelope.request_id === 'string'
             ? envelope.request_id : undefined;
+          const code = envelope && typeof envelope === 'object' && 'code' in envelope && typeof envelope.code === 'string'
+            ? envelope.code : undefined;
+          // /chat/stream is a run-starting call too; it returns this until onboarding is done.
+          if (code === 'onboarding_required') notifyOnboardingRequired();
           if (response.status >= 500 || response.status === 429) reportClientFailure('stream', 'http_error', response.status, requestId);
           const message = envelope && typeof envelope === 'object' && 'message' in envelope
             && typeof envelope.message === 'string' && envelope.message.length <= 1000
