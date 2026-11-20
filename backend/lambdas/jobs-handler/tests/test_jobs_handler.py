@@ -45,10 +45,12 @@ def stores(monkeypatch):
         yield JobRepository("jobs", dynamodb=ddb)
 
 
-def event(method, resource, *, user="alice", job_id=None, query=None, token="Bearer user-token"):
+def event(method, resource, *, user="alice", job_id=None, query=None, token="Bearer user-token", extra_claims=None):
     return {"httpMethod": method, "resource": resource, "headers": {"Authorization": token},
             "pathParameters": {"jobId": job_id} if job_id else None, "queryStringParameters": query,
-            "requestContext": {"requestId": "r1", "authorizer": {"claims": {"sub": user}}}}
+            # B112: every call defaults to an age-verified token; tests of that gate override extra_claims.
+            "requestContext": {"requestId": "r1", "authorizer": {
+                "claims": {"sub": user, "cei_age_verified": "true", **(extra_claims or {})}}}}
 
 
 def make_job(repo, user="alice", **kwargs):
@@ -112,6 +114,21 @@ def test_cancel_of_finished_job_is_idempotent(stores):
         response = handler.handler(event("POST", "/jobs/{jobId}/cancel", job_id=job["job_id"]), None)
     assert response["statusCode"] == 200 and body(response)["status"] == "completed"
     stop.assert_not_called()
+
+
+def test_cancel_is_blocked_without_the_age_verified_claim(stores):
+    job = make_job(stores)
+    with patch.object(handler, "_stop_runtime_session") as stop:
+        response = handler.handler(
+            event("POST", "/jobs/{jobId}/cancel", job_id=job["job_id"], extra_claims={"cei_age_verified": "false"}),
+            None,
+        )
+    assert response["statusCode"] == 403 and body(response)["error"]["code"] == "onboarding_required"
+    stop.assert_not_called()
+    assert stores.get("alice", job["job_id"])["status"] == "running"
+    # GET /jobs is a read, not a run-starting write, and stays unaffected by the gate.
+    read = handler.handler(event("GET", "/jobs", extra_claims={"cei_age_verified": "false"}), None)
+    assert read["statusCode"] == 200
 
 
 def test_other_user_cannot_cancel(stores):

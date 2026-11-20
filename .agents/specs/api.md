@@ -23,7 +23,7 @@ Every non-2xx response uses this shape:
 }
 ```
 
-`code` is one of: `invalid_request`, `unauthorized`, `forbidden`, `not_found`, `rate_limited`, `concurrency_limit`, `stale_revision`, `service_unavailable`, `internal_error`. This deliberately reuses the four codes already defined for SSE errors in `shared/transport/sse.py` (`invalid_request`, `rate_limited`, `service_unavailable`, `internal_error`) and adds REST-only codes. `message` is a safe, redacted, user-facing string — never a stack trace, model ID, or secret (B7's redaction rule applies to every error surface, not only the trace).
+`code` is one of: `invalid_request`, `unauthorized`, `forbidden`, `not_found`, `rate_limited`, `concurrency_limit`, `stale_revision`, `service_unavailable`, `internal_error`, `onboarding_required`, `profile_exists`, `age_restricted`. This deliberately reuses the four codes already defined for SSE errors in `shared/transport/sse.py` (`invalid_request`, `rate_limited`, `service_unavailable`, `internal_error`) and adds REST-only codes. The last three codes are new with B112 — see "Profile" and "Onboarding gate" below. `message` is a safe, redacted, user-facing string — never a stack trace, model ID, or secret (B7's redaction rule applies to every error surface, not only the trace).
 
 ## Pagination (cursor, B59)
 
@@ -231,6 +231,28 @@ There is no `POST /jobs` route. Jobs are started internally by the Session Route
 
 `PUT /settings/api-keys/{sourceId}` — request `{"api_key": "..."}`, response `{"source_id": "ncbi", "configured": true}` — **the key value is never returned by any route**, including this one's own response. `DELETE /settings/api-keys/{sourceId}` removes the Secrets Manager secret.
 
+### Profile (B112)
+
+| Method | Path | Lambda | Mode | Phase |
+|---|---|---|---|---|
+| POST | `/profile` | Profile Handler (`backend/lambdas/profile-handler/`) | BUFFERED | Built (B112, not yet assigned a feature phase) |
+
+Status: Exists (partial) — built in code (`backend/lambdas/profile-handler/`, CDK construct `backend/lib/constructs/profile.ts`), not yet deployed; needs live AWS verification. `POST /profile` is the one-time founder onboarding route, and the only route that may ever set `given_name`, `family_name`, and `birthdate` (B112). These three fields are stored only as standard Cognito user attributes, not in any DynamoDB table (see `.agents/specs/data-model.md` §4).
+
+```json
+// request
+{ "given_name": "Ada", "family_name": "Lovelace", "birthdate": "2000-01-01" }
+
+// response 200
+{ "given_name": "Ada", "family_name": "Lovelace", "birthdate": "2000-01-01", "age_verified": true }
+```
+
+Name fields: Unicode letters after NFC normalization, first character a letter, then letters/space/hyphen/apostrophe/period, 1–50 characters. The Lambda looks the caller up by `sub` via Cognito `ListUsers`, validates the three fields, then writes them to the calling user's Cognito attributes with `AdminUpdateUserAttributes`. A second call once `birthdate` is already set on the user returns `409 profile_exists` — date of birth is write-once. When the supplied `birthdate` shows the user as under 18, the Lambda still stores the attributes, then calls `AdminDisableUser` and `AdminUserGlobalSignOut`, and returns `403 age_restricted`; the user cannot sign in again until an admin re-enables the account. `POST /profile` itself is never gated by the "Onboarding gate" below (a user must be able to reach it before their profile is complete). Errors use the standard envelope at the top of this file.
+
+### Onboarding gate (B112)
+
+Status: Exists (partial) — built in code, not yet deployed; needs live AWS verification. Gate helpers: `http_errors.require_age_verified` (Python) and `lambdas/shared/age-gate.js`'s `isAgeVerified` (Node). The gate is applied in the Session Runner (`/chat/stream`, `/tools/{source}/chat/stream`), `POST /ui-actions`, the Session Metadata Handler (the session-write routes, `POST`/`PATCH /sessions`), the Models/Settings Handler's `PUT` routes (`PUT /settings`, `PUT /settings/api-keys/{sourceId}`), the Jobs Handler, and the attachment presign route — each requires the caller's access token to carry the `cei_age_verified` claim added by the pre-token-generation trigger (see `.agents/specs/auth-and-tool-scope.md` §14). A token with no such claim gets `403 onboarding_required`. The agent runtimes carry the same check (`agents/shared/runtime/identity.py`'s `AgeNotVerifiedError`, turned into `403` by `session_guard.py`). `POST /profile`, `POST /account/delete`, the Exports Handler (reads only), and the agent-proxy Lambda (no authorizer claims on its function URL; the runtime-side check above covers it) are exempt from this gate.
+
 ### Exports
 
 | Method | Path | Mode | Phase |
@@ -270,6 +292,9 @@ Behind a flag, off by default (B109). Disables the Cognito user (`AdminDisableUs
 | `stale_revision` | A `/ui-actions` request against a surface `revision` that is no longer current (reuses the existing `stale` action-response status) |
 | `invalid_request` | Schema validation failure on the request body |
 | `service_unavailable` / `internal_error` | Upstream (AgentCore, DynamoDB, etc.) failure; message is always the redacted generic string, per B7 |
+| `onboarding_required` | Access token has no `cei_age_verified` claim, on a route gated by the onboarding check (B112) |
+| `profile_exists` | `POST /profile` called again after `birthdate` is already set on the user (B112) |
+| `age_restricted` | `POST /profile` computed an age under 18 from the supplied `birthdate` (B112) |
 
 ## TBD list (this file)
 
@@ -277,3 +302,5 @@ Behind a flag, off by default (B109). Disables the Cognito user (`AdminDisableUs
 - TBD: denied-call error shape inside LangGraph when the Gateway returns a Cedar deny (cross-ref `.agents/specs/auth-and-tool-scope.md` §8).
 
 Resolved by B67–B109: default/max pagination limit 20/100 (B78); `/chat/stream` reconnect/resume via `resume_from_seq` and Chat History Store replay (B68); the internal token-refresh route (B67); `DELETE /sessions/{sessionId}` is removed, no chat delete (B104); account delete is a `202 Accepted` response, a disable-plus-gate step, and a worker cascade 9 hours later (B73, B109); the client-initiated export route `POST /sessions/{id}/turns/{turn}/export` (B74); export download URL TTL 15 min (B78); async threshold is 10 minutes with no mid-run handoff (B79); low-confidence routing uses a `ChoicePicker` of the 4 agents (B80); the tool-agent stream route `/tools/{source}/chat/stream` (B84).
+
+B112 adds `POST /profile` (write-once `given_name`/`family_name`/`birthdate` on Cognito, with an 18+ age check) and the onboarding gate (`403 onboarding_required` on every other run-starting route when the access token has no `cei_age_verified` claim). Exists (partial): built in code, not yet deployed; needs live AWS verification.

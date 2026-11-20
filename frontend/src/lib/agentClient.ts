@@ -4,6 +4,8 @@ import { getLoadedRuntimeConfig } from './auth/config';
 import { reportClientFailure } from './clientDiagnostics';
 import { consumeEventStream } from './stream/openStream';
 import type { StreamEvent } from './stream/events';
+import { asRecord } from './apiErrorEnvelope';
+import { notifyOnboardingRequired } from './auth/onboardingGate';
 
 export type AgentName = 'research' | 'drafting' | 'analysis' | 'pipeline';
 
@@ -157,6 +159,13 @@ async function performRequest(
     if (response.status >= 500 || response.status === 429) reportClientFailure('agent', 'http_error', response.status);
     if (response.status === 401) {
       throw new AgentClientError('Your sign-in has expired. Sign in again to continue.');
+    }
+    if (response.status === 403) {
+      const body: unknown = await response.json().catch(() => null);
+      if (asRecord(asRecord(body)?.error)?.code === 'onboarding_required') {
+        notifyOnboardingRequired();
+        throw new AgentClientError('Finish setting up your profile to continue.');
+      }
     }
     if (response.status === 429) {
       throw new AgentClientError(`The ${agent} agent is busy. Wait a moment and try again.`);

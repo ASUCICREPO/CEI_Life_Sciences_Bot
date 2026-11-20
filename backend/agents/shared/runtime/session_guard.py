@@ -8,7 +8,8 @@ session state, replay fixtures, the in-memory LangGraph thread, or the job regis
 3. that user owns the session (fail closed: an owner lookup that throws refuses the request).
 
 Error mapping (the body never carries internals; the real cause is logged to the runtime's CloudWatch log):
-  invalid session id -> 400 | unauthenticated -> 401 | foreign session -> 404 | owner lookup failed -> 500
+  invalid session id -> 400 | unauthenticated -> 401 | age not verified (B112) -> 403 |
+  foreign session -> 404 | owner lookup failed -> 500
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ from shared.persistence.ownership import (
     is_session_uuid,
 )
 from shared.runtime import history
-from shared.runtime.identity import UnauthenticatedError, resolve_user_id
+from shared.runtime.identity import AgeNotVerifiedError, UnauthenticatedError, resolve_user_id
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +87,9 @@ def guarded_entrypoint(fn: Handler) -> Callable[[Mapping[str, Any], Any], Awaita
         except UnauthenticatedError as exc:
             log.warning("session guard: unauthenticated request (%s)", exc)
             return error_response(401, "Authentication is required.")
+        except AgeNotVerifiedError:
+            log.warning("session guard: age verification missing for an authenticated caller")
+            return error_response(403, "Complete your profile to continue.")
         except SessionNotFoundError:
             log.warning("session guard: refused session not owned by the caller session=%s", session_id)
             return error_response(404, "Session not found.")

@@ -12,7 +12,7 @@ from shared.persistence.chat_metadata import SessionNotFoundError
 from shared.persistence.ownership import GENERIC_INTERNAL_ERROR, OwnershipCheckError
 from shared.runtime import session_guard
 from shared.runtime.session_guard import AuthorizedSession, guarded_entrypoint
-from tests.conftest import auth_headers
+from tests.conftest import auth_headers, unverified_age_headers
 
 SESSION = "0b0c4f7e-4444-4a44-8a44-0000000000aa"
 
@@ -102,6 +102,16 @@ def test_invalid_bearer_token_is_401(monkeypatch, events):
     response = asyncio.run(handler({}, _Context(SESSION, headers={"Authorization": "Bearer forged"})))
     assert response.status_code == 401
     assert calls == []
+
+
+def test_age_unverified_user_is_403_and_handler_not_called(monkeypatch, events):
+    recorder = _install(monkeypatch, events)
+    handler, calls = _guarded(events)
+    response = asyncio.run(handler({}, _Context(SESSION, headers=unverified_age_headers("alice"))))
+    assert response.status_code == 403
+    assert _body(response) == {"status": "error", "message": "Complete your profile to continue."}
+    assert calls == []
+    assert recorder.calls == []
 
 
 def test_foreign_session_is_404_and_handler_not_called(monkeypatch, events):

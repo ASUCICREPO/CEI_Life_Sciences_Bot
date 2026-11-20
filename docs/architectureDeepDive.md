@@ -30,6 +30,8 @@ The production frontend is the `founder-ai-dashboard` Vite SPA (React 19, Tailwi
 
 **Exists:** the Cognito resource server and Router M2M client (`backend/lib/constructs/tool-gateway.ts`), and the REST API Cognito authorizer (`backend/lib/backend-stack.ts`).
 
+**Exists (partial) (B112) — built in code, not yet deployed.** A one-time founder onboarding page (First name, Last name, Date of birth) after first sign-in, with an 18+ age gate. The three fields are standard Cognito user attributes (`given_name`, `family_name`, `birthdate`) on the existing user pool — no new table. `backend/lambdas/profile-handler/` (`POST /profile`, CDK construct `backend/lib/constructs/profile.ts`) writes them once (`AdminUpdateUserAttributes`) and disables an under-18 user (`AdminDisableUser` + `AdminUserGlobalSignOut`). The pre-token-generation trigger's new user-token branch adds a `cei_age_verified` claim; the Session Runner, UI actions, Session Metadata Handler, Models/Settings Handler, Jobs Handler, attachment presign, and the agent runtimes all require it (`403 onboarding_required` if missing). The SPA has a matching `/onboarding` page and `RequireOnboarding` gate. Needs live AWS verification — no deploy has run yet. See `.agents/decision-log.md` B112 and `.agents/specs/auth-and-tool-scope.md` §14.
+
 ---
 
 ## 2. Real-Time Chat (Streaming Path — SSE)
@@ -107,6 +109,7 @@ each with its own 2 vCPU / 8 GB, and each step gets its own trace.
 - **Session History Handler** — **Exists.** Cursor-paginated turn history (default page 20, max 100); the trace for a turn loads only when the user expands that turn's thinking block.
 - **Exports Handler** — **Exists.** Lists the exports of a session and signs a download URL.
 - **Fetch User Settings** — **Planned — not built.** User preferences, configured sources, model/mode defaults (DynamoDB).
+- **Profile Handler** — **Exists (partial) (B112) — built in code, not yet deployed.** `POST /profile` (`backend/lambdas/profile-handler/`), the one-time founder onboarding route; writes `given_name`/`family_name`/`birthdate` to Cognito once and runs the 18+ age check. Every other run-starting route is gated on the resulting `cei_age_verified` token claim. Needs live AWS verification.
 - **Delete account** — **Planned — not built** (deferred). `backend/lambdas/delete-worker/` is a tested foundation only, with no deployed resource. There is no chat delete (B104). Target: `POST /account/delete` disables the Cognito user and revokes every session at once, sets a "deleting" gate that blocks any new run, returns `202 Accepted` at once, and a worker removes DynamoDB items, S3 files, Knowledge Base chunks, memories, and checkpoints 9 hours later, once any late write has finished (B109).
 
 Full route table: `docs/APIDoc.md`, detail: `.agents/specs/api.md`.

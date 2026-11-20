@@ -1,11 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSessionsClient, SessionsClientError, toHistoryMessage } from './sessionsClient';
+import { setOnboardingRequiredHandler } from './auth/onboardingGate';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
 describe('createSessionsClient', () => {
+  afterEach(() => setOnboardingRequiredHandler(null));
+
   it('never calls the API without an access token', async () => {
     const fetchImpl = vi.fn();
     const client = createSessionsClient(async () => null, { fetchImpl });
@@ -74,6 +77,26 @@ describe('createSessionsClient', () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ nope: true }));
     const client = createSessionsClient(async () => 'tok', { fetchImpl });
     await expect(client.listSessions()).rejects.toBeInstanceOf(SessionsClientError);
+  });
+
+  it('notifies the onboarding-required handler on a 403 onboarding_required envelope (createSession starts a run)', async () => {
+    const handler = vi.fn();
+    setOnboardingRequiredHandler(handler);
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ error: { code: 'onboarding_required', message: 'Finish onboarding first.' } }, 403),
+    );
+    const client = createSessionsClient(async () => 'tok', { fetchImpl });
+    await expect(client.createSession({ title: 't', mode: 'science' })).rejects.toMatchObject({ code: 'onboarding_required' });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not notify the onboarding-required handler on an unrelated error code', async () => {
+    const handler = vi.fn();
+    setOnboardingRequiredHandler(handler);
+    const fetchImpl = vi.fn(async () => jsonResponse({ error: { code: 'not_found', message: 'Chat not found.' } }, 404));
+    const client = createSessionsClient(async () => 'tok', { fetchImpl });
+    await expect(client.getSession('s1')).rejects.toBeInstanceOf(SessionsClientError);
+    expect(handler).not.toHaveBeenCalled();
   });
 });
 

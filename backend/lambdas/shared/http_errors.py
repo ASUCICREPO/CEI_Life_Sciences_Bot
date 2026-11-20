@@ -31,8 +31,17 @@ ERROR_CODES = frozenset(
         "stale_revision",
         "service_unavailable",
         "internal_error",
+        # B112: POST /profile (profile-handler) and the shared run-start/write age-verification gate below.
+        "profile_exists",
+        "age_restricted",
+        "onboarding_required",
     }
 )
+
+# B112: access-token claim the pre-token-generation trigger adds once a user's stored birthdate proves
+# they are 18+ (backend/lambdas/pre-token-generation/handler.py). Checked by every REST route that starts
+# a run or writes user data, the same way `user_id_from_claims` reads the `sub` claim.
+AGE_VERIFIED_CLAIM = "cei_age_verified"
 
 
 class JsonFormatter(logging.Formatter):
@@ -193,6 +202,18 @@ def user_id_from_claims(event: dict[str, Any]) -> str:
     if not isinstance(sub, str) or not sub:
         raise ApiError(401, "unauthorized", "Authentication is required.")
     return sub
+
+
+def require_age_verified(event: dict[str, Any]) -> None:
+    """B112 run-start/write gate: refuses a request whose access token lacks the age-verified claim.
+
+    Applied only where the B109 account-deleting gate already applies (and to a few additional
+    run-starting/writing routes called out separately) -- never to GET reads, POST /profile itself,
+    or POST /account/delete.
+    """
+    claims = ((event.get("requestContext") or {}).get("authorizer") or {}).get("claims") or {}
+    if claims.get(AGE_VERIFIED_CLAIM) != "true":
+        raise ApiError(403, "onboarding_required", "Complete your profile to continue.")
 
 
 def parse_json_body(event: dict[str, Any]) -> dict[str, Any]:

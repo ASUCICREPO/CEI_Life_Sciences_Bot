@@ -9,6 +9,10 @@ vi.mock('../lib/useSessions', () => ({
   resumeState: (session: unknown) => session,
 }));
 
+vi.mock('../lib/auth/AuthProvider', () => ({
+  useAuth: () => ({ user: { profile: { email: 'jane.doe@example.com' } } }),
+}));
+
 afterEach(cleanup);
 
 function AskProbe() {
@@ -28,6 +32,14 @@ function renderHome() {
     </MemoryRouter>,
   );
 }
+
+describe('HomePage greeting', () => {
+  it('greets the signed-in user by name, not a placeholder', () => {
+    renderHome();
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading.textContent).toMatch(/^Good (morning|afternoon|evening), Jane$/);
+  });
+});
 
 describe('HomePage free-text entry', () => {
   it('navigates to /ask with the typed prompt in route state', async () => {

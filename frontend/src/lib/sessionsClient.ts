@@ -1,6 +1,7 @@
 import { safeParseCEIUISurface, type CEIUISurface } from './cei-ui/schema';
 import { parseStreamEvent, type TraceEvent } from './stream/events';
 import { reportClientFailure } from './clientDiagnostics';
+import { notifyOnboardingRequired } from './auth/onboardingGate';
 
 // Typed client for the Session REST API (session-metadata / session-history Lambdas behind API Gateway).
 // Every call carries the Cognito access token; the backend derives the user from the token's `sub` only.
@@ -289,6 +290,8 @@ export function createSessionsClient(getToken: TokenProvider, options: SessionsC
     if (!response.ok) {
       // api.md error envelope: { error: { code, message, retriable, request_id } }
       const envelope = asRecord(asRecord(parsed)?.error);
+      // run-starting calls (createSession) return this until onboarding is done.
+      if (envelope?.code === 'onboarding_required') notifyOnboardingRequired();
       if (response.status >= 500 || response.status === 429) {
         reportClientFailure('sessions', 'http_error', response.status, typeof envelope?.request_id === 'string' ? envelope.request_id : undefined);
       }

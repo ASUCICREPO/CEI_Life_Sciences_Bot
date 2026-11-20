@@ -1,6 +1,6 @@
 # F04 — Data tools
 
-Status: in progress (deployed 2026-11-03 in LOG_ONLY; deployed check 21/22 via `backend/scripts/f4_gateway_test.py`; task 9 — flip to ENFORCE and re-run — rides on the first F5 deploy; user-id mechanism for task 5 deferred to F18 by B99) | Depends on: F1, S2 | Decisions: B19, B20, B22, B26, B27, B30, B67, B69, B70, B86 | Specs: [`../specs/tools.md`](../specs/tools.md) §1–2, [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) (full)
+Status: in progress (deployed 2026-11-03 in LOG_ONLY; deployed check 21/22 via `backend/scripts/f4_gateway_test.py`; task 9 — flip to ENFORCE and re-run — rides on the first F5 deploy; user-id mechanism for task 5 deferred to F18 by B99; B112's onboarding/age-gate branch, added to the pre-token-generation trigger built here, is now built in code, not yet deployed; needs live AWS verification) | Depends on: F1, S2 | Decisions: B19, B20, B22, B26, B27, B30, B67, B69, B70, B86 | Specs: [`../specs/tools.md`](../specs/tools.md) §1–2, [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) (full, see §14 for B112)
 
 ## Goal
 

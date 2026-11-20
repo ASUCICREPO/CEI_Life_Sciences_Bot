@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { createHandler, validateRequest, parseEvents, routerError, bufferedToEvents, choiceRequiredEvents, choicePickerSurface, requestBodyFor, walkComponents } = require('./index');
 const session = '6f1c2d3e-0000-4000-8000-000000000001';
 const run = '6f1c2d3e-0000-4000-8000-000000000002';
-function request(extra = {}) { return { requestContext: { requestId: 'request-1', authorizer: { claims: { sub: 'user-1' } } }, headers: { Authorization: 'Bearer token' }, body: JSON.stringify({ session_id: session, run_id: run, message: 'question', task_type: 'live-research', mode: 'science', ...extra }) }; }
+function request(extra = {}, claimsExtra = {}) { return { requestContext: { requestId: 'request-1', authorizer: { claims: { sub: 'user-1', cei_age_verified: 'true', ...claimsExtra } } }, headers: { Authorization: 'Bearer token' }, body: JSON.stringify({ session_id: session, run_id: run, message: 'question', task_type: 'live-research', mode: 'science', ...extra }) }; }
 function harness() {
   const events = [], heads = new Set(), calls = [], streamEvents = {};
   const deps = {
@@ -93,6 +93,23 @@ test('B109: a deleting account can still replay an already-started run', async (
   assert.equal(first.metadata.statusCode, 200);
   h.deps.accountDeleting = async () => true;
   const replay = await h.invoke(request({ resume_from_seq: 0 }));
+  assert.equal(replay.metadata.statusCode, 200);
+  assert.match(replay.text, /event: surface_end/);
+});
+
+test('B112: an unverified-age user cannot start a new run', async () => {
+  const h = harness();
+  const response = await h.invoke(request({}, { cei_age_verified: 'false' }));
+  assert.equal(response.metadata.statusCode, 403);
+  assert.equal(JSON.parse(response.text).error.code, 'onboarding_required');
+  assert.deepEqual(h.calls, []);
+});
+
+test('B112: an unverified-age user can still replay an already-started run', async () => {
+  const h = harness();
+  const first = await h.invoke(request());
+  assert.equal(first.metadata.statusCode, 200);
+  const replay = await h.invoke(request({ resume_from_seq: 0 }, { cei_age_verified: 'false' }));
   assert.equal(replay.metadata.statusCode, 200);
   assert.match(replay.text, /event: surface_end/);
 });

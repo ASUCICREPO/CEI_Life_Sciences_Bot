@@ -10,6 +10,7 @@ import {
   startNewSessionId,
 } from './agentClient';
 import { loadRuntimeConfig, resetRuntimeConfigForTests } from './auth/config';
+import { setOnboardingRequiredHandler } from './auth/onboardingGate';
 
 function sse(seq: number, type: string, data: Record<string, unknown>): string {
   return `id: ${seq}\nevent: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -51,7 +52,34 @@ describe('agentClient', () => {
   });
   afterEach(() => {
     setAgentTokenProvider(null);
+    setOnboardingRequiredHandler(null);
     resetRuntimeConfigForTests();
+  });
+
+  it('notifies the onboarding-required handler on a 403 onboarding_required body, a run-starting call', async () => {
+    const handler = vi.fn();
+    setOnboardingRequiredHandler(handler);
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: 'onboarding_required', message: 'Finish onboarding first.' } }),
+      { status: 403 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    setAgentTokenProvider(async () => 'tok-abc');
+    await expect(invokeAgent('research', { prompt: 'x', mode: 'science' }, 's1')).rejects.toThrow();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not notify the onboarding-required handler on an unrelated 403', async () => {
+    const handler = vi.fn();
+    setOnboardingRequiredHandler(handler);
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: 'forbidden', message: 'Not allowed.' } }),
+      { status: 403 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    setAgentTokenProvider(async () => 'tok-abc');
+    await expect(invokeAgent('research', { prompt: 'x', mode: 'science' }, 's1')).rejects.toThrow();
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it('refuses to invoke an agent without an access token (no request is sent)', async () => {

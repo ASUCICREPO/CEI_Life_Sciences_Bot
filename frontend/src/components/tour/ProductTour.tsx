@@ -394,7 +394,9 @@ export function ProductTour() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, skip]);
 
-  if (!isOpen) return null;
+  // Defense in depth: AppShell (the only place this mounts) is never rendered on /onboarding, but guard
+  // the component itself too in case that ever changes.
+  if (!isOpen || location.pathname === '/onboarding') return null;
 
   const padding = 8;
   const tooltipWidth = Math.min(380, window.innerWidth - 32);

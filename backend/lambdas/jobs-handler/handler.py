@@ -16,7 +16,7 @@ from typing import Any
 import boto3
 
 from http_errors import (ApiError, api_handler, decode_cursor, get_logger, invalid_request, json_response,
-                         not_found, page_envelope, parse_limit, user_id_from_claims)
+                         not_found, page_envelope, parse_limit, require_age_verified, user_id_from_claims)
 from shared.persistence.active_runs import ActiveRunRepository
 from shared.persistence.jobs import (CANCELLED, TERMINAL_STATUSES, JobRepository, JobTransitionError, public_job,
                                      valid_job_id)
@@ -91,6 +91,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return response
 
     if route == ("POST", "/jobs/{jobId}/cancel"):
+        # B112: a cancel writes the job's status; it requires a completed, age-verified profile.
+        require_age_verified(event)
         item = _owned_job(jobs, user_id, params.get("jobId"))
         if item["status"] in TERMINAL_STATUSES:
             # Idempotent: cancelling a finished job changes nothing and reports its real state.
