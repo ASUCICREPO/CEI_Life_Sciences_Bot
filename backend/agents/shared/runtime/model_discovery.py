@@ -163,13 +163,24 @@ def discover_models_cached(client: Any, *, cache_key: str = "default",
     return models
 
 
+# ADR: the picker lists only Global and US inference profiles | Rationale: the deploy tool (deploy/cei_deploy)
+# lets the admin choose only global. and us. profiles, and blocks an unchosen profile by its prefixed id (B113),
+# which leaves the bare foundation-model id unblocked; listing bare ids showed models the admin never chose |
+# Alternative: block bare ids in the deploy tool (rejected: an unprefixed pattern blocks every prefix, B113).
+_SELECTABLE_PREFIXES = ("global.", "us.")
+
+
+def _selectable(model_id: str, blocklist: list[str]) -> bool:
+    return model_id.startswith(_SELECTABLE_PREFIXES) and not is_blocked(model_id, blocklist)
+
+
 def permitted_models(client: Any, blocklist: list[str], **kwargs: Any) -> list[DiscoveredModel]:
-    """Discovered models, minus the blocklist — the exact list `GET /models` returns."""
-    return [m for m in discover_models_cached(client, **kwargs) if not is_blocked(m.model_id, blocklist)]
+    """Discovered Global/US profiles, minus the blocklist -- the exact list `GET /models` returns."""
+    return [m for m in discover_models_cached(client, **kwargs) if _selectable(m.model_id, blocklist)]
 
 
 def is_model_available(model_id: str, client: Any, blocklist: list[str], **kwargs: Any) -> bool:
     """Fail-closed check used before a model_id is saved (session create, PUT /settings)."""
-    if is_blocked(model_id, blocklist):
+    if not isinstance(model_id, str) or not _selectable(model_id, blocklist):
         return False
     return any(m.model_id == model_id for m in discover_models_cached(client, **kwargs))

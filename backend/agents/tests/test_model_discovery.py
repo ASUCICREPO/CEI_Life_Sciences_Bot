@@ -98,24 +98,34 @@ def test_excludes_profile_resolving_outside_the_foundation_set():
     assert all(m.model_id != "stale.profile" for m in models)
 
 
+def _profile(prefix, base):
+    return {"inferenceProfileId": f"{prefix}{base}", "inferenceProfileName": f"{prefix}{base}",
+            "models": [{"modelArn": f"arn:aws:bedrock:us-east-1::foundation-model/{base}"}]}
+
+
 def test_permitted_models_filters_blocklist():
-    client = _client(foundation=[
-        _qualifying("anthropic.claude-sonnet-v1"), _qualifying("anthropic.claude-fable-5-v1"),
-    ])
-    result = permitted_models(client, ["anthropic.claude-fable-5*"])
-    assert [m.model_id for m in result] == ["anthropic.claude-sonnet-v1"]
+    bases = ["anthropic.claude-sonnet-v1", "anthropic.claude-fable-5-v1"]
+    client = _client(foundation=[_qualifying(b) for b in bases],
+                     profiles=[_profile(p, b) for b in bases for p in ("us.", "global.")])
+    result = permitted_models(client, ["anthropic.claude-fable-5*", "global.anthropic.claude-sonnet-v1"])
+    # Bare foundation ids are never listed: the deploy tool only offers Global and US profiles.
+    assert [m.model_id for m in result] == ["us.anthropic.claude-sonnet-v1"]
 
 
 def test_is_model_available_checks_blocklist_and_discovery():
-    client = _client(foundation=[_qualifying("anthropic.claude-sonnet-v1")])
-    assert is_model_available("anthropic.claude-sonnet-v1", client, [])
-    assert not is_model_available("anthropic.claude-sonnet-v1", client, ["anthropic.claude-sonnet*"])
-    assert not is_model_available("unknown.model", client, [])
+    client = _client(foundation=[_qualifying("anthropic.claude-sonnet-v1")],
+                     profiles=[_profile("us.", "anthropic.claude-sonnet-v1")])
+    assert is_model_available("us.anthropic.claude-sonnet-v1", client, [])
+    assert not is_model_available("anthropic.claude-sonnet-v1", client, [])  # bare id: not selectable
+    assert not is_model_available("us.anthropic.claude-sonnet-v1", client, ["anthropic.claude-sonnet*"])
+    assert not is_model_available("us.unknown.model", client, [])
 
 
 def test_discovery_result_is_cached_per_key():
-    client = _client(foundation=[_qualifying("anthropic.claude-sonnet-v1")])
+    client = _client(foundation=[_qualifying("anthropic.claude-sonnet-v1")],
+                     profiles=[_profile("us.", "anthropic.claude-sonnet-v1")])
     first = permitted_models(client, [], cache_key="k1")
+    assert first
     client.list_foundation_models.return_value = {"modelSummaries": []}
     second = permitted_models(client, [], cache_key="k1")
     assert first == second
