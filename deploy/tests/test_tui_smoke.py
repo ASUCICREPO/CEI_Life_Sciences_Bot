@@ -399,3 +399,50 @@ async def test_model_search_does_not_rebuild_dropdowns_per_key(tmp_path):
         assert calls["refresh"] == 0   # re-adding options is not a selection change
         assert [o.prompt for o in screen.query_one("#list-global")._options]  # filter applied
         assert all("Sonnet" in str(o.prompt) for o in screen.query_one("#list-global")._options)
+
+
+@pytest.mark.asyncio
+async def test_clear_all_then_select_all(tmp_path):
+    """Clear all empties both dropdowns without a crash and blocks Next; re-checking refills them."""
+    from textual.widgets import Select
+
+    from cei_deploy.tui.screens.models import ModelsScreen
+
+    (tmp_path / "backend").mkdir()
+    app = DeployApp(repo_root=tmp_path, dry_run=True, session_factory=_fake_session_factory,
+                    prefetcher=_linked_prefetcher())
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        app.wizard.cfg.region = "us-east-1"
+        app.wizard.region_confirmed = True
+        app.prefetcher.start_region("us-east-1")
+        app.push_screen(ModelsScreen())
+        for _ in range(20):
+            if app.wizard.discovery is not None:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        screen = app.screen
+        default_select = screen.query_one("#default-model-select", Select)
+        router_select = screen.query_one("#router-model-select", Select)
+
+        screen.query_one("#clear-all").press()
+        await pilot.pause()
+        assert default_select.is_blank() and router_select.is_blank()
+        screen.query_one("#nav-next").press()
+        await pilot.pause()
+        assert app.screen is screen  # Next is blocked with nothing checked
+        assert "at least one model" in str(screen.query_one("#error-message").render())
+
+        # Check only Sonnet again: both dropdowns must choose it (smart fallback, not a random pick).
+        screen.query_one("#list-global").select("global.anthropic.claude-sonnet-x")
+        await pilot.pause()
+        assert default_select.value == "global.anthropic.claude-sonnet-x"
+        assert router_select.value == "global.anthropic.claude-sonnet-x"
+
+        screen.query_one("#select-all").press()
+        await pilot.pause()
+        assert not default_select.is_blank() and not router_select.is_blank()
+        screen.query_one("#nav-next").press()
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "RepositoryScreen"

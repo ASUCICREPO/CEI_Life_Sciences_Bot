@@ -208,11 +208,25 @@ class ModelsScreen(WizardScreen):
         default_select.set_options(options)
         router_select.set_options(options)
 
+        if not valid_ids:
+            # ADR: clear(), not Select.BLANK | Rationale: in Textual 8 Select.BLANK is False (the
+            # allow_blank flag), and assigning it raised InvalidSelectValueError after "Clear all";
+            # Select.clear() sets the real "no selection" value (Select.NULL)
+            default_select.clear()
+            router_select.clear()
+            return
+
         current_default = self.wizard.cfg.defaultModelId or discovery.default_model_id
         current_router = self.wizard.cfg.routerModelId or discovery.router_model_id
-        fallback = next(iter(valid_ids)) if valid_ids else Select.BLANK
-        default_select.value = current_default if current_default in valid_ids else fallback
-        router_select.value = current_router if current_router in valid_ids else fallback
+        # Fallback: the same smart defaults as at start (newest Sonnet / newest Haiku, global first),
+        # limited to the checked models -- never an arbitrary pick from a set.
+        checked_result = models_mod.DiscoveryResult(
+            global_items=[i for i in discovery.global_items if i.profile_id in valid_ids],
+            us_items=[i for i in discovery.us_items if i.profile_id in valid_ids],
+        )
+        fallback_default, fallback_router = models_mod.compute_defaults(checked_result)
+        default_select.value = current_default if current_default in valid_ids else fallback_default
+        router_select.value = current_router if current_router in valid_ids else fallback_router
 
     # -- buttons ----------------------------------------------------------
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -265,7 +279,7 @@ class ModelsScreen(WizardScreen):
                 return
             default_select = self.query_one("#default-model-select", Select)
             router_select = self.query_one("#router-model-select", Select)
-            if default_select.value in (None, Select.BLANK) or router_select.value in (None, Select.BLANK):
+            if default_select.is_blank() or router_select.is_blank():
                 self.set_error("Choose a default model and a router model.")
                 return
             self.wizard.cfg.defaultModelId = default_select.value
