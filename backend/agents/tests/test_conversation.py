@@ -177,5 +177,20 @@ def test_clean_title_and_blocklist():
     assert is_blocked_model("us.anthropic.claude-mythos-5-v1:0")
     assert is_blocked_model("anthropic.claude-fable-5-1")
     assert not is_blocked_model("us.anthropic.claude-haiku-4-5-20251001-v1:0")
-    with pytest.raises(ValueError):
-        bedrock_title_generator("global.anthropic.claude-mythos-preview")
+    # A blocked title model skips the title; it never raises (a raise here failed every turn).
+    assert _run(bedrock_title_generator("global.anthropic.claude-mythos-preview")("q", "a")) is None
+
+
+def test_title_generator_uses_default_model(monkeypatch):
+    from shared.config import config
+    import shared.utils as utils
+
+    seen = {}
+
+    class _LLM:
+        async def ainvoke(self, messages):
+            return type("R", (), {"content": "A title", "usage_metadata": None, "response_metadata": {}})()
+
+    monkeypatch.setattr(utils, "get_model", lambda model, **kw: seen.setdefault("model", model) and _LLM())
+    assert _run(bedrock_title_generator()("q", "a")) == "A title"
+    assert seen["model"] == config.default_model_id

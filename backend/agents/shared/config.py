@@ -41,8 +41,7 @@ class AgentConfig(BaseSettings):
     attachments_bucket: str = "attachments"
     api_key_secret_prefix: str = "cei/user-keys"
     default_model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    # Chat-title model: small + cheap; must never match the D3 blocklist (enforced in shared/runtime/titles.py)
-    title_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # Chat titles use default_model_id (shared/runtime/titles.py); no separate title model is hard-coded.
     title_timeout_seconds: float = 8.0
     # B18: deploy.sh/CDK-supplied extra blocklist patterns (comma-separated fnmatch), merged with the fixed D3
     # defaults by the model_blocklist property below. Empty is valid: the D3 defaults alone still apply.
