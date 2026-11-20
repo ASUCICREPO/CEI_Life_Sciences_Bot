@@ -22,7 +22,7 @@ import fnmatch
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 _PROFILE_PREFIXES = ("us.", "eu.", "apac.", "global.")
 
@@ -83,14 +83,25 @@ def strip_profile_prefix(model_id: str) -> str:
 
 
 def is_blocked(model_id: str, blocklist: Sequence[str]) -> bool:
-    """Copy of shared/runtime/model_policy.is_blocked (base-id fnmatch, prefix-stripped)."""
+    """Copy of shared/runtime/model_policy.is_blocked.
+
+    # ADR: B113 -- asymmetric prefix matching | Rationale: a pattern with no profile prefix (for
+    # example a bare base id) must block that model under every profile prefix, but a pattern that
+    # names one profile prefix (for example "us.anthropic.claude-x") must block only that Region's
+    # profile, leaving "global." (and the bare id) allowed -- the most data-resident option |
+    # Alternative: always compare base ids (rejected: could never block a single Region alone)
+    """
     if not isinstance(model_id, str) or not model_id.strip():
         return True
+    model_id = model_id.rsplit("/", 1)[-1]
     base = strip_profile_prefix(model_id)
     for pattern in blocklist:
         if not isinstance(pattern, str) or not pattern:
             continue
-        if fnmatch.fnmatchcase(model_id, pattern) or fnmatch.fnmatchcase(base, strip_profile_prefix(pattern)):
+        if pattern.startswith(_PROFILE_PREFIXES):
+            if fnmatch.fnmatchcase(model_id, pattern):
+                return True
+        elif fnmatch.fnmatchcase(model_id, pattern) or fnmatch.fnmatchcase(base, pattern):
             return True
     return False
 
@@ -336,13 +347,30 @@ def compute_defaults(result: DiscoveryResult) -> Tuple[Optional[str], Optional[s
     return default_model_id, router_model_id
 
 
-def compute_blocked_model_ids(all_backend_ids: Sequence[str], checked_base_ids: Sequence[str]) -> List[str]:
-    """blockedModelIds = every backend-discoverable base id that is not currently checked."""
-    checked = set(checked_base_ids)
-    return sorted(model_id for model_id in all_backend_ids if model_id not in checked)
+def compute_blocked_model_ids(
+    all_backend_ids: Sequence[str], all_items: Sequence[ModelItem], checked_profile_ids: Sequence[str],
+) -> List[str]:
+    """blockedModelIds (B113): Global and US tabs block independently, per profile.
+
+    For each backend-discoverable base id: if none of its picker profiles (Global/US) are
+    checked, block the bare base id -- blocked everywhere, same as before. Otherwise block
+    exactly the unchecked profiles for that base; the bare base id and any checked profile stay
+    allowed, so an in-Region call through the checked profile still works.
+    """
+    checked = set(checked_profile_ids)
+    by_base: Dict[str, List[ModelItem]] = {}
+    for item in all_items:
+        by_base.setdefault(item.base_model_id, []).append(item)
+    blocked: Set[str] = set()
+    for base in all_backend_ids:
+        shown = by_base.get(base, [])
+        if not any(item.profile_id in checked for item in shown):
+            blocked.add(base)
+        else:
+            blocked.update(item.profile_id for item in shown if item.profile_id not in checked)
+    return sorted(blocked)
 
 
-def checked_base_ids_from_blocklist(all_items: Sequence[ModelItem], blocked_model_ids: Sequence[str]) -> List[str]:
-    """Inverse of compute_blocked_model_ids: which base ids are checked, given a saved blocklist."""
-    bases = {item.base_model_id for item in all_items}
-    return sorted(base for base in bases if not is_blocked(base, blocked_model_ids))
+def checked_profile_ids_from_blocklist(all_items: Sequence[ModelItem], blocked_model_ids: Sequence[str]) -> List[str]:
+    """Inverse of compute_blocked_model_ids: which profile ids are checked, given a saved blocklist."""
+    return sorted(item.profile_id for item in all_items if not is_blocked(item.profile_id, blocked_model_ids))

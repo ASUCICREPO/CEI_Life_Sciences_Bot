@@ -25,7 +25,7 @@ class WizardState:
     # Models
     discovery: Optional[DiscoveryResult] = None
     discovery_error: Optional[str] = None
-    checked_base_ids: Set[str] = field(default_factory=set)
+    checked_profile_ids: Set[str] = field(default_factory=set)
     manual_models: bool = False
 
     # AWS identity

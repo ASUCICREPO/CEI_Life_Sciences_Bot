@@ -223,7 +223,7 @@ async def test_keyboard_only_flow(tmp_path):
         await pilot.press("right")
         await pilot.pause()
         assert _focused_id(app) == "list-us"
-        assert "us.anthropic.claude-sonnet-x" not in us_list.selected  # linked by base model
+        assert "us.anthropic.claude-sonnet-x" in us_list.selected  # Global and US tabs are independent
         await pilot.press("left")
         await pilot.pause()
         assert _focused_id(app) == "list-global"
@@ -247,7 +247,7 @@ async def test_keyboard_only_flow(tmp_path):
             await pilot.pause()
         # Esc on the first screen must never leave a blank screen.
     assert app.exit_code == 0
-    assert app.wizard.cfg.blockedModelIds == ["anthropic.claude-sonnet-x"]
+    assert app.wizard.cfg.blockedModelIds == ["global.anthropic.claude-sonnet-x"]
 
 
 @pytest.mark.asyncio
@@ -404,7 +404,7 @@ async def test_model_search_does_not_rebuild_dropdowns_per_key(tmp_path):
 @pytest.mark.asyncio
 async def test_clear_all_then_select_all(tmp_path):
     """Clear all empties both dropdowns without a crash and blocks Next; re-checking refills them."""
-    from textual.widgets import Select
+    from textual.widgets import Select, TabbedContent
 
     from cei_deploy.tui.screens.models import ModelsScreen
 
@@ -426,7 +426,14 @@ async def test_clear_all_then_select_all(tmp_path):
         default_select = screen.query_one("#default-model-select", Select)
         router_select = screen.query_one("#router-model-select", Select)
 
+        # Clear all acts on the open tab only (B113): clear both tabs to empty every check.
         screen.query_one("#clear-all").press()
+        await pilot.pause()
+        screen.query_one("#model-tabs", TabbedContent).active = "tab-us"
+        await pilot.pause()
+        screen.query_one("#clear-all").press()
+        await pilot.pause()
+        screen.query_one("#model-tabs", TabbedContent).active = "tab-global"
         await pilot.pause()
         assert default_select.is_blank() and router_select.is_blank()
         screen.query_one("#nav-next").press()
@@ -450,7 +457,7 @@ async def test_clear_all_then_select_all(tmp_path):
 
 @pytest.mark.asyncio
 async def test_select_and_clear_all_act_on_open_tab_only(tmp_path):
-    """Select all / Clear all change the open tab's models; a model only in the other tab stays."""
+    """Select all / Clear all change only the open tab's models (B113: Global and US are independent)."""
     from textual.widgets import TabbedContent
 
     from cei_deploy.tui.screens.models import ModelsScreen
@@ -476,26 +483,29 @@ async def test_select_and_clear_all_act_on_open_tab_only(tmp_path):
         us_list = screen.query_one("#list-us")
         global_list = screen.query_one("#list-global")
 
-        # Global tab open: Clear all clears Global's models (and the same models in US), not US-only Llama.
+        # Global tab open: Clear all clears only Global's models; every US item stays checked.
         screen.query_one("#clear-all").press()
         await pilot.pause()
         assert global_list.selected == []
-        assert us_list.selected == ["us." + llama]
-        assert app.wizard.checked_base_ids == {llama}
+        assert set(us_list.selected) == {
+            "us.anthropic.claude-sonnet-x", "us.anthropic.claude-haiku-x", "us." + llama,
+        }
 
-        # US tab open: Clear all now also clears Llama.
+        # US tab open: Clear all now clears US (Llama included); Global stays empty.
         screen.query_one("#model-tabs", TabbedContent).active = "tab-us"
         await pilot.pause()
         screen.query_one("#clear-all").press()
         await pilot.pause()
         assert us_list.selected == []
-        assert app.wizard.checked_base_ids == set()
+        assert app.wizard.checked_profile_ids == set()
 
-        # Back on Global: Select all checks Global's models (and their US twins), not Llama.
+        # Back on Global: Select all checks only Global's models (US, including Llama, stays empty).
         screen.query_one("#model-tabs", TabbedContent).active = "tab-global"
         await pilot.pause()
         screen.query_one("#select-all").press()
         await pilot.pause()
         assert set(global_list.selected) == {"global.anthropic.claude-sonnet-x", "global.anthropic.claude-haiku-x"}
-        assert set(us_list.selected) == {"us.anthropic.claude-sonnet-x", "us.anthropic.claude-haiku-x"}
-        assert llama not in app.wizard.checked_base_ids
+        assert us_list.selected == []
+        assert app.wizard.checked_profile_ids == {
+            "global.anthropic.claude-sonnet-x", "global.anthropic.claude-haiku-x",
+        }
