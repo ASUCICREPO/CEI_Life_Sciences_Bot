@@ -30,7 +30,7 @@ CEI Life Sciences Bot will be an AI-powered assistant for life sciences research
 
 ![Sign up](./media/step-1-signup.png)
 
-> **[PLACEHOLDER]** Screenshot of the sign-up screen.
+> *Image to be added: the sign-up screen.*
 
 ---
 
@@ -51,7 +51,7 @@ The list stays valid for 10 minutes. After that, the chat shows "This request ha
 
 ![Start a chat](./media/step-2-start-chat.png)
 
-> **[PLACEHOLDER]** Screenshot of the chat start screen.
+> *Image to be added: the chat start screen.*
 
 ---
 
@@ -70,7 +70,7 @@ After the chat starts, the model is locked. The control shows "The model is fixe
 
 ![Mode and model picker](./media/step-3-mode-model.png)
 
-> **[PLACEHOLDER]** Screenshot of the mode/model controls, once built.
+> *Image to be added: the mode/model controls.*
 
 ---
 
@@ -86,11 +86,13 @@ While the agent works, the user sees:
 
 ![Thinking block](./media/step-4-thinking-block.png)
 
-> **[PLACEHOLDER]** Screenshot of an in-progress answer with the thinking block expanded.
+> *Image to be added: the in-progress answer with the thinking block expanded.*
 
 ---
 
-## Planned journey: Attachments (not built)
+## Journey: Attachments (Partly built)
+
+The chat upload control, the pre-signed upload (S3 enforces the 55 MB limit), the processing queue, Knowledge Base ingestion, and retrieval in all four agents are built (F10, not yet verified on AWS). Per-file view and delete, image input to vision models, and CSV files in the Code Interpreter are planned. The steps below are the target flow.
 
 1. User uploads a file (PDF, DOCX, TXT, MD, CSV, PNG, or JPG; up to 55 MB) into a specific chat.
 2. The file becomes available only within that chat.
@@ -98,7 +100,7 @@ While the agent works, the user sees:
 
 ![Attachments](./media/step-5-attachments.png)
 
-> **[PLACEHOLDER]** Screenshot of the attachment upload UI, once built.
+> *Image to be added: the attachment upload UI.*
 
 ---
 
@@ -123,7 +125,7 @@ Some agents pause mid-task to ask the user a question — for example, Research 
 
 ![HITL question](./media/step-6-hitl.png)
 
-> **[PLACEHOLDER]** Screenshot of a HITL question surface.
+> *Image to be added: the HITL question surface.*
 
 ---
 
@@ -135,7 +137,7 @@ For a request predicted to take longer than 10 minutes (or any multi-agent pipel
 
 ![Jobs list](./media/step-7-jobs.png)
 
-> **[PLACEHOLDER]** Screenshot of the jobs list / pipeline view.
+> *Image to be added: the jobs list / pipeline view.*
 
 ---
 
@@ -150,7 +152,7 @@ The chat shows a list of the session's reports with download links (`GET /sessio
 
 ![Export](./media/step-8-export.png)
 
-> **[PLACEHOLDER]** Screenshot of the export dialog, once built.
+> *Image to be added: the export dialog.*
 
 ---
 
@@ -171,17 +173,19 @@ Users can set their default model and mode, and can optionally add their own API
 
 ![Settings](./media/step-9-settings.png)
 
-> **[PLACEHOLDER]** Screenshot of the settings page, once built.
+> *Image to be added: the settings page.*
 
 ---
 
-## Planned journey: Delete the account (not built, deferred)
+## Journey: Delete the account (Partly built)
+
+Account delete is built behind the `accountDeletionEnabled` deployment flag, which is off by default (F19, B109; not yet verified on AWS). When the flag is off, the dashboard does not show the delete control. Attachments and Knowledge Base chunks are not yet in the delete sweep. The text below is the target behavior.
 
 A user can delete their entire account: everything, including chat history, trace, attachments, Knowledge Base chunks, checkpoints, long-term memories, and stored API keys. There is no way to delete a single chat; a chat stays until the whole account is deleted. Deleting the account signs the user out everywhere and blocks any new chat right away; the dashboard shows the account as gone at once, and the underlying data is fully removed within about 9 hours.
 
 ![Delete](./media/step-10-delete.png)
 
-> **[PLACEHOLDER]** Screenshot of the delete confirmation, once built.
+> *Image to be added: the delete confirmation.*
 
 ---
 
