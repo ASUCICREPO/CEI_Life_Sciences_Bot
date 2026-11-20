@@ -446,3 +446,56 @@ async def test_clear_all_then_select_all(tmp_path):
         screen.query_one("#nav-next").press()
         await pilot.pause()
         assert app.screen.__class__.__name__ == "RepositoryScreen"
+
+
+@pytest.mark.asyncio
+async def test_select_and_clear_all_act_on_open_tab_only(tmp_path):
+    """Select all / Clear all change the open tab's models; a model only in the other tab stays."""
+    from textual.widgets import TabbedContent
+
+    from cei_deploy.tui.screens.models import ModelsScreen
+
+    prefetcher = _linked_prefetcher()
+    llama = "meta.llama-x"
+    prefetcher._discovery.us_items.append(models.ModelItem("us." + llama, "US Llama", llama, "Meta"))
+    prefetcher._discovery.all_backend_ids.append(llama)
+    (tmp_path / "backend").mkdir()
+    app = DeployApp(repo_root=tmp_path, dry_run=True, session_factory=_fake_session_factory, prefetcher=prefetcher)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        app.wizard.cfg.region = "us-east-1"
+        app.wizard.region_confirmed = True
+        app.prefetcher.start_region("us-east-1")
+        app.push_screen(ModelsScreen())
+        for _ in range(20):
+            if app.wizard.discovery is not None:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        screen = app.screen
+        us_list = screen.query_one("#list-us")
+        global_list = screen.query_one("#list-global")
+
+        # Global tab open: Clear all clears Global's models (and the same models in US), not US-only Llama.
+        screen.query_one("#clear-all").press()
+        await pilot.pause()
+        assert global_list.selected == []
+        assert us_list.selected == ["us." + llama]
+        assert app.wizard.checked_base_ids == {llama}
+
+        # US tab open: Clear all now also clears Llama.
+        screen.query_one("#model-tabs", TabbedContent).active = "tab-us"
+        await pilot.pause()
+        screen.query_one("#clear-all").press()
+        await pilot.pause()
+        assert us_list.selected == []
+        assert app.wizard.checked_base_ids == set()
+
+        # Back on Global: Select all checks Global's models (and their US twins), not Llama.
+        screen.query_one("#model-tabs", TabbedContent).active = "tab-global"
+        await pilot.pause()
+        screen.query_one("#select-all").press()
+        await pilot.pause()
+        assert set(global_list.selected) == {"global.anthropic.claude-sonnet-x", "global.anthropic.claude-haiku-x"}
+        assert set(us_list.selected) == {"us.anthropic.claude-sonnet-x", "us.anthropic.claude-haiku-x"}
+        assert llama not in app.wizard.checked_base_ids

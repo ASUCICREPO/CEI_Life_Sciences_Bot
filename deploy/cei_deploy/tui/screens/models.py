@@ -244,19 +244,32 @@ class ModelsScreen(WizardScreen):
         self._on_next()
 
     def _bulk_set(self, checked: bool) -> None:
+        """Select all / Clear all: the models listed in the open tab (Global or US) only.
+
+        The search filter applies too. Global and US share one setting per base model, so the same
+        model in the other tab follows; a model that is only in the open tab changes only there.
+        """
+        tabs = self.query_one("#model-tabs", TabbedContent)
+        group = "us" if tabs.active == "tab-us" else "global"
+        bases = {item.base_model_id for item in self._displayed[group]}
+        if checked:
+            self.wizard.checked_base_ids |= bases
+        else:
+            self.wizard.checked_base_ids -= bases
         global_list = self.query_one("#list-global", SelectionList)
         us_list = self.query_one("#list-us", SelectionList)
         self._syncing = True
         try:
-            for widget, group in ((global_list, "global"), (us_list, "us")):
-                for item in self._displayed[group]:
+            for widget, list_group in ((global_list, "global"), (us_list, "us")):
+                for item in self._displayed[list_group]:
+                    if item.base_model_id not in bases:
+                        continue
                     if checked:
                         widget.select(item.profile_id)
                     else:
                         widget.deselect(item.profile_id)
         finally:
             self._syncing = False
-        self._recompute_checked_base_ids()
         self._refresh_default_router_selects()
 
     def _on_next(self) -> None:
