@@ -33,9 +33,15 @@ def to_https_github_url(url: str) -> str:
 
 
 def _run_git(args, cwd: Optional[Path] = None, timeout: float = 10.0, env=None) -> str:
+    # ADR: git never touches the terminal | Rationale: git ran with the TUI's stdin and could prompt
+    # for GitHub credentials on the terminal (a private repo over https); that prompt read the user's
+    # keystrokes, so keys typed into the TUI went missing | Alternative: none
+    run_env = dict(os.environ if env is None else env)
+    run_env.update({"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "GIT_ASKPASS": "", "SSH_ASKPASS": ""})
     try:
         result = subprocess.run(
-            ["git", *args], cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=timeout, env=env,
+            ["git", *args], cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=timeout,
+            env=run_env, stdin=subprocess.DEVNULL,
         )
     except Exception:
         return ""

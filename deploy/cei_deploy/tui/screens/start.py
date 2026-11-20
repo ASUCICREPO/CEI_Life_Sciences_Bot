@@ -7,27 +7,10 @@ from textual import work
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Select, Static
 
+from ...prefetch import _FALLBACK_REGIONS
 from ..widgets import Body, DropDown
 from .base import WizardScreen
 from .basics import BasicsScreen
-
-_FALLBACK_REGIONS = (
-    "us-east-1", "us-east-2", "us-west-2",
-    "eu-west-1", "eu-central-1",
-    "ap-northeast-1", "ap-southeast-2",
-)
-
-
-def _available_regions(session_factory) -> list:
-    try:
-        session = session_factory()
-        regions = session.get_available_regions("bedrock-agentcore")
-        if regions:
-            return sorted(regions)
-    except Exception:
-        pass
-    return list(_FALLBACK_REGIONS)
-
 
 class StartScreen(WizardScreen):
     HINT = "↑ ↓ ← → move   Space/Enter select   Ctrl+Q quit"
@@ -50,7 +33,9 @@ class StartScreen(WizardScreen):
                 default_region = self.wizard.cfg.region or os.environ.get("AWS_REGION") or os.environ.get(
                     "AWS_DEFAULT_REGION"
                 ) or "us-east-1"
-                regions = _available_regions(self.wizard_app.session_factory)
+                # ADR: a short list first, the full list from a background job | Rationale: botocore's
+                # endpoint data took the UI thread for about a second while the screen was built
+                regions = list(_FALLBACK_REGIONS)
                 if default_region not in regions:
                     regions = [default_region] + regions
                 yield DropDown(
@@ -65,10 +50,30 @@ class StartScreen(WizardScreen):
 
     def on_mount(self) -> None:
         self._load_identity()
+        self._load_regions()
         first = "#redeploy" if self._has_saved_config() else "#region-select"
         self.query_one(first).focus()
 
-    @work(thread=True, exclusive=True)
+    @work(thread=True, group="regions")
+    def _load_regions(self) -> None:
+        future = getattr(self.wizard_app.prefetcher, "regions_future", None)
+        if future is None:
+            return
+        try:
+            regions = future.result(timeout=30)
+        except Exception:  # noqa: BLE001 - keep the short list
+            return
+        self.app.call_from_thread(self._set_regions, regions)
+
+    def _set_regions(self, regions: list) -> None:
+        select = self.query_one("#region-select", Select)
+        current = select.value
+        if current not in regions:
+            regions = [current] + list(regions)
+        select.set_options([(r, r) for r in regions])
+        select.value = current
+
+    @work(thread=True, group="identity")
     def _load_identity(self) -> None:
         # The account is shown on the Review screen; here only a failure is shown (as an error).
         prefetcher = self.wizard_app.prefetcher

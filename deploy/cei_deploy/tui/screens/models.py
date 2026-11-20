@@ -49,6 +49,7 @@ class ModelsScreen(WizardScreen):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._syncing = False
+        self._search_timer = None
         self._displayed: Dict[str, List["models_mod.ModelItem"]] = {"global": [], "us": []}
 
     def compose(self):
@@ -132,13 +133,21 @@ class ModelsScreen(WizardScreen):
         ):
             visible = [item for item in items if _matches(item, filter_text)]
             self._displayed[group] = visible
-            for item in visible:
-                checked = item.base_model_id in self.wizard.checked_base_ids
-                widget.add_option((_option_label(item), item.profile_id, checked))
+            # One batch call: one refresh per list, not one per model.
+            widget.add_options([
+                (_option_label(item), item.profile_id, item.base_model_id in self.wizard.checked_base_ids)
+                for item in visible
+            ])
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "model-search":
-            self._populate(event.value)
+            # ADR: filter 120 ms after the last keystroke | Rationale: each keystroke rebuilt both
+            # lists and both dropdowns (about 350 ms on a fast PC, seconds on CloudShell), so typed
+            # characters seemed to be lost | Alternative: filter on Enter only (rejected: slower to use)
+            if self._search_timer is not None:
+                self._search_timer.stop()
+            value = event.value
+            self._search_timer = self.set_timer(0.12, lambda: self._populate(value))
 
     # -- selection linking ----------------------------------------------------
     def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged) -> None:
@@ -155,6 +164,10 @@ class ModelsScreen(WizardScreen):
         changed_items = self._displayed[changed_group]
         checked_bases = {i.base_model_id for i in changed_items if i.profile_id in selected_profile_ids}
         unchecked_bases = {i.base_model_id for i in changed_items} - checked_bases
+        current = self.wizard.checked_base_ids
+        if checked_bases <= set(current) and not (unchecked_bases & set(current)):
+            # No real change: this event comes from re-adding options while filtering.
+            return
 
         self._syncing = True
         try:

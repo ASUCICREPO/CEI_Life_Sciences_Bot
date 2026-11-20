@@ -357,3 +357,45 @@ async def test_arrows_space_enter_only(tmp_path):
                 break
             await pilot.pause()
     assert app.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_model_search_does_not_rebuild_dropdowns_per_key(tmp_path):
+    """Typing a search term refreshes the default/router dropdowns at most once, not per option."""
+    from cei_deploy.tui.screens.models import ModelsScreen
+
+    (tmp_path / "backend").mkdir()
+    app = DeployApp(repo_root=tmp_path, dry_run=True, session_factory=_fake_session_factory,
+                    prefetcher=_linked_prefetcher())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        app.wizard.cfg.region = "us-east-1"
+        app.wizard.region_confirmed = True
+        app.prefetcher.start_region("us-east-1")
+        app.push_screen(ModelsScreen())
+        for _ in range(20):
+            if app.wizard.discovery is not None:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        screen = app.screen
+        calls = {"refresh": 0, "populate": 0}
+        real_refresh, real_populate = screen._refresh_default_router_selects, screen._populate
+
+        def counting_refresh():
+            calls["refresh"] += 1
+            real_refresh()
+
+        def counting_populate(text):
+            calls["populate"] += 1
+            real_populate(text)
+
+        screen._refresh_default_router_selects = counting_refresh
+        screen._populate = counting_populate
+        screen.query_one("#model-search").focus()
+        await pilot.press(*"sonnet")
+        await pilot.pause(0.3)
+        assert calls["populate"] == 1  # debounced: one filter run for six keystrokes
+        assert calls["refresh"] == 0   # re-adding options is not a selection change
+        assert [o.prompt for o in screen.query_one("#list-global")._options]  # filter applied
+        assert all("Sonnet" in str(o.prompt) for o in screen.query_one("#list-global")._options)

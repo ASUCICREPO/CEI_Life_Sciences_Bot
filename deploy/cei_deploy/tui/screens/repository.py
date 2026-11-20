@@ -48,18 +48,25 @@ class RepositoryScreen(WizardScreen):
             self._prefill_from_git()
         self._load_visibility()
 
+    @work(thread=True, group="git-prefill")
     def _prefill_from_git(self) -> None:
-        prefetcher = self.wizard_app.prefetcher
+        # ADR: a worker thread, not the UI thread | Rationale: this waited up to 10 s on the git
+        # Future on the UI thread, which froze typing on this screen
         try:
-            info = prefetcher.git_future.result(timeout=10)
+            info = self.wizard_app.prefetcher.git_future.result(timeout=10)
         except Exception:
             return
-        if info.url:
-            self.query_one("#repo-url", Input).value = info.url
-        if info.branch:
-            self.query_one("#repo-branch", Input).value = info.branch
+        self.app.call_from_thread(self._apply_git_info, info)
 
-    @work(thread=True, exclusive=True)
+    def _apply_git_info(self, info) -> None:
+        url_input = self.query_one("#repo-url", Input)
+        branch_input = self.query_one("#repo-branch", Input)
+        if info.url and not url_input.value:  # never overwrite what the user already typed
+            url_input.value = info.url
+        if info.branch and branch_input.value in ("", "main"):
+            branch_input.value = info.branch
+
+    @work(thread=True, group="visibility")
     def _load_visibility(self) -> None:
         prefetcher = self.wizard_app.prefetcher
         try:
