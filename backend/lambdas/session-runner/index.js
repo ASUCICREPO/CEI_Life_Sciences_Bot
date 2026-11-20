@@ -1,5 +1,7 @@
 'use strict';
 
+const { isAgeVerified } = require('../shared/age-gate');
+
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_EVENT_BYTES = 300 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -218,6 +220,9 @@ function createHandler(responseFrom, deps) {
       // B109/F19: a replay (above) reads data that already exists; only a new run is gated here.
       stage = 'account_gate';
       if (await deps.accountDeleting(parsed.userId)) throw new RequestError(403, 'forbidden', 'This account is being deleted.');
+      // B112: same as the account-deleting gate above -- a replay reads existing data, only a new run is gated.
+      stage = 'age_gate';
+      if (!isAgeVerified(event)) throw new RequestError(403, 'onboarding_required', 'Complete your profile to continue.');
       // A run id is reserved before the Router starts. A retry can replay but cannot start it twice.
       stage = 'reserve';
       await deps.reserve(key, parsed.userId, parsed.request);

@@ -40,6 +40,17 @@ class UnauthenticatedError(PermissionError):
     """No verifiable identity on a request that requires one."""
 
 
+class AgeNotVerifiedError(PermissionError):
+    """B112: a verified SPA user token is missing the `cei_age_verified` claim (profile/age not yet
+    completed, or the pre-token-generation trigger could not add it). The Router M2M path is unaffected --
+    it is verified by a different client-id set and never calls `resolve_user_id`."""
+
+
+# B112: the access-token claim the pre-token-generation trigger adds once a user's stored birthdate
+# proves they are 18+ (backend/lambdas/pre-token-generation/handler.py).
+AGE_VERIFIED_CLAIM = "cei_age_verified"
+
+
 class TokenVerifier(Protocol):
     def verify(self, token: str) -> Mapping[str, Any]:
         """Verified claims of `token`; raises UnauthenticatedError if it is not a valid access token."""
@@ -232,12 +243,19 @@ def resolve_user_id(payload: Mapping[str, Any], context: Any) -> str:
     """The caller's Cognito `sub`, from a verified access token. Raises UnauthenticatedError otherwise.
 
     A `user_id` in the payload is never used; if present and different it is logged and ignored.
+
+    B112: also raises AgeNotVerifiedError when the verified token lacks `cei_age_verified == "true"` --
+    every caller here is a verified SPA user token (the only client ids this verifier accepts), so this
+    never applies to the Router's M2M path (a different verifier, gateway_context.py).
     """
     token = bearer_token(context)
     if token is None:
         raise UnauthenticatedError("no bearer token on this request")
-    sub = str(get_verifier().verify(token)["sub"])
+    claims = get_verifier().verify(token)
+    sub = str(claims["sub"])
     claimed = payload.get("user_id")
     if claimed not in (None, sub):
         log.warning("ignoring payload user_id that does not match the authenticated caller")
+    if claims.get(AGE_VERIFIED_CLAIM) != "true":
+        raise AgeNotVerifiedError("age verification is required")
     return sub

@@ -77,3 +77,22 @@ def test_resolve_source_version_falls_back_to_branch_when_unresolvable(tmp_path)
 
 def test_check_visibility_with_no_owner_repo_is_unknown():
     assert git_info.check_visibility("", "") == "unknown"
+
+
+def test_git_never_reads_the_terminal(monkeypatch, tmp_path):
+    """git gets no stdin and may not prompt, so it can never take the TUI's keystrokes."""
+    import subprocess
+
+    from cei_deploy import git_info
+
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="abc\n", stderr="")
+
+    monkeypatch.setattr(git_info.subprocess, "run", fake_run)
+    assert git_info._run_git(["rev-parse", "HEAD"], cwd=tmp_path) == "abc"
+    assert seen["stdin"] is subprocess.DEVNULL
+    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert seen["env"]["GCM_INTERACTIVE"] == "never"

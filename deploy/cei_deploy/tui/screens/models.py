@@ -49,6 +49,7 @@ class ModelsScreen(WizardScreen):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._syncing = False
+        self._search_timer = None
         self._displayed: Dict[str, List["models_mod.ModelItem"]] = {"global": [], "us": []}
 
     def compose(self):
@@ -87,13 +88,15 @@ class ModelsScreen(WizardScreen):
         try:
             discovery = jobs.models.result(timeout=120)
             self.wizard.discovery = discovery
-            if not self.wizard.checked_base_ids:
+            if not self.wizard.checked_profile_ids:
                 if self.wizard.cfg.blockedModelIds:
-                    self.wizard.checked_base_ids = set(
-                        models_mod.checked_base_ids_from_blocklist(discovery.all_items(), self.wizard.cfg.blockedModelIds)
+                    self.wizard.checked_profile_ids = set(
+                        models_mod.checked_profile_ids_from_blocklist(
+                            discovery.all_items(), self.wizard.cfg.blockedModelIds,
+                        )
                     )
                 else:
-                    self.wizard.checked_base_ids = {item.base_model_id for item in discovery.all_items()}
+                    self.wizard.checked_profile_ids = {item.profile_id for item in discovery.all_items()}
             self.app.call_from_thread(self._show_discovered)
         except Exception as exc:  # noqa: BLE001 - surfaced as a manual-input fallback
             self.wizard.discovery_error = str(exc)
@@ -132,15 +135,23 @@ class ModelsScreen(WizardScreen):
         ):
             visible = [item for item in items if _matches(item, filter_text)]
             self._displayed[group] = visible
-            for item in visible:
-                checked = item.base_model_id in self.wizard.checked_base_ids
-                widget.add_option((_option_label(item), item.profile_id, checked))
+            # One batch call: one refresh per list, not one per model.
+            widget.add_options([
+                (_option_label(item), item.profile_id, item.profile_id in self.wizard.checked_profile_ids)
+                for item in visible
+            ])
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "model-search":
-            self._populate(event.value)
+            # ADR: filter 120 ms after the last keystroke | Rationale: each keystroke rebuilt both
+            # lists and both dropdowns (about 350 ms on a fast PC, seconds on CloudShell), so typed
+            # characters seemed to be lost | Alternative: filter on Enter only (rejected: slower to use)
+            if self._search_timer is not None:
+                self._search_timer.stop()
+            value = event.value
+            self._search_timer = self.set_timer(0.12, lambda: self._populate(value))
 
-    # -- selection linking ----------------------------------------------------
+    # -- selection (Global and US tabs are independent, B113) -----------------
     def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged) -> None:
         if self._syncing:
             return
@@ -149,42 +160,25 @@ class ModelsScreen(WizardScreen):
         changed_list, changed_group = (
             (global_list, "global") if event.selection_list is global_list else (us_list, "us")
         )
-        other_list, other_group = (us_list, "us") if changed_group == "global" else (global_list, "global")
 
         selected_profile_ids = set(changed_list.selected)
-        changed_items = self._displayed[changed_group]
-        checked_bases = {i.base_model_id for i in changed_items if i.profile_id in selected_profile_ids}
-        unchecked_bases = {i.base_model_id for i in changed_items} - checked_bases
+        displayed_ids = {i.profile_id for i in self._displayed[changed_group]}
+        checked_here = displayed_ids & selected_profile_ids
+        unchecked_here = displayed_ids - selected_profile_ids
+        current = self.wizard.checked_profile_ids
+        if checked_here <= current and not (unchecked_here & current):
+            # No real change: this event comes from re-adding options while filtering.
+            return
 
-        self._syncing = True
-        try:
-            other_selected = set(other_list.selected)
-            for item in self._displayed[other_group]:
-                if item.base_model_id in checked_bases and item.profile_id not in other_selected:
-                    other_list.select(item.profile_id)
-                elif item.base_model_id in unchecked_bases and item.profile_id in other_selected:
-                    other_list.deselect(item.profile_id)
-        finally:
-            self._syncing = False
-
-        self._recompute_checked_base_ids()
+        self.wizard.checked_profile_ids |= checked_here
+        self.wizard.checked_profile_ids -= unchecked_here
         self._refresh_default_router_selects()
-
-    def _recompute_checked_base_ids(self) -> None:
-        global_list = self.query_one("#list-global", SelectionList)
-        us_list = self.query_one("#list-us", SelectionList)
-        selected_ids = set(global_list.selected) | set(us_list.selected)
-        for item in self._displayed["global"] + self._displayed["us"]:
-            if item.profile_id in selected_ids:
-                self.wizard.checked_base_ids.add(item.base_model_id)
-            else:
-                self.wizard.checked_base_ids.discard(item.base_model_id)
 
     def _refresh_default_router_selects(self) -> None:
         discovery = self.wizard.discovery
         if discovery is None:
             return
-        checked_items = [i for i in discovery.all_items() if i.base_model_id in self.wizard.checked_base_ids]
+        checked_items = [i for i in discovery.all_items() if i.profile_id in self.wizard.checked_profile_ids]
         options = [
             ("%s [%s]" % (_option_label(i), "Global" if i.profile_id.startswith("global.") else "US"), i.profile_id)
             for i in checked_items
@@ -195,11 +189,25 @@ class ModelsScreen(WizardScreen):
         default_select.set_options(options)
         router_select.set_options(options)
 
+        if not valid_ids:
+            # ADR: clear(), not Select.BLANK | Rationale: in Textual 8 Select.BLANK is False (the
+            # allow_blank flag), and assigning it raised InvalidSelectValueError after "Clear all";
+            # Select.clear() sets the real "no selection" value (Select.NULL)
+            default_select.clear()
+            router_select.clear()
+            return
+
         current_default = self.wizard.cfg.defaultModelId or discovery.default_model_id
         current_router = self.wizard.cfg.routerModelId or discovery.router_model_id
-        fallback = next(iter(valid_ids)) if valid_ids else Select.BLANK
-        default_select.value = current_default if current_default in valid_ids else fallback
-        router_select.value = current_router if current_router in valid_ids else fallback
+        # Fallback: the same smart defaults as at start (newest Sonnet / newest Haiku, global first),
+        # limited to the checked models -- never an arbitrary pick from a set.
+        checked_result = models_mod.DiscoveryResult(
+            global_items=[i for i in discovery.global_items if i.profile_id in valid_ids],
+            us_items=[i for i in discovery.us_items if i.profile_id in valid_ids],
+        )
+        fallback_default, fallback_router = models_mod.compute_defaults(checked_result)
+        default_select.value = current_default if current_default in valid_ids else fallback_default
+        router_select.value = current_router if current_router in valid_ids else fallback_router
 
     # -- buttons ----------------------------------------------------------
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -217,19 +225,29 @@ class ModelsScreen(WizardScreen):
         self._on_next()
 
     def _bulk_set(self, checked: bool) -> None:
-        global_list = self.query_one("#list-global", SelectionList)
-        us_list = self.query_one("#list-us", SelectionList)
+        """Select all / Clear all: the models listed in the open tab (Global or US) only.
+
+        The search filter applies too. The other tab's checks are untouched (B113: Global and US
+        are independent).
+        """
+        tabs = self.query_one("#model-tabs", TabbedContent)
+        group = "us" if tabs.active == "tab-us" else "global"
+        list_id = "#list-us" if group == "us" else "#list-global"
+        widget = self.query_one(list_id, SelectionList)
+        profile_ids = {item.profile_id for item in self._displayed[group]}
+        if checked:
+            self.wizard.checked_profile_ids |= profile_ids
+        else:
+            self.wizard.checked_profile_ids -= profile_ids
         self._syncing = True
         try:
-            for widget, group in ((global_list, "global"), (us_list, "us")):
-                for item in self._displayed[group]:
-                    if checked:
-                        widget.select(item.profile_id)
-                    else:
-                        widget.deselect(item.profile_id)
+            for item in self._displayed[group]:
+                if checked:
+                    widget.select(item.profile_id)
+                else:
+                    widget.deselect(item.profile_id)
         finally:
             self._syncing = False
-        self._recompute_checked_base_ids()
         self._refresh_default_router_selects()
 
     def _on_next(self) -> None:
@@ -247,18 +265,18 @@ class ModelsScreen(WizardScreen):
             self.wizard.cfg.blockedModelIds = []
         else:
             discovery = self.wizard.discovery
-            if discovery is None or not self.wizard.checked_base_ids:
+            if discovery is None or not self.wizard.checked_profile_ids:
                 self.set_error("Keep at least one model checked.")
                 return
             default_select = self.query_one("#default-model-select", Select)
             router_select = self.query_one("#router-model-select", Select)
-            if default_select.value in (None, Select.BLANK) or router_select.value in (None, Select.BLANK):
+            if default_select.is_blank() or router_select.is_blank():
                 self.set_error("Choose a default model and a router model.")
                 return
             self.wizard.cfg.defaultModelId = default_select.value
             self.wizard.cfg.routerModelId = router_select.value
             self.wizard.cfg.blockedModelIds = models_mod.compute_blocked_model_ids(
-                discovery.all_backend_ids, sorted(self.wizard.checked_base_ids),
+                discovery.all_backend_ids, discovery.all_items(), sorted(self.wizard.checked_profile_ids),
             )
         self.set_error("")
 

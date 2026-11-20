@@ -29,12 +29,24 @@ def _model_base(model_id: str) -> str:
     return model_id
 
 
+# ADR: a prefixed blocklist entry blocks only that profile | Rationale: B113 — per-profile control (for
+# example allow us. profiles but block global. for data residency); unprefixed entries, including the D3
+# safety patterns, still block the model under every prefix | Alternative: base-id matching for every
+# entry (rejected: could not allow us. while blocking global.)
 def is_blocked(model_id: str, blocklist: Iterable[str]) -> bool:
     if not isinstance(model_id, str) or not model_id.strip():
         return True
+    full = model_id.rsplit("/", 1)[-1]
     base = _model_base(model_id)
-    return any(fnmatch.fnmatchcase(model_id, pattern) or fnmatch.fnmatchcase(base, _model_base(pattern))
-               for pattern in blocklist if isinstance(pattern, str) and pattern)
+    for pattern in blocklist:
+        if not isinstance(pattern, str) or not pattern:
+            continue
+        if pattern.startswith(_PROFILE_PREFIXES):
+            if fnmatch.fnmatchcase(full, pattern):
+                return True
+        elif fnmatch.fnmatchcase(model_id, pattern) or fnmatch.fnmatchcase(base, pattern):
+            return True
+    return False
 
 
 def permitted_models(model_ids: Iterable[str], blocklist: Iterable[str]) -> list[str]:

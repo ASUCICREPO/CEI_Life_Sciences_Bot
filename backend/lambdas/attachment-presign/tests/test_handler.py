@@ -40,8 +40,9 @@ def aws():
         yield
 
 
-def _event(body: dict, sub: str | None = USER_ID) -> dict:
-    claims = {"sub": sub} if sub else {}
+def _event(body: dict, sub: str | None = USER_ID, extra_claims: dict | None = None) -> dict:
+    # B112: every call defaults to an age-verified token; tests of that gate override extra_claims.
+    claims = {"sub": sub, "cei_age_verified": "true", **(extra_claims or {})} if sub else {}
     return {"httpMethod": "POST", "requestContext": {"authorizer": {"claims": claims}}, "body": json.dumps(body)}
 
 
@@ -101,3 +102,9 @@ def test_rejects_unsupported_type(aws):
 
 def test_requires_auth(aws):
     assert handler.handler(_event(_body(), sub=None), None)["statusCode"] == 401
+
+
+def test_is_blocked_without_the_age_verified_claim(aws):
+    resp = handler.handler(_event(_body(), extra_claims={"cei_age_verified": "false"}), None)
+    assert resp["statusCode"] == 403
+    assert json.loads(resp["body"])["error"]["code"] == "onboarding_required"

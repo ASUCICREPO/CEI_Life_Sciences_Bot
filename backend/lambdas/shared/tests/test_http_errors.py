@@ -222,6 +222,28 @@ def test_user_id_from_claims_returns_sub():
     assert he.user_id_from_claims(_event(claims={"sub": "user-1"})) == "user-1"
 
 
+# --- require_age_verified (B112) ----------------------------------------------
+
+
+def test_require_age_verified_passes_with_the_claim():
+    he.require_age_verified(_event(claims={"sub": "user-1", "cei_age_verified": "true"}))
+
+
+@pytest.mark.parametrize(
+    "claims",
+    [
+        {"sub": "user-1"},
+        {"sub": "user-1", "cei_age_verified": "false"},
+        {"sub": "user-1", "cei_age_verified": True},
+        {},
+    ],
+)
+def test_require_age_verified_rejects_missing_or_false_claim(claims):
+    with pytest.raises(he.ApiError) as ei:
+        he.require_age_verified(_event(claims=claims))
+    assert ei.value.status == 403 and ei.value.code == "onboarding_required"
+
+
 # --- CORS --------------------------------------------------------------------
 
 

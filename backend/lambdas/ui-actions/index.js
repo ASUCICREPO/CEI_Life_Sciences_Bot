@@ -13,6 +13,8 @@
  * Tokens, session ids and bodies are never logged.
  */
 
+const { isAgeVerified } = require('../shared/age-gate');
+
 const MAX_BODY_BYTES = 32 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ACTION_FIELDS = ['request_id', 'session_id', 'surface_id', 'revision', 'interaction_id', 'component_id', 'action_id', 'value'];
@@ -148,6 +150,9 @@ function createHandler(responseFrom, deps) {
       // B109/F19: both the route-choice start and a HITL resume start/continue a run; the gate blocks both.
       stage = 'account_gate';
       if (await deps.accountDeleting(parsed.userId)) throw new RequestError(403, 'forbidden', 'This account is being deleted.');
+      // B112: same reasoning as the account-deleting gate above.
+      stage = 'age_gate';
+      if (!isAgeVerified(event)) throw new RequestError(403, 'onboarding_required', 'Complete your profile to continue.');
       if (isRouteChoice(parsed.action)) {
         // F9/B80: a ChoicePicker pick is not a graph resume -- the session has no agent_type yet -- so it
         // is handled before the RESUMABLE/agent_type lookup below, which only applies once an agent has run.

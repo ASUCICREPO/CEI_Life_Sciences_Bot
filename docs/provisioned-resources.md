@@ -81,6 +81,19 @@ These are local tools, not deployed AWS resources:
 
 These parts of the target architecture are **planned, not built**: the tool-agent runtime, the Attachment Metadata table, S3 Vectors, the product API Key Store routes, SQS, Bedrock Knowledge Base, and the deletion cascade (F19, deferred: `DELETE /sessions/{id}` and `POST /account/delete` stay planned). The Web Search target exists only when `webSearchEnabled` is `true`. (The one Secrets Manager secret that does exist, `cei/deploy/github-pat`, belongs to the deploy mechanism, not the product — see the table above.) See [Architecture Deep Dive](./architectureDeepDive.md) for the full component table, status per component, and `.agents/specs/architecture.md` for detail.
 
+## Built in code, not yet deployed
+
+This repository has code for the following, but no deploy has run since it was added, so none of it is live in AWS yet (B112, decided 2026-11-19 — founder onboarding and an 18+ age gate):
+
+- `backend/lambdas/profile-handler/` — `POST /profile`: looks the caller up by `sub` via Cognito `ListUsers`, validates and writes `given_name`/`family_name`/`birthdate` with `AdminUpdateUserAttributes`, and disables an under-18 user (`AdminDisableUser` + `AdminUserGlobalSignOut`).
+- `backend/lib/constructs/profile.ts` — the CDK construct for the Lambda and route above.
+- The Cognito SPA app client's `readAttributes` list now includes `given_name`, `family_name`, `birthdate` (unchanged `writeAttributes`, still empty).
+- The pre-token-generation trigger has a new user-token branch adding the access-token claim `cei_age_verified`.
+- Gate helpers `http_errors.require_age_verified` (Python) and `lambdas/shared/age-gate.js`'s `isAgeVerified` (Node), applied in the Session Runner, UI actions, Session Metadata Handler, the Models/Settings Handler's `PUT` routes, the Jobs Handler, the attachment presign route, and (as `AgeNotVerifiedError` → `403`) the agent runtimes. Not gated: the Exports Handler and the agent-proxy Lambda.
+- Frontend: a new `/onboarding` page, a `RequireOnboarding` gate in `App.tsx`, and `profileClient.ts`.
+
+See `.agents/decision-log.md` B112 and `.agents/specs/auth-and-tool-scope.md` §14 for the full design. None of this appears in the "What is deployed by CDK" tables above until a deploy actually runs with this code.
+
 ---
 
 ## Planned resources

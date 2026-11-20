@@ -143,28 +143,71 @@ def test_fallback_default_when_no_sonnet_or_haiku():
     assert result.router_model_id == "global.qwen"
 
 
-def test_compute_blocked_model_ids_blocks_everything_not_checked():
+def test_compute_blocked_model_ids_blocks_bare_id_when_nothing_checked():
     all_ids = ["amazon.nova-pro-v1:0", "anthropic.claude-sonnet-x", "qwen.qwen3-32b-v1:0"]
-    checked = ["anthropic.claude-sonnet-x"]
-    assert models.compute_blocked_model_ids(all_ids, checked) == ["amazon.nova-pro-v1:0", "qwen.qwen3-32b-v1:0"]
-
-
-def test_checked_base_ids_from_blocklist_is_inverse_of_compute():
     items = [
-        models.ModelItem("global.a", "A", "anthropic.claude-sonnet-x", "Anthropic"),
-        models.ModelItem("global.b", "B", "qwen.qwen3-32b-v1:0", "Qwen"),
+        models.ModelItem("global.anthropic.claude-sonnet-x", "A", "anthropic.claude-sonnet-x", "Anthropic"),
+        models.ModelItem("us.anthropic.claude-sonnet-x", "A", "anthropic.claude-sonnet-x", "Anthropic"),
     ]
-    blocked = models.compute_blocked_model_ids(
-        ["anthropic.claude-sonnet-x", "qwen.qwen3-32b-v1:0"], ["anthropic.claude-sonnet-x"],
-    )
-    checked = models.checked_base_ids_from_blocklist(items, blocked)
-    assert checked == ["anthropic.claude-sonnet-x"]
+    assert models.compute_blocked_model_ids(all_ids, items, []) == [
+        "amazon.nova-pro-v1:0", "anthropic.claude-sonnet-x", "qwen.qwen3-32b-v1:0",
+    ]
 
 
-def test_is_blocked_matches_base_id_across_profile_prefixes():
+def test_compute_blocked_model_ids_only_us_checked_blocks_global_profile_only():
+    all_ids = ["anthropic.claude-sonnet-x"]
+    items = [
+        models.ModelItem("global.anthropic.claude-sonnet-x", "A", "anthropic.claude-sonnet-x", "Anthropic"),
+        models.ModelItem("us.anthropic.claude-sonnet-x", "A", "anthropic.claude-sonnet-x", "Anthropic"),
+    ]
+    checked = ["us.anthropic.claude-sonnet-x"]
+    blocked = models.compute_blocked_model_ids(all_ids, items, checked)
+    assert blocked == ["global.anthropic.claude-sonnet-x"]
+    assert "anthropic.claude-sonnet-x" not in blocked  # bare id stays allowed
+
+
+def test_compute_blocked_model_ids_both_checked_blocks_nothing():
+    all_ids = ["anthropic.claude-sonnet-x"]
+    items = [
+        models.ModelItem("global.anthropic.claude-sonnet-x", "A", "anthropic.claude-sonnet-x", "Anthropic"),
+        models.ModelItem("us.anthropic.claude-sonnet-x", "A", "anthropic.claude-sonnet-x", "Anthropic"),
+    ]
+    checked = ["global.anthropic.claude-sonnet-x", "us.anthropic.claude-sonnet-x"]
+    assert models.compute_blocked_model_ids(all_ids, items, checked) == []
+
+
+def test_checked_profile_ids_from_blocklist_round_trips_compute():
+    all_ids = ["anthropic.claude-sonnet-x", "qwen.qwen3-32b-v1:0"]
+    items = [
+        models.ModelItem("global.anthropic.claude-sonnet-x", "A", "anthropic.claude-sonnet-x", "Anthropic"),
+        models.ModelItem("us.anthropic.claude-sonnet-x", "A", "anthropic.claude-sonnet-x", "Anthropic"),
+        models.ModelItem("global.qwen.qwen3-32b-v1:0", "B", "qwen.qwen3-32b-v1:0", "Qwen"),
+    ]
+    checked = ["global.anthropic.claude-sonnet-x"]
+    blocked = models.compute_blocked_model_ids(all_ids, items, checked)
+    round_tripped = models.checked_profile_ids_from_blocklist(items, blocked)
+    assert round_tripped == checked
+
+
+def test_is_blocked_unprefixed_pattern_blocks_every_prefix_and_bare_id():
     assert models.is_blocked("us.anthropic.claude-sonnet-x", ["anthropic.claude-sonnet-x"])
-    assert models.is_blocked("global.anthropic.claude-sonnet-x", ["us.anthropic.claude-sonnet-x"])
+    assert models.is_blocked("global.anthropic.claude-sonnet-x", ["anthropic.claude-sonnet-x"])
+    assert models.is_blocked("anthropic.claude-sonnet-x", ["anthropic.claude-sonnet-x"])
     assert not models.is_blocked("anthropic.claude-haiku-x", ["anthropic.claude-sonnet-x"])
+
+
+def test_is_blocked_prefixed_pattern_blocks_only_that_prefix():
+    assert models.is_blocked("us.anthropic.claude-sonnet-x", ["us.anthropic.claude-sonnet-x"])
+    assert not models.is_blocked("global.anthropic.claude-sonnet-x", ["us.anthropic.claude-sonnet-x"])
+    assert not models.is_blocked("anthropic.claude-sonnet-x", ["us.anthropic.claude-sonnet-x"])
+
+
+def test_is_blocked_handles_arn_and_empty_id():
+    arn = "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-x"
+    assert models.is_blocked(arn, ["anthropic.claude-sonnet-x"])
+    assert models.is_blocked("", ["anthropic.claude-sonnet-x"])
+    assert models.is_blocked("   ", ["anthropic.claude-sonnet-x"])
+    assert models.is_blocked(None, ["anthropic.claude-sonnet-x"])
 
 
 def test_multi_model_profile_is_excluded():
@@ -203,7 +246,9 @@ def test_text_only_models_are_hidden_but_blocked():
     )
     result = models.discover(client)
     assert [i.profile_id for i in result.global_items] == ["global.anthropic.claude-sonnet-x"]
-    blocked = models.compute_blocked_model_ids(result.all_backend_ids, ["anthropic.claude-sonnet-x"])
+    blocked = models.compute_blocked_model_ids(
+        result.all_backend_ids, result.all_items(), ["global.anthropic.claude-sonnet-x"],
+    )
     assert blocked == ["qwen.text-only"]
 
 

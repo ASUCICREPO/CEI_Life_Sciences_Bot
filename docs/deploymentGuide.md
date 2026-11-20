@@ -62,9 +62,14 @@ Use the Back/Next buttons to move between screens; your answers stay in memory a
 
 ### Model selection
 
-The Models screen lists only the latest multimodal (text + image in, text out), tool-capable models from OpenAI, Anthropic, Qwen, Google, Meta, Moonshot, Z.AI and xAI, shown as Bedrock inference profiles under two tabs, **Global** and **US**. Each base model has one checkbox state shared by both tabs: checking or unchecking a model in one tab checks or unchecks its row in the other. Every model starts checked. A search bar filters the list by name or provider.
+The Models screen lists only the latest multimodal (text + image in, text out), tool-capable models from OpenAI, Anthropic, Qwen, Google, Meta, Moonshot, Z.AI and xAI, shown as Bedrock inference profiles under two tabs, **Global** and **US**. Each profile has its own checkbox, so you can allow a model through its `US` profile and block its `Global` profile (for example, for data residency: a `us.` profile keeps requests in US Regions, and a `global.` profile can route them to any commercial Region). Every profile starts checked. A search bar filters the list by name or provider. "Select all" and "Clear all" change only the profiles listed in the open tab (after the search filter).
 
-Unchecked models are written to `blockedModelIds`. This also includes every other tool-capable model the backend could otherwise discover (any provider, not only the 8 above), so the deployed app only ever offers the providers this screen shows. A model AWS releases later, that was never in this list, stays allowed — it is simply absent from `blockedModelIds`.
+Unchecked profiles are written to `blockedModelIds` (B113):
+
+- If no profile of a model is checked, the tool writes the bare model ID (for example `anthropic.claude-sonnet-5-5`). An entry with no prefix blocks the model under every profile prefix and its bare, in-Region ID.
+- If at least one profile of a model is checked, the tool writes only the unchecked profile IDs (for example `global.anthropic.claude-sonnet-5-5`). An entry with a prefix blocks only that profile. The bare in-Region ID stays allowed, because an in-Region call is the most data-resident option.
+
+`blockedModelIds` also includes every other tool-capable model the backend could otherwise discover (any provider, not only the 8 above), as bare IDs, so the deployed app only ever offers the providers this screen shows. The D3 safety patterns have no prefix, so they still block their models under every prefix. A model AWS releases later, that was never in this list, stays allowed — it is simply absent from `blockedModelIds`.
 
 The screen pre-selects a default model and a router model: the newest Claude Sonnet and the newest Claude Haiku, preferring the `Global` profile over `US` when both exist. Change either with the "Default model" / "Router model" dropdowns, which only ever offer a currently checked model.
 

@@ -13,7 +13,8 @@ from shared.persistence.chat_history import ChatHistoryRepository, MessageRole
 from shared.persistence.chat_metadata import ChatMetadataRepository, SessionNotFoundError
 from shared.persistence.conversation import ConversationRecorder
 from shared.runtime.history import begin_turn, describe_action
-from shared.runtime.identity import UnauthenticatedError, resolve_user_id
+from shared.runtime.identity import AgeNotVerifiedError, UnauthenticatedError, resolve_user_id
+from tests.conftest import NO_AGE_VERIFIED_TOKEN_PREFIX
 from test_pipeline_main import _approve_action, _FakeGraph, _plan  # noqa: F401
 from test_persistence import session  # noqa: F401 — moto tables fixture
 
@@ -50,6 +51,17 @@ def test_unsigned_jwt_is_rejected():
     ctx.request_headers = {"Authorization": f"Bearer {_unsigned_jwt({'sub': 'forged'})}"}
     with pytest.raises(UnauthenticatedError):
         resolve_user_id({}, ctx)
+
+
+def test_resolve_user_id_raises_when_the_age_verified_claim_is_missing():
+    ctx = _Ctx("s")
+    ctx.request_headers = {"Authorization": f"Bearer {NO_AGE_VERIFIED_TOKEN_PREFIX}cognito-sub"}
+    with pytest.raises(AgeNotVerifiedError):
+        resolve_user_id({}, ctx)
+
+
+def test_resolve_user_id_succeeds_when_the_age_verified_claim_is_present():
+    assert resolve_user_id({}, _Ctx("s", sub="cognito-sub")) == "cognito-sub"
 
 
 # -- begin_turn / rehydration -----------------------------------------------------------------------------------

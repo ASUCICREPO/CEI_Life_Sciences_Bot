@@ -76,6 +76,7 @@ describe.each([
       'GET /jobs', 'GET /jobs/{jobId}', 'POST /jobs/{jobId}/cancel', 'POST /ui-actions',
       'GET /models', 'GET /settings', 'PUT /settings',
       'POST /attachments/presign',
+      'POST /profile',
     ].sort());
   });
 

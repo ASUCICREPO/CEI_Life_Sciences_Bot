@@ -223,7 +223,7 @@ async def test_keyboard_only_flow(tmp_path):
         await pilot.press("right")
         await pilot.pause()
         assert _focused_id(app) == "list-us"
-        assert "us.anthropic.claude-sonnet-x" not in us_list.selected  # linked by base model
+        assert "us.anthropic.claude-sonnet-x" in us_list.selected  # Global and US tabs are independent
         await pilot.press("left")
         await pilot.pause()
         assert _focused_id(app) == "list-global"
@@ -247,7 +247,7 @@ async def test_keyboard_only_flow(tmp_path):
             await pilot.pause()
         # Esc on the first screen must never leave a blank screen.
     assert app.exit_code == 0
-    assert app.wizard.cfg.blockedModelIds == ["anthropic.claude-sonnet-x"]
+    assert app.wizard.cfg.blockedModelIds == ["global.anthropic.claude-sonnet-x"]
 
 
 @pytest.mark.asyncio
@@ -357,3 +357,155 @@ async def test_arrows_space_enter_only(tmp_path):
                 break
             await pilot.pause()
     assert app.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_model_search_does_not_rebuild_dropdowns_per_key(tmp_path):
+    """Typing a search term refreshes the default/router dropdowns at most once, not per option."""
+    from cei_deploy.tui.screens.models import ModelsScreen
+
+    (tmp_path / "backend").mkdir()
+    app = DeployApp(repo_root=tmp_path, dry_run=True, session_factory=_fake_session_factory,
+                    prefetcher=_linked_prefetcher())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        app.wizard.cfg.region = "us-east-1"
+        app.wizard.region_confirmed = True
+        app.prefetcher.start_region("us-east-1")
+        app.push_screen(ModelsScreen())
+        for _ in range(20):
+            if app.wizard.discovery is not None:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        screen = app.screen
+        calls = {"refresh": 0, "populate": 0}
+        real_refresh, real_populate = screen._refresh_default_router_selects, screen._populate
+
+        def counting_refresh():
+            calls["refresh"] += 1
+            real_refresh()
+
+        def counting_populate(text):
+            calls["populate"] += 1
+            real_populate(text)
+
+        screen._refresh_default_router_selects = counting_refresh
+        screen._populate = counting_populate
+        screen.query_one("#model-search").focus()
+        await pilot.press(*"sonnet")
+        await pilot.pause(0.3)
+        assert calls["populate"] == 1  # debounced: one filter run for six keystrokes
+        assert calls["refresh"] == 0   # re-adding options is not a selection change
+        assert [o.prompt for o in screen.query_one("#list-global")._options]  # filter applied
+        assert all("Sonnet" in str(o.prompt) for o in screen.query_one("#list-global")._options)
+
+
+@pytest.mark.asyncio
+async def test_clear_all_then_select_all(tmp_path):
+    """Clear all empties both dropdowns without a crash and blocks Next; re-checking refills them."""
+    from textual.widgets import Select, TabbedContent
+
+    from cei_deploy.tui.screens.models import ModelsScreen
+
+    (tmp_path / "backend").mkdir()
+    app = DeployApp(repo_root=tmp_path, dry_run=True, session_factory=_fake_session_factory,
+                    prefetcher=_linked_prefetcher())
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        app.wizard.cfg.region = "us-east-1"
+        app.wizard.region_confirmed = True
+        app.prefetcher.start_region("us-east-1")
+        app.push_screen(ModelsScreen())
+        for _ in range(20):
+            if app.wizard.discovery is not None:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        screen = app.screen
+        default_select = screen.query_one("#default-model-select", Select)
+        router_select = screen.query_one("#router-model-select", Select)
+
+        # Clear all acts on the open tab only (B113): clear both tabs to empty every check.
+        screen.query_one("#clear-all").press()
+        await pilot.pause()
+        screen.query_one("#model-tabs", TabbedContent).active = "tab-us"
+        await pilot.pause()
+        screen.query_one("#clear-all").press()
+        await pilot.pause()
+        screen.query_one("#model-tabs", TabbedContent).active = "tab-global"
+        await pilot.pause()
+        assert default_select.is_blank() and router_select.is_blank()
+        screen.query_one("#nav-next").press()
+        await pilot.pause()
+        assert app.screen is screen  # Next is blocked with nothing checked
+        assert "at least one model" in str(screen.query_one("#error-message").render())
+
+        # Check only Sonnet again: both dropdowns must choose it (smart fallback, not a random pick).
+        screen.query_one("#list-global").select("global.anthropic.claude-sonnet-x")
+        await pilot.pause()
+        assert default_select.value == "global.anthropic.claude-sonnet-x"
+        assert router_select.value == "global.anthropic.claude-sonnet-x"
+
+        screen.query_one("#select-all").press()
+        await pilot.pause()
+        assert not default_select.is_blank() and not router_select.is_blank()
+        screen.query_one("#nav-next").press()
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "RepositoryScreen"
+
+
+@pytest.mark.asyncio
+async def test_select_and_clear_all_act_on_open_tab_only(tmp_path):
+    """Select all / Clear all change only the open tab's models (B113: Global and US are independent)."""
+    from textual.widgets import TabbedContent
+
+    from cei_deploy.tui.screens.models import ModelsScreen
+
+    prefetcher = _linked_prefetcher()
+    llama = "meta.llama-x"
+    prefetcher._discovery.us_items.append(models.ModelItem("us." + llama, "US Llama", llama, "Meta"))
+    prefetcher._discovery.all_backend_ids.append(llama)
+    (tmp_path / "backend").mkdir()
+    app = DeployApp(repo_root=tmp_path, dry_run=True, session_factory=_fake_session_factory, prefetcher=prefetcher)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        app.wizard.cfg.region = "us-east-1"
+        app.wizard.region_confirmed = True
+        app.prefetcher.start_region("us-east-1")
+        app.push_screen(ModelsScreen())
+        for _ in range(20):
+            if app.wizard.discovery is not None:
+                break
+            await pilot.pause()
+        await pilot.pause()
+        screen = app.screen
+        us_list = screen.query_one("#list-us")
+        global_list = screen.query_one("#list-global")
+
+        # Global tab open: Clear all clears only Global's models; every US item stays checked.
+        screen.query_one("#clear-all").press()
+        await pilot.pause()
+        assert global_list.selected == []
+        assert set(us_list.selected) == {
+            "us.anthropic.claude-sonnet-x", "us.anthropic.claude-haiku-x", "us." + llama,
+        }
+
+        # US tab open: Clear all now clears US (Llama included); Global stays empty.
+        screen.query_one("#model-tabs", TabbedContent).active = "tab-us"
+        await pilot.pause()
+        screen.query_one("#clear-all").press()
+        await pilot.pause()
+        assert us_list.selected == []
+        assert app.wizard.checked_profile_ids == set()
+
+        # Back on Global: Select all checks only Global's models (US, including Llama, stays empty).
+        screen.query_one("#model-tabs", TabbedContent).active = "tab-global"
+        await pilot.pause()
+        screen.query_one("#select-all").press()
+        await pilot.pause()
+        assert set(global_list.selected) == {"global.anthropic.claude-sonnet-x", "global.anthropic.claude-haiku-x"}
+        assert us_list.selected == []
+        assert app.wizard.checked_profile_ids == {
+            "global.anthropic.claude-sonnet-x", "global.anthropic.claude-haiku-x",
+        }

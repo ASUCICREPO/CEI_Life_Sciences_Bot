@@ -1,9 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { User, UserManager } from 'oidc-client-ts';
 import { loadRuntimeConfig, type RuntimeConfig } from './config';
 import { getUserManager, buildCognitoLogoutUrl } from './userManager';
 import { setAgentTokenProvider } from '../agentClient';
 import { configureClientDiagnostics, installGlobalDiagnostics } from '../clientDiagnostics';
+import { setOnboardingRequiredHandler } from './onboardingGate';
 
 interface AuthContextValue {
   user: User | null;
@@ -22,6 +24,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 // ADR: no auth bypass in any build | local dev signs in to a real dev Cognito pool exactly like prod,
 // so every API call carries a real access token and the backend scopes data by the token's `sub`.
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const navigate = useNavigate();
   const [userManager, setUserManager] = useState<UserManager | null>(null);
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -106,6 +109,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAgentTokenProvider(getAccessToken);
     return () => setAgentTokenProvider(null);
   }, [getAccessToken]);
+
+  // ADR: register the onboarding redirect here | the non-React clients (agentClient, sessionsClient,
+  // openStream) hit a run-starting 403 onboarding_required and call this instead of importing the router.
+  useEffect(() => {
+    setOnboardingRequiredHandler(() => navigate('/onboarding', { replace: true }));
+    return () => setOnboardingRequiredHandler(null);
+  }, [navigate]);
 
   const authenticated = Boolean(user && !user.expired);
   useLayoutEffect(() => {

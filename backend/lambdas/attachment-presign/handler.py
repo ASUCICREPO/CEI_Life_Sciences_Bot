@@ -32,6 +32,9 @@ ALLOWED_TYPES = frozenset([
 ])
 
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# B112: the same run-start/write gate claim the REST Lambdas check via http_errors.require_age_verified;
+# this Lambda carries no python-deps layer, so the check is inlined rather than imported.
+AGE_VERIFIED_CLAIM = "cei_age_verified"
 
 s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
 dynamodb = boto3.resource("dynamodb")
@@ -49,13 +52,22 @@ def _ok(data: dict[str, Any]) -> dict[str, Any]:
     return {"statusCode": 200, "headers": {**_cors(), "Content-Type": "application/json"}, "body": json.dumps(data)}
 
 
+def _onboarding_required() -> dict[str, Any]:
+    body = {"error": {"code": "onboarding_required", "message": "Complete your profile to continue."}}
+    return {"statusCode": 403, "headers": {**_cors(), "Content-Type": "application/json"}, "body": json.dumps(body)}
+
+
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": _cors(), "body": ""}
 
-    user_id = event.get("requestContext", {}).get("authorizer", {}).get("claims", {}).get("sub")
+    claims = event.get("requestContext", {}).get("authorizer", {}).get("claims", {})
+    user_id = claims.get("sub")
     if not user_id:
         return _error(401, "Authentication required")
+    # B112: a presign is a run-adjacent write (it creates the pending attachment record).
+    if claims.get(AGE_VERIFIED_CLAIM) != "true":
+        return _onboarding_required()
 
     try:
         body = json.loads(event.get("body") or "{}")

@@ -59,7 +59,7 @@ class ReviewScreen(WizardScreen):
         self.query_one("#nav-next").display = False
         self._prepare_summary()
 
-    @work(thread=True, exclusive=True)
+    @work(thread=True, group="summary")
     def _prepare_summary(self) -> None:
         wizard = self.wizard
         region = wizard.cfg.region
@@ -137,7 +137,7 @@ class ReviewScreen(WizardScreen):
         self.wizard_app.exit_code = 0
         self.query_one("#nav-next").display = True
 
-    @work(thread=True, exclusive=True)
+    @work(thread=True, group="deploy", exclusive=True)
     def _run_deploy(self) -> None:
         wizard = self.wizard
         try:

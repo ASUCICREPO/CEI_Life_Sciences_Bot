@@ -17,6 +17,7 @@ from http_errors import (
     invalid_request,
     json_response,
     parse_json_body,
+    require_age_verified,
     user_id_from_claims,
 )
 from shared.config import config
@@ -105,6 +106,8 @@ def _put_settings(event: dict[str, Any], user_id: str) -> dict[str, Any]:
     # B109/F19: a settings write is blocked once the account-deleting gate is set.
     if _account_gate().is_deleting(user_id):
         raise ApiError(403, "forbidden", "This account is being deleted.")
+    # B112: a settings write also requires a completed, age-verified profile.
+    require_age_verified(event)
     body = parse_json_body(event)
     _reject_unknown(body, {"default_model_id", "default_mode"})
     model_id = _validate_model_id(body["default_model_id"]) if body.get("default_model_id") is not None else None

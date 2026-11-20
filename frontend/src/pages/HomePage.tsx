@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
+import { useAuth } from '../lib/auth/AuthProvider';
+import { displayFirstName, timeOfDayGreeting } from '../lib/auth/displayName';
 import { resumeState, useSessions } from '../lib/useSessions';
 import {
   ArrowRight, Clock, CheckCircle2, AlertCircle,
@@ -11,6 +13,9 @@ import { ViewMode } from '../design-system/tokens';
 export function HomePage() {
   const { mode } = useApp();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const firstName = displayFirstName(user?.profile);
+  const greeting = timeOfDayGreeting();
   const { sessions, isLoading: sessionsLoading, error: sessionsError } = useSessions({ limit: 5 });
   const [askValue, setAskValue] = useState('');
 
@@ -42,7 +47,7 @@ export function HomePage() {
   return (
     <div className="max-w-6xl mx-auto px-6 py-8">
       <div data-tour="home-overview" className="mb-8">
-        <h1 className="text-2xl font-semibold text-text-primary">Good morning, Sarah</h1>
+        <h1 className="text-2xl font-semibold text-text-primary">{firstName ? `${greeting}, ${firstName}` : greeting}</h1>
         <p className="text-sm text-text-secondary mt-1">Home is your overview for starting work and returning to recent conversations.</p>
       </div>
 

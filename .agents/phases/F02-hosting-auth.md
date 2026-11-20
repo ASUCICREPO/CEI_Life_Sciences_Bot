@@ -2,6 +2,8 @@
 
 Status: done (manual deployed verification passed, verified by the user on 2026-10-05) | Depends on: F1 | Decisions: B1, B12, B13, B14, B16, B53, B66, B88, B89, B90 | Specs: [`../specs/architecture.md`](../specs/architecture.md) §1 (S3/CloudFront/WAF/Cognito rows), [`../specs/auth-and-tool-scope.md`](../specs/auth-and-tool-scope.md) §1–2, [`../specs/security.md`](../specs/security.md) (network/edge, identity and access)
 
+**B112 (2026-11-19, built in code, not yet deployed) adds to this phase's scope:** a one-time post-login onboarding page (`frontend/src/pages/`, a new `/onboarding` route, a `RequireOnboarding` gate in `App.tsx`, `profileClient.ts`) collecting First name, Last name, and Date of birth, and the SPA client's `readAttributes` addition (now includes `given_name`, `family_name`, `birthdate`), so the ID token carries them. `writeAttributes` stays empty. Needs live AWS verification. See `.agents/decision-log.md` B112 and `.agents/specs/auth-and-tool-scope.md` §14.
+
 ## Goal
 
 Serve the `founder-ai-dashboard` SPA (copied into `frontend/`, replacing the archived Next.js app per B66) from S3 + CloudFront + WAF, with real Cognito self sign-up, email verification, and a domain allowlist. A user can sign up, verify, log in, and see the dashboard shell with no working chat yet.

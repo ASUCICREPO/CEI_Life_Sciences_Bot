@@ -2,7 +2,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from shared.runtime.model_policy import (GuardrailBlocked, ModelPolicyError, mask_user_input,
+from shared.runtime.model_policy import (GuardrailBlocked, ModelPolicyError, is_blocked, mask_user_input,
                                          permitted_models, select_mode, select_model)
 
 
@@ -10,6 +10,46 @@ def test_blocklist_matches_cross_region_alias_and_arn():
     models = ["us.anthropic.claude-fable-5-v1", "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-fable-5-v1",
               "us.anthropic.claude-sonnet-v1"]
     assert permitted_models(models, ["anthropic.claude-fable-5*"]) == [models[-1]]
+
+
+def test_unprefixed_pattern_blocks_every_profile_and_arn():
+    # D3 regression: an unprefixed pattern must keep blocking the model under every profile prefix.
+    pattern = ["anthropic.claude-fable-5*"]
+    assert is_blocked("anthropic.claude-fable-5-v1", pattern)
+    assert is_blocked("us.anthropic.claude-fable-5-v1", pattern)
+    assert is_blocked("global.anthropic.claude-fable-5-v1", pattern)
+    assert is_blocked("eu.anthropic.claude-fable-5-v1", pattern)
+    assert is_blocked("apac.anthropic.claude-fable-5-v1", pattern)
+    assert is_blocked("arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-fable-5-v1", pattern)
+    assert is_blocked("arn:aws:bedrock:us-east-1:123:inference-profile/us.anthropic.claude-fable-5-v1", pattern)
+
+
+def test_prefixed_pattern_blocks_only_that_profile():
+    pattern = ["global.anthropic.claude-x"]
+    assert is_blocked("global.anthropic.claude-x", pattern)
+    assert is_blocked("arn:aws:bedrock:us-east-1:123:inference-profile/global.anthropic.claude-x", pattern)
+    assert not is_blocked("us.anthropic.claude-x", pattern)
+    assert not is_blocked("anthropic.claude-x", pattern)
+    assert not is_blocked("eu.anthropic.claude-x", pattern)
+
+
+def test_prefixed_glob_pattern_matches_only_its_own_profile():
+    pattern = ["us.anthropic.claude-x*"]
+    assert is_blocked("us.anthropic.claude-x-v1", pattern)
+    assert not is_blocked("global.anthropic.claude-x-v1", pattern)
+    assert not is_blocked("anthropic.claude-x-v1", pattern)
+
+
+def test_empty_or_non_string_model_id_is_blocked():
+    assert is_blocked("", ["anything"])
+    assert is_blocked("   ", ["anything"])
+    assert is_blocked(None, [])  # type: ignore[arg-type]
+    assert is_blocked(123, [])  # type: ignore[arg-type]
+
+
+def test_permitted_models_keeps_other_profiles_when_only_one_prefix_blocked():
+    models = ["global.anthropic.claude-x", "us.anthropic.claude-x", "anthropic.claude-x"]
+    assert permitted_models(models, ["global.anthropic.claude-x"]) == models[1:]
 
 
 def test_explicit_blocked_model_never_falls_back_to_default():

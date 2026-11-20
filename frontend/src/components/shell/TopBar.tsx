@@ -6,12 +6,14 @@ import { platformDestinations } from '../../config/platformNavigation';
 import { useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../../lib/auth/AuthProvider';
+import { displayFullName } from '../../lib/auth/displayName';
 
 export function TopBar() {
   const { mode, setMode } = useApp();
   const { reportTourEvent } = useProductTour();
   const { user, signOut } = useAuth();
   const userEmail = (user?.profile.email as string | undefined) ?? '';
+  const displayName = displayFullName(user?.profile) ?? userEmail;
   const navigate = useNavigate();
   const searchRef = useRef<HTMLFormElement>(null);
   const [searchValue, setSearchValue] = useState('');
@@ -126,7 +128,7 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-2 text-xs text-text-tertiary shrink-0">
-        {userEmail && <span className="hidden md:inline truncate max-w-[10rem]" title={userEmail}>{userEmail}</span>}
+        {displayName && <span className="hidden md:inline truncate max-w-[10rem]" title={userEmail || displayName}>{displayName}</span>}
         <button
           type="button"
           onClick={() => {
