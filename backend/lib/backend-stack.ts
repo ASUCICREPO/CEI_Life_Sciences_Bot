@@ -878,7 +878,7 @@ export class BackendStack extends cdk.Stack {
         maxAge: Duration.hours(1),
       },
     });
-    const agentNames = ['research', 'drafting', 'analysis', 'pipeline'] as const;
+    const agentNames = ['research', 'drafting', 'analysis', 'pipeline', 'toolagent'] as const;
     const agentProxyUrls = Object.fromEntries(
       agentNames.map((name) => [name, cdk.Fn.join('', [agentProxyUrl.url, name])]),
     ) as Record<(typeof agentNames)[number], string>;
@@ -1060,6 +1060,8 @@ export class BackendStack extends cdk.Stack {
       webSearchEnabled: this.config?.webSearchEnabled,
     });
     agentRuntimes.configureResearchGateway(gateway.routerClient.userPoolClientId, gateway.gateway.attrGatewayUrl);
+    // F15: Tool Agent also uses the Gateway for single-source scoped access
+    agentRuntimes.configureToolAgentGateway(gateway.routerClient.userPoolClientId, gateway.gateway.attrGatewayUrl);
     // B67: only the Research runtime may invoke the internal IAM-authenticated
     // refresh method; the refresh handler also verifies the caller and active run.
     agentRuntimes.runtimes.Research.role.addToPrincipalPolicy(new iam.PolicyStatement({

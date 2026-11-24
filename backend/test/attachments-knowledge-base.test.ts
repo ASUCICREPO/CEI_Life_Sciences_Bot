@@ -153,7 +153,7 @@ describe('B110: Managed Knowledge Base for attachments', () => {
 
   it('every AgentCore runtime gets CEI_KNOWLEDGE_BASE_ID and a bedrock:Retrieve grant scoped to the KB ARN', () => {
     const runtimes = template.findResources('AWS::BedrockAgentCore::Runtime');
-    expect(Object.keys(runtimes)).toHaveLength(4);
+    expect(Object.keys(runtimes)).toHaveLength(5);
     for (const runtime of Object.values(runtimes)) {
       expect((runtime as any).Properties.EnvironmentVariables.CEI_KNOWLEDGE_BASE_ID).toBeDefined();
     }
@@ -162,7 +162,7 @@ describe('B110: Managed Knowledge Base for attachments', () => {
       (p.Properties.Roles as Array<{ Ref: string }>).some((r) => r.Ref.startsWith('AgentRuntimes')) &&
       p.Properties.PolicyDocument.Statement.some((s: any) => [s.Action].flat().includes('bedrock:Retrieve')),
     );
-    expect(runtimeRetrieveGrants).toHaveLength(4);
+    expect(runtimeRetrieveGrants).toHaveLength(5);
     for (const p of runtimeRetrieveGrants) {
       const statement = p.Properties.PolicyDocument.Statement.find((s: any) => [s.Action].flat().includes('bedrock:Retrieve'));
       expect(JSON.stringify(statement.Resource)).not.toContain('"*"');

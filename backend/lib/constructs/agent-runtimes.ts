@@ -15,7 +15,7 @@ const AGENTS_DIR = path.join(__dirname, '..', '..', 'agents');
 
 /** Source trees and entrypoints shipped in the CodeZip (everything else under backend/agents stays local). */
 const SOURCE_DIRS = ['research', 'drafting', 'analysis', 'pipeline_manager', 'tool_agent', 'shared'];
-const ENTRYPOINT_FILES = ['main.py', 'drafting_main.py', 'analysis_main.py', 'pipeline_main.py'];
+const ENTRYPOINT_FILES = ['main.py', 'drafting_main.py', 'analysis_main.py', 'pipeline_main.py', 'tool_agent_main.py'];
 
 // ADR: never ship local-only files | Rationale: .env holds developer credentials/settings; .venv is a Windows/host
 // venv; agentcore/ is the local `agentcore dev` project (agentcore.json is local-development-only, docs/architectureDeepDive.md)
@@ -25,20 +25,27 @@ const EXCLUDES = [
 ];
 
 /** The four specialist runtimes (names match backend/agents/agentcore/agentcore.json). */
-export const AGENT_RUNTIMES = [
+export const SPECIALIST_RUNTIMES = [
   { id: 'Research', runtimeName: 'CEIResearchAgent', entrypoint: 'main.py' },
   { id: 'Drafting', runtimeName: 'CEIDraftingAgent', entrypoint: 'drafting_main.py' },
   { id: 'Analysis', runtimeName: 'CEIAnalysisAgent', entrypoint: 'analysis_main.py' },
   { id: 'Pipeline', runtimeName: 'CEIPipelineManager', entrypoint: 'pipeline_main.py' },
 ] as const;
 
+/** Tool Agent runtime — single-source natural-language chat (F15, 13 YAML profiles). */
+export const TOOL_AGENT_RUNTIME = { id: 'ToolAgent', runtimeName: 'CEIToolAgent', entrypoint: 'tool_agent_main.py' } as const;
+
+/** All runtimes including Tool Agent. */
+export const AGENT_RUNTIMES = [...SPECIALIST_RUNTIMES, TOOL_AGENT_RUNTIME] as const;
+
 // F11: each runtime reads its own memory id env var; opt-in recall flags (CEI_<AGENT>_LONG_TERM_ENABLED)
 // default off and are not set here, matching Research's existing off-by-default convention.
-const MEMORY_ID_ENV: Record<(typeof AGENT_RUNTIMES)[number]['id'], string> = {
+const MEMORY_ID_ENV: Record<(typeof SPECIALIST_RUNTIMES)[number]['id'] | 'ToolAgent', string> = {
   Research: 'CEI_RESEARCH_MEMORY_ID',
   Drafting: 'CEI_DRAFTING_MEMORY_ID',
   Analysis: 'CEI_ANALYSIS_MEMORY_ID',
   Pipeline: 'CEI_PIPELINE_MEMORY_ID',
+  ToolAgent: 'CEI_TOOL_AGENT_MEMORY_ID',
 };
 
 // ADR: AgentCore Runtime is arm64 (Graviton) + PYTHON_3_12 (agentcore.json) | Rationale: CodeZip deps must be
@@ -63,7 +70,7 @@ function copySources(outputDir: string, extraDirs: string[] = [], extraFiles: st
 }
 
 export class LocalUvBundling implements cdk.ILocalBundling {
-  constructor(private readonly extraDirs: string[] = [], private readonly extraFiles: string[] = []) {}
+  constructor(private readonly extraDirs: string[] = [], private readonly extraFiles: string[] = []) { }
 
   tryBundle(outputDir: string): boolean {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cei-agent-reqs-'));
@@ -109,7 +116,7 @@ function invocationUrl(stack: cdk.Stack, runtimeArn: string): string {
 }
 
 /** Job agent_type values (shared/persistence/jobs.py AGENT_TYPES) for each runtime. */
-export const JOB_AGENT_TYPES = {
+export const JOB_AGENT_TYPES: Record<(typeof SPECIALIST_RUNTIMES)[number]['id'], string> = {
   Research: 'research', Drafting: 'drafting', Analysis: 'analysis', Pipeline: 'pipeline_manager',
 } as const;
 
@@ -176,21 +183,21 @@ export class AgentRuntimes extends Construct {
     const assetOptions = underJest
       ? { exclude: EXCLUDES }
       : {
-          exclude: EXCLUDES,
-          bundling: {
-            image: cdk.DockerImage.fromRegistry('ghcr.io/astral-sh/uv:python3.12-bookworm-slim'),
-            local: new LocalUvBundling(),
-            command: [
-              'bash', '-c',
-              [
-                'uv export --frozen --no-dev --no-emit-project --no-hashes --output-file /tmp/requirements.txt',
-                `uv pip install -r /tmp/requirements.txt --target /asset-output ${UV_INSTALL_ARGS.join(' ')}`,
-                `cp -r ${SOURCE_DIRS.join(' ')} ${ENTRYPOINT_FILES.join(' ')} /asset-output/`,
-                'find /asset-output -name __pycache__ -prune -exec rm -rf {} +',
-              ].join(' && '),
-            ],
-          },
-        };
+        exclude: EXCLUDES,
+        bundling: {
+          image: cdk.DockerImage.fromRegistry('ghcr.io/astral-sh/uv:python3.12-bookworm-slim'),
+          local: new LocalUvBundling(),
+          command: [
+            'bash', '-c',
+            [
+              'uv export --frozen --no-dev --no-emit-project --no-hashes --output-file /tmp/requirements.txt',
+              `uv pip install -r /tmp/requirements.txt --target /asset-output ${UV_INSTALL_ARGS.join(' ')}`,
+              `cp -r ${SOURCE_DIRS.join(' ')} ${ENTRYPOINT_FILES.join(' ')} /asset-output/`,
+              'find /asset-output -name __pycache__ -prune -exec rm -rf {} +',
+            ].join(' && '),
+          ],
+        },
+      };
 
     // ADR: JSON list string | Rationale: pydantic-settings parses list[str] env values as JSON (config.cognito_app_client_ids)
     const appClientIds = cdk.Fn.join('', ['["', props.spaClient.userPoolClientId, '"]']);
@@ -244,6 +251,7 @@ export class AgentRuntimes extends Construct {
     const runtimes = {} as Record<(typeof AGENT_RUNTIMES)[number]['id'], agentcore.Runtime>;
     const invocationUrls = {} as Record<Lowercase<(typeof AGENT_RUNTIMES)[number]['id']>, string>;
     for (const def of AGENT_RUNTIMES) {
+      const isToolAgent = def.id === 'ToolAgent';
       const runtime = new agentcore.Runtime(this, `${def.id}Runtime`, {
         runtimeName: def.runtimeName,
         tracingEnabled: true,
@@ -257,32 +265,42 @@ export class AgentRuntimes extends Construct {
         // Layer 1: AgentCore rejects any request without a valid access token from this pool + SPA client
         authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingCognito(props.userPool, [props.spaClient]),
         // Layer 2 needs the raw bearer token in-process (identity.py verifies it against the JWKS again)
-        requestHeaderConfiguration: { allowlistedHeaders: ['Authorization'] },
+        // F15/Tool Agent: also forwards X-Cei-Gateway-Token for single-source scope verification
+        requestHeaderConfiguration: { allowlistedHeaders: isToolAgent ? ['Authorization', 'X-Cei-Gateway-Token'] : ['Authorization'] },
         environmentVariables: def.id === 'Research'
           ? {
+            ...environmentVariables,
+            [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId,
+            CEI_REQUIRE_TOOL_GATEWAY: 'true',
+          }
+          : isToolAgent
+            // F15: Tool Agent requires Gateway enforcement and has its own memory namespace
+            ? {
               ...environmentVariables,
               [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId,
               CEI_REQUIRE_TOOL_GATEWAY: 'true',
             }
-          // ADR: Drafting's short-term memory uses AgentCoreMemorySaver whenever CEI_DRAFTING_MEMORY_ID is
-          // set | Rationale: durable across runtime restart/idle timeout, same as Research (drafting_main.py
-          // `_persistent_drafting_checkpointer`) | Alternative: a separate opt-in flag rejected by the user
-          : { ...environmentVariables, [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId },
+            // ADR: Drafting's short-term memory uses AgentCoreMemorySaver whenever CEI_DRAFTING_MEMORY_ID is
+            // set | Rationale: durable across runtime restart/idle timeout, same as Research (drafting_main.py
+            // `_persistent_drafting_checkpointer`) | Alternative: a separate opt-in flag rejected by the user
+            : { ...environmentVariables, [MEMORY_ID_ENV[def.id]]: researchMemory.attrMemoryId },
       });
-      // F11: all four runtimes can retrieve from the one shared Memory resource; Research and
-      // Drafting also write events into it -- Research's own conversation/strategy events (B37),
-      // and Drafting's checkpoints (AgentCoreMemorySaver: CreateEvent/ListEvents/DeleteEvent are
-      // exactly the bedrock-agentcore calls it makes -- see langgraph_checkpoint_aws's
-      // AgentCoreEventClient; it never calls GetEvent).
+      // F11: all runtimes can retrieve from the one shared Memory resource; Research, Drafting, and
+      // ToolAgent also write events into it -- Research's own conversation/strategy events (B37),
+      // Drafting's checkpoints, and ToolAgent's per-source checkpoints (AgentCoreMemorySaver:
+      // CreateEvent/ListEvents/DeleteEvent are exactly the bedrock-agentcore calls it makes).
       runtime.role.addToPrincipalPolicy(new iam.PolicyStatement({
-        actions: def.id === 'Research' || def.id === 'Drafting'
+        actions: def.id === 'Research' || def.id === 'Drafting' || isToolAgent
           ? ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:DeleteEvent',
             'bedrock-agentcore:RetrieveMemoryRecords']
           : ['bedrock-agentcore:RetrieveMemoryRecords'],
         resources: [researchMemory.attrMemoryArn],
       }));
       this.grantData(runtime, props);
-      props.codeInterpreter.grantUse(runtime);
+      // Tool Agent does not use Code Interpreter (single-source chat only)
+      if (!isToolAgent) {
+        props.codeInterpreter.grantUse(runtime);
+      }
       runtime.role.addToPrincipalPolicy(
         new iam.PolicyStatement({
           actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
@@ -319,7 +337,10 @@ export class AgentRuntimes extends Construct {
       });
       runtimes[def.id] = runtime;
       invocationUrls[def.id.toLowerCase() as Lowercase<typeof def.id>] = invocationUrl(stack, runtime.agentRuntimeArn);
-      this.stopUrls[JOB_AGENT_TYPES[def.id]] = runtimeUrl(stack, runtime.agentRuntimeArn, 'stopruntimesession');
+      // Tool Agent has no job-based async runs, so no stop URL
+      if (!isToolAgent) {
+        this.stopUrls[JOB_AGENT_TYPES[def.id as keyof typeof JOB_AGENT_TYPES]] = runtimeUrl(stack, runtime.agentRuntimeArn, 'stopruntimesession');
+      }
     }
     this.runtimes = runtimes;
     this.invocationUrls = invocationUrls;
@@ -331,6 +352,13 @@ export class AgentRuntimes extends Construct {
     resource.addPropertyOverride('EnvironmentVariables.CEI_GATEWAY_CLIENT_ID', clientId);
     resource.addPropertyOverride('EnvironmentVariables.CEI_TOOL_GATEWAY_URL', gatewayUrl);
     resource.addPropertyOverride('RequestHeaderConfiguration.RequestHeaderAllowlist', ['Authorization', 'X-Cei-Gateway-Token']);
+  }
+
+  /** F15: Connect Tool Agent to the Gateway (same pattern as Research, but with different scopes). */
+  public configureToolAgentGateway(clientId: string, gatewayUrl: string): void {
+    const resource = this.runtimes.ToolAgent.node.defaultChild as agentcore.CfnRuntime;
+    resource.addPropertyOverride('EnvironmentVariables.CEI_GATEWAY_CLIENT_ID', clientId);
+    resource.addPropertyOverride('EnvironmentVariables.CEI_TOOL_GATEWAY_URL', gatewayUrl);
   }
 
   /**

@@ -28,12 +28,14 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
     const configured = new BackendStack(app, 'ConfiguredModelStack', {
       env: { region: 'us-east-1', account: '123456789012' },
       frontendAssetPath: FIXTURE_ASSET_PATH,
-      config: { region: 'us-east-1', defaultModelId: 'example.model-v2', routerModelId: 'router',
+      config: {
+        region: 'us-east-1', defaultModelId: 'example.model-v2', routerModelId: 'router',
         blockedModelIds: [], allowedEmailDomains: ['example.com'], adminEmail: 'admin@example.com',
-        limits: DEFAULT_LIMITS, webSearchEnabled: false, accountDeletionEnabled: false, allowLocalhostCallback: false },
+        limits: DEFAULT_LIMITS, webSearchEnabled: false, accountDeletionEnabled: false, allowLocalhostCallback: false
+      },
     });
     const configuredRuntimes = Object.values(Template.fromStack(configured).findResources('AWS::BedrockAgentCore::Runtime')) as any[];
-    expect(configuredRuntimes).toHaveLength(4);
+    expect(configuredRuntimes).toHaveLength(5);
     for (const runtime of configuredRuntimes) {
       expect(runtime.Properties.EnvironmentVariables.CEI_DEFAULT_MODEL_ID).toBe('example.model-v2');
     }
@@ -50,9 +52,9 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
 
   test('delivers traces for all runtimes without extracting model content', () => {
     const sources = Object.values(template.findResources('AWS::Logs::DeliverySource')) as any[];
-    expect(sources.filter((source) => source.Properties.LogType === 'TRACES')).toHaveLength(4);
+    expect(sources.filter((source) => source.Properties.LogType === 'TRACES')).toHaveLength(5);
     const destinations = Object.values(template.findResources('AWS::Logs::DeliveryDestination')) as any[];
-    expect(destinations.filter((destination) => destination.Properties.DeliveryDestinationType === 'XRAY')).toHaveLength(4);
+    expect(destinations.filter((destination) => destination.Properties.DeliveryDestinationType === 'XRAY')).toHaveLength(5);
     template.resourceCountIs('AWS::XRay::ResourcePolicy', 1);
     for (const [, runtime] of runtimes) {
       expect((runtime as any).Properties.EnvironmentVariables.AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT).toBe('false');
@@ -71,8 +73,10 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
 
   test.each(runtimes.map(([id, r]) => [id, r] as const))('%s: forwards Authorization and carries CEI_COGNITO_* env', (_id, r) => {
     const props = (r as any).Properties;
+    // Research and ToolAgent also forward X-Cei-Gateway-Token for Gateway authentication
+    const expectsGatewayToken = props.AgentRuntimeName === 'CEIResearchAgent' || props.AgentRuntimeName === 'CEIToolAgent';
     expect(props.RequestHeaderConfiguration.RequestHeaderAllowlist).toEqual(
-      props.AgentRuntimeName === 'CEIResearchAgent' ? ['Authorization', 'X-Cei-Gateway-Token'] : ['Authorization'],
+      expectsGatewayToken ? ['Authorization', 'X-Cei-Gateway-Token'] : ['Authorization'],
     );
     const env = props.EnvironmentVariables;
     expect(env.CEI_COGNITO_USER_POOL_ID).toEqual({ Ref: userPoolId });

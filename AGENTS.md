@@ -15,12 +15,16 @@ Monorepo with separate `package.json` per directory (no workspace root).
 
 ### Current Implementation
 
+- **5 AgentCore Runtimes deployed**: Research, Drafting, Analysis, Pipeline Manager, and Tool Agent (13 YAML profiles for single-source chat).
+- **Full RAG pipeline exists**: Attachment presign Lambda → S3 upload → SQS → Attachment Processor → Bedrock Managed Knowledge Base with per-user/session metadata filtering.
 - Research and Drafting AgentCore runtime entry points run locally (AgentCore CLI) and return completed JSON responses. Analysis and Pipeline Manager graphs are wired but every node raises `NotImplementedError`.
 - Completed rich responses use CEI UI 1.1 in the `ui` field (servers emit 1.1; clients and stored history also accept 1.0). Backend and frontend validators enforce the allowlisted component graph and bounded typed actions.
+- **REST API Gateway (v1)** with Cognito authorizer, Session Runner (streaming), Session Router (classifier + deterministic routing).
+- **AgentCore Gateway + Cedar Policy** with 12 data source Lambda targets + NCBI + Life Sciences Operations + Web Search connector (off by default).
+- **DynamoDB tables**: ChatMetadata, ChatHistory, Attachments, Exports, Jobs, UserMetadata, ActiveRuns.
+- **S3 buckets**: Site, Attachments, Exports, Logs.
+- **AgentCore Memory** for checkpointing (Research and Drafting use AgentCoreMemorySaver; others use InMemorySaver).
 - The archived Next.js app (`archive/frontend-next/`) still has local agent and action proxy routes plus a CEI UI preview renderer; the proxy routes require `CEI_ENABLE_LOCAL_PROXY=true` and are not used by the current or planned production deployment.
-- An SSE helper serializes bounded, redacted events, but no production streaming route uses it.
-- The CDK stacks define the AgentCore Code Interpreter, a Cognito user pool + SPA client (managed login, PKCE) with a pre-sign-up email-domain allowlist trigger, and an S3 + CloudFront + WAF static site serving the built `frontend/` SPA. See `docs/provisioned-resources.md` for exactly what is deployed today.
-- There is still no REST API Gateway, no Session Runner, no Session Router, no AgentCore Gateway, and no actual LangGraph pause-and-resume flow yet.
 
 ### Planned Architecture (target — not built; see `docs/architectureDeepDive.md`)
 
@@ -36,32 +40,34 @@ Monorepo with separate `package.json` per directory (no workspace root).
 - **CEI UI 1.2**: adds progressive SSE streaming (patch events) on top of the existing 1.1 component contract; see `docs/cei-ui-protocol.md`.
 - **Frontend**: the Vite dashboard is the production UI (`frontend/`, F2 built); a trace/thinking block (planned) renders the streamed reasoning and tool-call log.
 
-### Planned AWS Services
+### Deployed AWS Services
 
-| Service | Role |
-|---|---|
-| **CloudFront + WAF + S3** | Static dashboard hosting behind a CDN and WAF |
-| **Cognito** | Self-sign-up user authentication, SPA PKCE client, Router M2M client |
-| **REST API Gateway (v1, Regional)** | Single API; STREAM on `/chat/stream`, BUFFERED elsewhere |
-| **Lambda** | Session Runner (Node.js), Session Router, Polling, Session Metadata/History Handlers, Fetch User Settings, Attachment Upload Worker, Attachment Processor |
-| **AgentCore Runtime** | Research, Drafting, Analysis, Pipeline Manager, and the Tool Agent runtime — async sessions replace Fargate |
-| **AgentCore Gateway + Policy (Cedar)** | MCP tool access with per-source scope enforcement |
-| **Bedrock AgentCore** | Agent runtime, Memory (short- and long-term), Knowledge Base, Web Search connector |
-| **SQS** | Attachment processing queue |
-| **DynamoDB** | Session Metadata, Chat History, Job ID, User Metadata, Attachment Metadata Stores |
-| **S3** | Attachments Bucket (pre-signed upload, max 55 MB), S3 Vectors for the Knowledge Base |
-| **Secrets Manager** | API Key Store (user-configured service credentials) |
-| **CloudWatch + SNS** | Dashboards, alarms, admin email notifications |
-
-### Planned Agent Topology (Multi-Agent)
-
-| Agent | Goal | Role |
+| Service | Role | Status |
 |---|---|---|
-| Research Agent | 1 | Deep research across 10 data sources with citation grounding |
-| Drafting Agent | 2 | Document preparation (grants, VCs, journals, whitepapers) |
-| Analysis Agent | 3 | Competitor/market/legal landscape analysis |
-| Pipeline Manager | 4 | Orchestrates other agents in concurrent/sequential/looped tasks; always runs async |
-| Tool Agent (11 profiles) | — | Single-source natural-language chat for users who want one data source directly |
+| **CloudFront + WAF + S3** | Static dashboard hosting behind a CDN and WAF | ✅ Deployed |
+| **Cognito** | Self-sign-up user authentication, SPA PKCE client, Router M2M client | ✅ Deployed |
+| **REST API Gateway (v1, Regional)** | Single API; STREAM on `/chat/stream`, BUFFERED elsewhere | ✅ Deployed |
+| **Lambda** | Session Runner, Session Router, Attachment Presign/Processor, Data Sources, Life Sciences Ops, etc. | ✅ Deployed |
+| **AgentCore Runtime** | Research, Drafting, Analysis, Pipeline Manager, Tool Agent (5 runtimes) | ✅ Deployed |
+| **AgentCore Gateway + Policy (Cedar)** | MCP tool access with per-source scope enforcement | ✅ Deployed |
+| **AgentCore Memory** | Checkpointing and long-term memory strategies | ✅ Deployed |
+| **Bedrock Knowledge Base (Managed)** | RAG over chat attachments with user/session filtering | ✅ Deployed |
+| **Code Interpreter** | Python/JS/TS code execution sandbox | ✅ Deployed |
+| **SQS** | Attachment processing queue with DLQ | ✅ Deployed |
+| **DynamoDB** | Session Metadata, Chat History, Job ID, User Metadata, Attachment Metadata Stores | ✅ Deployed |
+| **S3** | Site, Attachments, Exports, Logs buckets | ✅ Deployed |
+| **Model Guardrail** | PII/PHI input filter on all model calls | ✅ Deployed |
+| **CloudWatch + SNS** | Dashboards, alarms, admin email notifications | ✅ Deployed |
+
+### Deployed Agent Topology (Multi-Agent)
+
+| Agent | Goal | Role | Status |
+|---|---|---|---|
+| Research Agent | 1 | Deep research across 10 data sources with citation grounding | ✅ Deployed |
+| Drafting Agent | 2 | Document preparation (grants, VCs, journals, whitepapers) | ✅ Deployed |
+| Analysis Agent | 3 | Competitor/market/legal landscape analysis | ✅ Deployed (MVP) |
+| Pipeline Manager | 4 | Orchestrates other agents in concurrent/sequential/looped tasks | ✅ Deployed (MVP) |
+| Tool Agent (13 profiles) | — | Single-source natural-language chat (PubMed, ClinicalTrials, bioRxiv, etc.) | ✅ Deployed |
 
 The dashboard routes Goals 1–3 through a deterministic Session Router lookup; free-text chat adds a small fixed-model classifier. Goal 4 always uses the Pipeline Manager. Each specialist agent has science-mode and business-mode system prompt variants, set per chat. Users select their preferred Bedrock model per chat, subject to a configurable global blocklist.
 
@@ -73,12 +79,13 @@ The approved production protocol is CEI UI 1.1 (`application/vnd.cei.ui+json`, p
 
 Current helper tools define `ask_user_question`, `present_alternatives`, `request_plan_approval`, and `get_user_input`. They render CEI UI components, and the local preview can send typed POST actions. The current helpers do not pause or resume LangGraph. Planned: real pause and resume through a LangGraph `interrupt`, checkpointed with `AgentCoreMemorySaver`, resumed by a typed POST action with no time limit on the wait.
 
-### Planned Data Stores
+### Deployed Data Stores
 
-- **Chat History Store** — indefinite retention (until the user deletes the account; there is no per-chat delete, B104), lazy cursor-paginated loading for large histories.
-- **User Metadata Table** — user settings, configured sources, AI provider preferences.
-- **API Key Store** — user-owned API keys stored in Secrets Manager per user.
-- **Knowledge Base (Bedrock KB + S3 Vectors)** — RAG over chat attachments, filtered by `user_id`/`session_id`/`file_id`.
+- **Chat History Store** — indefinite retention (until the user deletes the account; there is no per-chat delete, B104), lazy cursor-paginated loading for large histories. ✅ Deployed
+- **User Metadata Table** — user settings, default model, mode preferences. ✅ Deployed
+- **Attachments Metadata Store** — tracks uploaded files with status and KB ingestion state. ✅ Deployed
+- **Knowledge Base (Bedrock Managed KB)** — RAG over chat attachments, filtered by `user_id`/`session_id`/`file_id`. ✅ Deployed
+- **API Key Store** — user-owned API keys stored in Secrets Manager per user. 🔄 Planned (routes not built)
 
 ### Key Design Documents
 

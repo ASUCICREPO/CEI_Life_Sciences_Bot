@@ -93,7 +93,7 @@ describe.each([
 
   it('passes the generated bucket name to every AgentCore runtime', () => {
     const runtimes = template.findResources('AWS::BedrockAgentCore::Runtime');
-    expect(Object.keys(runtimes)).toHaveLength(4);
+    expect(Object.keys(runtimes)).toHaveLength(5);
     for (const runtime of Object.values(runtimes)) {
       expect((runtime as any).Properties.EnvironmentVariables.CEI_ATTACHMENTS_BUCKET).toEqual({ Ref: bucketId });
     }
@@ -111,7 +111,7 @@ describe.each([
           JSON.stringify(s.Resource).includes(bucketId),
       ),
     );
-    expect(objectGrants).toHaveLength(4);
+    expect(objectGrants).toHaveLength(5);
   });
 
   it('outputs the bucket name without a cross-stack export', () => {

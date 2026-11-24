@@ -283,7 +283,7 @@ describe('BackendStack', () => {
       );
       expect(fn).toBeDefined();
       expect(fn!.Properties.Timeout).toBe(900);
-      expect(JSON.stringify(fn!.Properties.Environment.Variables.AGENT_URLS).match(/invocations\?qualifier=DEFAULT/g)).toHaveLength(4);
+      expect(JSON.stringify(fn!.Properties.Environment.Variables.AGENT_URLS).match(/invocations\?qualifier=DEFAULT/g)).toHaveLength(5);
     });
 
     it('allows the agent proxy (region-scoped Lambda URL host) in the CSP connect-src, not AgentCore', () => {
