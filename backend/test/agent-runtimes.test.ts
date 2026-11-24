@@ -50,7 +50,9 @@ describe('AgentCore runtimes: deploy-time Cognito settings', () => {
     expect(names).toEqual(AGENT_RUNTIMES.map((r) => r.runtimeName).sort());
   });
 
-  test('delivers traces for all runtimes without extracting model content', () => {
+  // ADR: tracing disabled for account compatibility | Rationale: X-Ray TracesDelivery requires
+  // account-level UpdateTraceSegmentDestination; test skipped until tracing is re-enabled
+  test.skip('delivers traces for all runtimes without extracting model content', () => {
     const sources = Object.values(template.findResources('AWS::Logs::DeliverySource')) as any[];
     expect(sources.filter((source) => source.Properties.LogType === 'TRACES')).toHaveLength(5);
     const destinations = Object.values(template.findResources('AWS::Logs::DeliveryDestination')) as any[];
