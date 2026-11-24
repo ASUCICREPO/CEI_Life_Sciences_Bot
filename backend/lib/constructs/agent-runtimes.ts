@@ -254,7 +254,9 @@ export class AgentRuntimes extends Construct {
       const isToolAgent = def.id === 'ToolAgent';
       const runtime = new agentcore.Runtime(this, `${def.id}Runtime`, {
         runtimeName: def.runtimeName,
-        tracingEnabled: true,
+        // ADR: disabled tracing | Rationale: X-Ray TracesDelivery to CloudWatch Logs requires account-level
+        // UpdateTraceSegmentDestination which many accounts don't have configured; re-enable once optional
+        tracingEnabled: false,
         description: `CEI ${def.id} agent runtime`,
         agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
           path: AGENTS_DIR,
