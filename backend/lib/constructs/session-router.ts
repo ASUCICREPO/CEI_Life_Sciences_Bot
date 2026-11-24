@@ -61,15 +61,18 @@ export class SessionRouter extends Construct {
     // F9: the same table also holds the short-lived route_choice (B80 ChoicePicker) record UiActions reads.
     props.role.addToPolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'], resources: [props.activeRunsTable.tableArn] }));
     if (props.routerModelId) {
+      // Inference profile IDs carry a geo prefix (us., global., ...) but the underlying foundation-model
+      // ARN does not; Bedrock authorizes both, so the model ARN must use the bare model ID.
+      const foundationModelId = props.routerModelId.replace(/^(global|us|us-gov|eu|apac|jp|au|ca)\./, '');
       // F9/B17: bedrock:InvokeModel and Converse scoped to the one fixed classifier model, never a wildcard.
       props.role.addToPolicy(new iam.PolicyStatement({
         actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:Converse'],
         resources: [
           `arn:${stack.partition}:bedrock:${stack.region}:${stack.account}:inference-profile/${props.routerModelId}`,
-          `arn:${stack.partition}:bedrock:*::foundation-model/${props.routerModelId}`,
+          `arn:${stack.partition}:bedrock:*::foundation-model/${foundationModelId}`,
         ],
       }));
-      const escapedModelId = props.routerModelId.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+      const escapedModelId = foundationModelId.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
       NagSuppressions.addResourceSuppressions(props.role, [{
         id: 'AwsSolutions-IAM5',
         // ADR: regex over the partition, same as tool-gateway.ts | Rationale: cdk-nag reports
