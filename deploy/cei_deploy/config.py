@@ -24,7 +24,7 @@ REPOSITORY_URL_PATTERN = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za
 REPOSITORY_BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]{1,255}$")
 
 TOOL_POLICY_MODES = ("LOG_ONLY", "ENFORCE")
-DEFAULT_TOOL_POLICY_MODE = "LOG_ONLY"
+DEFAULT_TOOL_POLICY_MODE = "ENFORCE"
 
 CONFIG_FILE_NAME = "cei.deploy.json"
 
